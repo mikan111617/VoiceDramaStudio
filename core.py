@@ -120,12 +120,157 @@ def validate_state(s, prev, *, allow_new_assets=False):
         if c.get("sceneId") not in scene_ids or c.get("trackId") not in track_ids:
             raise ValueError("Clip track/scene mismatch")
         if c.get("assetId") not in asset_ids: raise ValueError("Clip asset missing")
+    # New cast references must point to reference recordings. Existing legacy
+    # assignments remain readable, and users can uncheck them in the UI.
+    asset_by_id = {a["id"]: a for a in s["assets"]}
+    legacy_refs = {aid for v in (prev or {}).get("voices", []) for aid in v.get("refs", [])}
+    for voice in s["voices"]:
+        refs = voice.get("refs", [])
+        if len(refs) != len(set(refs)):
+            raise ValueError("同じ参照音声が重複しています")
+        for aid in refs:
+            if aid not in asset_by_id:
+                raise ValueError("存在しない参照音声が指定されています")
+            if asset_by_id[aid].get("kind") != "reference" and aid not in legacy_refs:
+                raise ValueError("台詞音声を参照音声へ登録できません。参照音声として再取り込みしてください")
     # Asset filename is server-controlled: clients cannot replace or invent disk paths.
     if prev:
         originals={a["id"]:a for a in prev["assets"]}
         for a in s["assets"]:
-            if (a["id"] not in originals and not allow_new_assets) or (a["id"] in originals and a.get("filename") != originals[a["id"]].get("filename")):
+            if (a["id"] not in originals and not allow_new_assets) or (a["id"] in originals and (a.get("filename") != originals[a["id"]].get("filename") or a.get("kind") != originals[a["id"]].get("kind"))):
                 raise ValueError("Assets can be added only through the upload API")
+
+
+# Reference recordings and spoken dialogue are distinct asset roles.
+def asset_usage(state, asset_id):
+    """Return references to an asset without mutating any project data."""
+    uses = {"casts": [], "lines": [], "clips": []}
+    for v in state["voices"]:
+        if asset_id in v.get("refs", []):
+            uses["casts"].append(v.get("name", ""))
+    for line in state["lines"]:
+        if any(t.get("assetId") == asset_id for t in line.get("takes", [])):
+            uses["lines"].append({"id": line["id"], "speaker": line.get("speaker", ""),
+                                  "text": line.get("text", "")[:60]})
+    for clip in state["clips"]:
+        if clip.get("assetId") == asset_id:
+            uses["clips"].append(clip["id"])
+    return uses
+
+
+def asset_trash_path(project_id):
+    return workdir(project_id) / "trash" / "index.json"
+
+
+def list_trash(project_id):
+    # Validate project even if its trash directory does not exist.
+    load_project(project_id)
+    path = asset_trash_path(project_id)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def _write_trash(project_id, entries):
+    path = asset_trash_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def trash_asset(project_id, asset_id, *, detach=False):
+    """Move an asset to recoverable trash, optionally detaching every project reference.
+
+    Linked assets are rejected by default. The audio file is moved rather than
+    destroyed, and no existing project is silently altered beyond this asset.
+    """
+    with LOCK:
+        state = load_project(project_id)
+        asset = next((a for a in state["assets"] if a["id"] == asset_id), None)
+        if asset is None:
+            raise FileNotFoundError("音声素材が見つかりません")
+        usage = asset_usage(state, asset_id)
+        if any(usage.values()) and not detach:
+            raise RuntimeError("使用中の音声です。関連付けを確認してください")
+        filename = str(asset.get("filename", ""))
+        if not re.fullmatch(r"asset_[a-f0-9]{16}\.(wav|mp3|flac|ogg|m4a|aac|opus)", filename):
+            raise ValueError("安全でない音声ファイル名です")
+        original = workdir(project_id) / "assets" / filename
+        destination = workdir(project_id) / "trash" / filename
+        if destination.exists():
+            raise RuntimeError("ゴミ箱内に同名の音声が存在します")
+        if not original.is_file():
+            raise FileNotFoundError("音声の実体ファイルが見つかりません")
+        old_state = copy.deepcopy(state)
+        entries = list_trash(project_id)
+        state["assets"] = [a for a in state["assets"] if a["id"] != asset_id]
+        affected_scenes = set()
+        for voice in state["voices"]:
+            voice["refs"] = [ref for ref in voice.get("refs", []) if ref != asset_id]
+        for line in state["lines"]:
+            old_takes = line.get("takes", [])
+            kept = [t for t in old_takes if t.get("assetId") != asset_id]
+            if len(kept) == len(old_takes):
+                continue
+            line["takes"] = kept
+            affected_scenes.add(line["sceneId"])
+            if line.get("selectedTakeId") not in {t["id"] for t in kept}:
+                line["selectedTakeId"] = kept[-1]["id"] if kept else None
+            dialogue = next((c for c in state["clips"] if c.get("lineId") == line["id"] and c.get("trackId") == "dialogue"), None)
+            if dialogue:
+                chosen = next((t for t in kept if t["id"] == line["selectedTakeId"]), None)
+                fallback = next((a for a in state["assets"] if chosen and a["id"] == chosen["assetId"]), None)
+                if fallback:
+                    dialogue["assetId"] = fallback["id"]
+                    dialogue["duration"] = fallback["duration"]
+                else:
+                    state["clips"].remove(dialogue)
+        state["clips"] = [c for c in state["clips"] if c.get("assetId") != asset_id]
+        for sid in affected_scenes:
+            reflow_dialogue(state, sid)
+        refresh_staleness(state)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(original), str(destination))
+        try:
+            result = save_project(project_id, state)
+            entries.append({"asset": asset, "trashedAt": now(), "hadReferences": any(usage.values())})
+            _write_trash(project_id, entries)
+        except Exception:
+            # Do not leave project metadata referring to an absent audio file.
+            shutil.move(str(destination), str(original))
+            if state_path(project_id).exists():
+                # If save succeeded but trash index failed, restore old metadata.
+                save_project(project_id, old_state, allow_new_assets=True)
+            raise
+        return {"project": result, "usage": usage, "trashed": asset}
+
+
+def restore_asset(project_id, asset_id):
+    """Restore the file to the library; old links are deliberately NOT recreated."""
+    with LOCK:
+        state = load_project(project_id)
+        entries = list_trash(project_id)
+        item = next((x for x in entries if x["asset"]["id"] == asset_id), None)
+        if item is None:
+            raise FileNotFoundError("ゴミ箱に音声が見つかりません")
+        asset = item["asset"]
+        if any(x["id"] == asset_id for x in state["assets"]):
+            raise RuntimeError("音声IDが既に使用されています")
+        filename = str(asset["filename"])
+        if not re.fullmatch(r"asset_[a-f0-9]{16}\.(wav|mp3|flac|ogg|m4a|aac|opus)", filename):
+            raise ValueError("安全でない音声ファイル名です")
+        source = workdir(project_id) / "trash" / filename
+        target = workdir(project_id) / "assets" / filename
+        if not source.is_file() or target.exists():
+            raise RuntimeError("復元する音声が見つからないか、保存先に既に存在します")
+        shutil.move(str(source), str(target))
+        state["assets"].append(asset)
+        try:
+            result = save_project(project_id, state, allow_new_assets=True)
+            _write_trash(project_id, [x for x in entries if x is not item])
+        except Exception:
+            shutil.move(str(target), str(source))
+            raise
+        return {"project": result, "asset": asset}
 
 
 def new_line(scene_id, speaker="", text="", caption="", after=0.65):
@@ -136,6 +281,8 @@ def new_line(scene_id, speaker="", text="", caption="", after=0.65):
 
 
 def attach_take(s, line, asset, generator=None, *, reflow=True):
+    if asset.get("kind") == "reference":
+        raise ValueError("キャラクター参照音声を台詞へ直接割り当てることはできません")
     take={"id":uid("take"),"assetId":asset["id"],"createdAt":now(),"engine":generator or "import",
           "signature":generation_signature(line, s)}
     line.setdefault("takes",[]).append(take)

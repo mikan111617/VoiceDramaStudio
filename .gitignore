@@ -1,3 +1,8 @@
-__pycache__
-.venv/*
-tests/*
+# Private project state and uploaded/recorded audio (never commit)
+workspace/
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+.venv-*/
+outputs/

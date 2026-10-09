@@ -20,3 +20,9 @@
 .batch-error{color:#f0a5ae!important;margin-top:8px!important}
 .modal:has(.batch-rows){width:min(860px,95vw)}
 @media(max-width:650px){.batch-top-grid{grid-template-columns:1fr}.batch-row{display:block}.batch-file{margin-bottom:7px}.batch-controls{max-width:100%;justify-content:flex-start}}
+
+/* Reference assets are managed separately from dialogue recordings. */
+.ref-manage{margin-top:24px;padding:18px;border:1px solid var(--border,#3b4351);border-radius:12px}
+.ref-manage h3{margin:0 0 4px;font-size:1.02rem}
+.ref-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid rgba(160,170,185,.16);overflow-wrap:anywhere}
+.ref-row:last-child{border:0}.ref-row>div{display:flex;gap:6px;flex-shrink:0}

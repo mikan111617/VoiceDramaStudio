@@ -138,6 +138,67 @@ def asset_stream(pid:str,aid:str):
         return FileResponse(p,filename=a['name'],content_disposition_type='inline')
     except (StopIteration,ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
 
+class BulkTrashRequest(BaseModel):
+    assetIds:list[str]
+
+
+@app.post('/api/projects/{pid}/assets/bulk/trash')
+def bulk_trash_assets(pid:str,body:BulkTrashRequest):
+    """Bulk-delete only unused audio, never detach scripts/casts implicitly."""
+    ids=body.assetIds
+    if not 1<=len(ids)<=250 or len(ids)!=len(set(ids)):
+        raise HTTPException(400,'削除する音声は1〜250件、重複なしで指定してください')
+    with LOCK:
+        try:
+            state=core.load_project(pid)
+            known={a['id'] for a in state['assets']}
+            if any(aid not in known for aid in ids):
+                raise ValueError('存在しない音声IDが含まれています')
+            used=[aid for aid in ids if any(core.asset_usage(state,aid).values())]
+            if used:
+                raise RuntimeError(f'{len(used)}件の音声が使用中です。個別に関連付けを確認してください')
+            errors=[];removed=[]
+            for aid in ids:
+                try:
+                    core.trash_asset(pid,aid)
+                    removed.append(aid)
+                except Exception as error:
+                    errors.append({'assetId':aid,'error':str(error)})
+            return {'project':core.load_project(pid),'trashed':removed,'errors':errors}
+        except RuntimeError as e:raise HTTPException(409,str(e))
+        except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
+
+
+@app.get('/api/projects/{pid}/trash/assets')
+def trashed_assets(pid:str):
+    try:return core.list_trash(pid)
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
+
+
+@app.get('/api/projects/{pid}/assets/{aid}/usage')
+def asset_usage(pid:str,aid:str):
+    try:
+        state=core.load_project(pid)
+        if not any(a['id']==aid for a in state['assets']):
+            raise FileNotFoundError('音声素材が見つかりません')
+        return core.asset_usage(state,aid)
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
+
+
+@app.delete('/api/projects/{pid}/assets/{aid}')
+def delete_asset(pid:str,aid:str,detach:bool=False):
+    try:return core.trash_asset(pid,aid,detach=detach)
+    except RuntimeError as e:raise HTTPException(409,str(e))
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
+
+
+@app.post('/api/projects/{pid}/trash/assets/{aid}/restore')
+def restore_asset(pid:str,aid:str):
+    try:return core.restore_asset(pid,aid)
+    except RuntimeError as e:raise HTTPException(409,str(e))
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
+
+
 @app.post('/api/projects/{pid}/lines/{lineid}/attach/{aid}')
 def attach_audio(pid:str,lineid:str,aid:str):
     try:
