@@ -1,0 +1,370 @@
+"""Local-only VoiceDrama Studio HTTP API. Python 3.10+."""
+from __future__ import annotations
+import copy
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import core
+from core import WORKSPACE, LOCK
+from render import render_project, ffmpeg_bin
+
+app=FastAPI(title="VoiceDrama Studio",version="0.1.2")
+app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
+THREADS=ThreadPoolExecutor(max_workers=1)
+JOBS={}
+
+class ProjectCreate(BaseModel):
+    title:str="無題の作品"
+class StateSave(BaseModel):
+    state:dict
+    expectedRevision:int | None=None
+
+@app.get('/')
+def home():return FileResponse(core.ROOT/'static'/'index.html')
+
+@app.get('/api/status')
+def status():return {'ok':True,'ffmpeg':bool(ffmpeg_bin()),'workspace':str(WORKSPACE),'python':sys.version.split()[0]}
+
+@app.get('/api/projects')
+def projects():return core.list_projects()
+
+@app.post('/api/projects')
+def project_create(v:ProjectCreate):return core.create_project(v.title)
+
+@app.get('/api/projects/{pid}')
+def get_project(pid:str):
+    try:return core.load_project(pid)
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
+
+@app.put('/api/projects/{pid}')
+def project_save(pid:str,data:StateSave):
+    try:
+        core.refresh_staleness(data.state)
+        return core.save_project(pid,data.state,data.expectedRevision)
+    except RuntimeError as e:raise HTTPException(409,str(e))
+    except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
+
+@app.post('/api/projects/{pid}/excel/import')
+def excel_import(pid:str,file:UploadFile=File(...)):
+    if not file.filename.lower().endswith('.xlsx'):raise HTTPException(400,'Excel .xlsx ファイルを指定してください')
+    try:return core.import_excel(pid,file.file)
+    except Exception as e:raise HTTPException(400,str(e))
+
+@app.get('/api/projects/{pid}/excel/export')
+def excel_export(pid:str):
+    try:result=core.export_excel(pid)
+    except Exception as e:raise HTTPException(400,str(e))
+    return StreamingResponse(result,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':"attachment; filename*=UTF-8''script.xlsx"})
+
+@app.post('/api/projects/{pid}/assets')
+async def asset_upload(pid:str,file:UploadFile=File(...),kind:str=Form('other')):
+    if not file.filename:raise HTTPException(400,'ファイルが選択されていません')
+    suffix=Path(file.filename).suffix.lower()
+    temp_path=None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False,suffix=suffix) as f:
+            temp_path=Path(f.name)
+            total=0
+            while True:
+                chunk=await file.read(1024*1024)
+                if not chunk:break
+                total+=len(chunk)
+                if total>250*1024*1024:raise ValueError('250MBを超えるファイルは取り込めません')
+                f.write(chunk)
+        return core.register_asset(pid,temp_path,Path(file.filename).name,kind)
+    except Exception as e:raise HTTPException(400,str(e))
+    finally:
+        if temp_path:temp_path.unlink(missing_ok=True)
+
+@app.post('/api/projects/{pid}/assets/batch')
+async def batch_assets(pid:str,files:list[UploadFile]=File(...),kind:str=Form('voice'),
+                       lineIds:str=Form('[]'),castName:str=Form('')):
+    """Atomic bulk asset import; optional one-to-one script assignment."""
+    if not 1 <= len(files) <= 250:
+        raise HTTPException(400,'一度に取り込めるのは最大250ファイルです')
+    try:
+        targets=json.loads(lineIds)
+        if not isinstance(targets,list) or len(targets)!=len(files) or any(x is not None and not isinstance(x,str) for x in targets):
+            raise ValueError('割り当て先の指定が不正です')
+    except (TypeError,ValueError) as e:
+        raise HTTPException(400,str(e))
+    with tempfile.TemporaryDirectory(prefix='vds_batch_') as d:
+        uploaded=[]
+        overall=0
+        try:
+            for i,file in enumerate(files):
+                filename=Path(str(file.filename or '').replace('\\','/')).name
+                suffix=Path(filename).suffix.lower()
+                if suffix not in core.SUPPORTED_AUDIO_EXTS:
+                    raise ValueError(f'非対応のファイル形式です: {filename}')
+                path=Path(d)/f'{i:04d}{suffix}'
+                count=0
+                with path.open('wb') as out:
+                    while True:
+                        chunk=await file.read(1024*1024)
+                        if not chunk: break
+                        count+=len(chunk)
+                        overall+=len(chunk)
+                        if count>250*1024*1024 or overall>1024*1024*1024:
+                            raise ValueError('1ファイル250MB、1回合計1GBが上限です')
+                        out.write(chunk)
+                if not count: raise ValueError(f'空のファイルです: {filename}')
+                uploaded.append((path,filename))
+            return core.import_audio_batch(pid,uploaded,kind,targets,castName.strip())
+        except (ValueError,FileNotFoundError,OSError,RuntimeError) as e:
+            raise HTTPException(400,str(e))
+
+@app.get('/api/projects/{pid}/assets/{aid}')
+def asset_stream(pid:str,aid:str):
+    try:
+        s=core.load_project(pid)
+        a=next(x for x in s['assets'] if x['id']==aid)
+        p=core.workdir(pid)/'assets'/a['filename']
+        if not p.is_file():raise FileNotFoundError('Audio file missing')
+        return FileResponse(p,filename=a['name'],content_disposition_type='inline')
+    except (StopIteration,ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
+
+@app.post('/api/projects/{pid}/lines/{lineid}/attach/{aid}')
+def attach_audio(pid:str,lineid:str,aid:str):
+    try:
+        with LOCK:
+            s=core.load_project(pid)
+            line=next(l for l in s['lines'] if l['id']==lineid)
+            asset=next(a for a in s['assets'] if a['id']==aid)
+            core.attach_take(s,line,asset)
+            return core.save_project(pid,s)
+    except (StopIteration,ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
+
+@app.post('/api/projects/{pid}/reflow/{sceneid}')
+def reflow(pid:str,sceneid:str):
+    with LOCK:
+        s=core.load_project(pid)
+        core.reflow_dialogue(s,sceneid)
+        return core.save_project(pid,s)
+
+class MixRequest(BaseModel):
+    sceneId:str|None=None
+    format:str='wav'
+
+@app.post('/api/projects/{pid}/render')
+def mix(pid:str,body:MixRequest):
+    if body.format not in ('wav','mp3'):raise HTTPException(400,'Unsupported output format')
+    try:
+        with LOCK:s=core.load_project(pid)
+        out_dir=core.workdir(pid)/'exports';out_dir.mkdir(exist_ok=True)
+        out=out_dir/('mix_'+uuid.uuid4().hex[:10]+'.'+body.format)
+        result=render_project(s,core.workdir(pid),out,body.format,body.sceneId)
+        return {'url':f'/api/projects/{pid}/exports/{out.name}','file':out.name,'info':result}
+    except Exception as e:raise HTTPException(400,str(e))
+
+@app.get('/api/projects/{pid}/exports/{filename}')
+def download_mix(pid:str,filename:str):
+    if '/' in filename or '\\' in filename or not filename.startswith('mix_'):
+        raise HTTPException(400,'Invalid filename')
+    p=core.workdir(pid)/'exports'/filename
+    if not p.is_file():raise HTTPException(404,'Not found')
+    return FileResponse(p,filename=filename)
+
+class Generation(BaseModel):
+    lineIds:list[str]
+    numSteps:int=40
+
+
+def python_for(engine,s):
+    settings=s.get('settings',{})
+    if engine=='irodori':
+        directory=Path(str(settings.get('irodori_dir',''))).expanduser()
+        if not (directory/'infer.py').is_file():raise ValueError('設定画面でIrodori-TTSのフォルダを指定してください。infer.pyが見つかりません。')
+        val=str(settings.get('irodori_python') or directory/'.venv'/'Scripts'/'python.exe')
+    else:
+        val=str(settings.get('qwen_python') or (core.ROOT/'.venv-qwen3tts'/'Scripts'/'python.exe'))
+    if not Path(val).is_file():raise ValueError(f'{engine}用Pythonが見つかりません: {val}')
+    return val
+
+
+def run_generation(job_id,pid,line_ids,steps):
+    job=JOBS[job_id]
+    try:
+        with LOCK:
+            state=core.load_project(pid)
+            selected=[copy.deepcopy(l) for l in state['lines'] if l['id'] in line_ids and l['text'].strip()]
+            asset_map={a['id']:a for a in state['assets']}
+            voices={v['name']:v for v in state['voices']}
+        if not selected:raise ValueError('生成する台詞がありません')
+        groups={}
+        for line in selected:
+            voice=voices.get(line['speaker'],{})
+            engine=line.get('engine') or voice.get('engine') or 'irodori'
+            if engine not in ('irodori','qwen'):raise ValueError('未対応エンジン: '+engine)
+            mode=line.get('mode') or voice.get('mode') or 'clone'
+            model=line.get('model') or voice.get('model') or ('Aratako/Irodori-TTS-v4.1-Small' if engine=='irodori' else 'Qwen/Qwen3-TTS-12Hz-1.7B-Base')
+            if engine=='qwen' and mode=='design':model='Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'
+            # Only the configured engine's native voice references are used.
+            refs=[]
+            for aid in voice.get('refs',[]):
+                asset=asset_map.get(aid)
+                if asset:refs.append(str(core.workdir(pid)/'assets'/asset['filename']))
+            descriptor=voice.get('description','')
+            spec={'id':line['id'],'text':line['text'],'caption':line.get('caption','') or descriptor,
+                  'description':descriptor,'refs':refs,'mode':mode,'language':line.get('language') or voice.get('language','Japanese'),
+                  'ref_text':voice.get('refText',''),'num_steps':steps,'output':'',
+                  'schedule':'linear','sway_coeff':-1.0}
+            groups.setdefault((engine,model),[]).append(spec)
+        job['total']=len(selected)
+        for (engine,model),items in groups.items():
+            if job.get('cancel'):break
+            with LOCK:latest=core.load_project(pid)
+            interp=python_for(engine,latest)
+            with tempfile.TemporaryDirectory(prefix='vds_tts_') as fdir:
+                folder=Path(fdir)
+                for it in items:it['output']=str(folder/(it['id']+'.wav'))
+                payload={'engine':engine,'model':model,'irodori_dir':latest.get('settings',{}).get('irodori_dir',''),'items':items}
+                jobfile=folder/'request.json';resfile=folder/'response.json'
+                jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
+                job['message']=f'{engine}: {model} を実行中 ({len(items)} 件)'
+                cp=subprocess.run([interp,str(core.ROOT/'tts_worker.py'),str(jobfile),str(resfile)],
+                                  cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60*45)
+                if not resfile.exists():
+                    raise RuntimeError(f'TTSが応答を返しませんでした。\n{(cp.stdout+cp.stderr)[-2000:]}')
+                result=json.loads(resfile.read_text(encoding='utf-8'))
+                if not result.get('ok'):raise RuntimeError(result.get('error','Unknown error')+'\n'+result.get('traceback','')[-1200:])
+                for row in result.get('items',[]):
+                    if not row.get('ok'):
+                        job['errors'].append({'lineId':row.get('id'),'error':row.get('error','Generation failed')})
+                    else:
+                        src=Path(row['output'])
+                        registered=core.register_asset(pid,src,f'{row["id"]} - {engine}.wav','voice')
+                        with LOCK:
+                            fresh=core.load_project(pid)
+                            line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
+                            if line:
+                                asset=next(a for a in fresh['assets'] if a['id']==registered['asset']['id'])
+                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}')
+                                core.save_project(pid,fresh)
+                    job['completed']+=1
+        job['message']='生成が完了しました'
+        job['status']='cancelled' if job.get('cancel') else ('done_with_errors' if job['errors'] else 'done')
+    except Exception as e:
+        job['status']='error';job['message']=str(e)
+
+@app.post('/api/projects/{pid}/generate')
+def generate(pid:str,body:Generation):
+    try:core.load_project(pid)
+    except Exception as e:raise HTTPException(404,str(e))
+    if not body.lineIds or len(body.lineIds)>500:raise HTTPException(400,'生成する台詞数が不正です')
+    jid=core.uid('job')
+    JOBS[jid]={'id':jid,'status':'running','total':0,'completed':0,'errors':[],'message':'生成準備中'}
+    THREADS.submit(run_generation,jid,pid,body.lineIds,max(1,min(80,body.numSteps)))
+    return JOBS[jid]
+
+class VoiceDesignRequest(BaseModel):
+    speaker:str
+    sampleText:str='こんにちは。今日もよろしくお願いします。'
+
+
+def run_voice_design(job_id,pid,speaker,text):
+    """Design one reference voice and attach it to the cast for subsequent cloning."""
+    job=JOBS[job_id]
+    try:
+        s=core.load_project(pid)
+        voice=next((x for x in s['voices'] if x['name']==speaker),None)
+        if not voice:raise ValueError('キャストが見つかりません')
+        engine=voice.get('engine','irodori')
+        model=voice.get('model') or 'Aratako/Irodori-TTS-v4.1-Small'
+        if engine=='qwen':model='Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'
+        interp=python_for(engine,s)
+        job['total']=1
+        job['message']=f'{speaker}の新しい声をデザイン中...'
+        with tempfile.TemporaryDirectory(prefix='vds_design_') as folder:
+            folder=Path(folder);output=folder/'sample.wav'
+            payload={'engine':engine,'model':model,'irodori_dir':s.get('settings',{}).get('irodori_dir',''),
+                'items':[{'id':speaker,'text':text,'caption':voice.get('description','') or '自然で聞き取りやすい話し方',
+                    'description':voice.get('description',''),'output':str(output),
+                    'mode':'design','refs':[],'language':voice.get('language','Japanese'),'num_steps':40}]}
+            jobfile=folder/'job.json';out=folder/'result.json'
+            jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
+            cp=subprocess.run([interp,str(core.ROOT/'tts_worker.py'),str(jobfile),str(out)],cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60*20)
+            if not out.exists():raise RuntimeError('Voice Designの応答がありません: '+(cp.stdout+cp.stderr)[-1500:])
+            result=json.loads(out.read_text(encoding='utf-8'))
+            if not result.get('ok'):raise RuntimeError(result.get('error','VoiceDesign失敗'))
+            item=result['items'][0]
+            if not item.get('ok'):raise RuntimeError(item.get('error','VoiceDesign失敗'))
+            registered=core.register_asset(pid,output,f'{speaker} - Voice Design.wav','reference')
+            with LOCK:
+                latest=core.load_project(pid)
+                dest=next((v for v in latest['voices'] if v['name']==speaker),None)
+                if dest:
+                    dest.setdefault('refs',[]).append(registered['asset']['id'])
+                    dest['refText']=text
+                    dest['mode']='clone'
+                    if engine=='qwen':dest['model']='Qwen/Qwen3-TTS-12Hz-1.7B-Base'
+                    core.save_project(pid,latest)
+            job['completed']=1
+            job['message']='声のサンプルを生成してキャストの参照音声に登録しました'
+            job['status']='done'
+    except Exception as exc:
+        job['status']='error';job['message']=str(exc)
+
+
+@app.post('/api/projects/{pid}/voices/design')
+def design_voice(pid:str,body:VoiceDesignRequest):
+    if not body.sampleText.strip():raise HTTPException(400,'読み上げるサンプル台詞を入力してください')
+    try:core.load_project(pid)
+    except Exception as exc:raise HTTPException(404,str(exc))
+    jid=core.uid('job')
+    JOBS[jid]={'id':jid,'status':'running','total':1,'completed':0,'errors':[],'message':'準備中'}
+    THREADS.submit(run_voice_design,jid,pid,body.speaker,body.sampleText)
+    return JOBS[jid]
+
+
+@app.get('/api/jobs/{jid}')
+def get_job(jid:str):
+    if jid not in JOBS:raise HTTPException(404,'Job not found')
+    return JOBS[jid]
+
+@app.post('/api/jobs/{jid}/cancel')
+def cancel_job(jid:str):
+    if jid not in JOBS:raise HTTPException(404,'Job not found')
+    JOBS[jid]['cancel']=True
+    return {'ok':True,'message':'現在実行中のモデル処理が終了した時点で停止します'}
+
+class CaptionRequest(BaseModel):
+    lineId:str
+    model:str='gemma3:4b'
+
+@app.post('/api/projects/{pid}/caption/suggest')
+def suggest_caption(pid:str,request:CaptionRequest):
+    """Optional Ollama acting note; never writes over the user's script automatically."""
+    import urllib.request
+    s=core.load_project(pid)
+    lines=s['lines']
+    idx=next((i for i,x in enumerate(lines) if x['id']==request.lineId),-1)
+    if idx<0:raise HTTPException(404,'Line not found')
+    line=lines[idx]
+    context='\n'.join(f'{x["speaker"]}: {x["text"]}' for x in lines[max(0,idx-3):idx+4])
+    prompt=f'以下の会話から対象の発話を演じるための短い日本語の演技指示（声の状態・態度・言い方）を1文で提案してください。台詞本文は変更しないでください。\n会話:\n{context}\n対象:{line["speaker"]}: {line["text"]}'
+    body=json.dumps({'model':request.model,'prompt':prompt,'stream':False,'keep_alive':0},ensure_ascii=False).encode('utf-8')
+    try:
+        http=urllib.request.Request('http://localhost:11434/api/generate',data=body,headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(http,timeout=120) as res:data=json.load(res)
+        return {'caption':str(data.get('response','')).strip()[:360]}
+    except Exception as e:raise HTTPException(503,'Ollama接続/生成エラー: '+str(e))
+
+if __name__=='__main__':
+    import uvicorn, webbrowser
+    threading.Timer(1.3,lambda:webbrowser.open('http://127.0.0.1:'+os.getenv('VDS_PORT','8765'))).start()
+    uvicorn.run(app,host='127.0.0.1',port=int(os.getenv('VDS_PORT','8765')))
