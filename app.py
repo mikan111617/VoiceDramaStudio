@@ -22,7 +22,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.1.6")
+app=FastAPI(title="VoiceDrama Studio",version="0.1.7")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -96,10 +96,14 @@ def project_save(pid:str,data:StateSave):
     except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
 
 @app.post('/api/projects/{pid}/excel/import')
-def excel_import(pid:str,file:UploadFile=File(...)):
+def excel_import(pid:str,file:UploadFile=File(...),mode:str=Form('merge'),expectedRevision:int|None=Form(None)):
     if not file.filename.lower().endswith('.xlsx'):raise HTTPException(400,'Excel .xlsx ファイルを指定してください')
-    try:return core.import_excel(pid,file.file)
-    except Exception as e:raise HTTPException(400,str(e))
+    try:
+        return core.import_excel(pid,file.file,mode=mode,expected_revision=expectedRevision)
+    except RuntimeError as e:
+        raise HTTPException(409,str(e))
+    except Exception as e:
+        raise HTTPException(400,str(e))
 
 @app.get('/api/projects/{pid}/excel/export')
 def excel_export(pid:str):

@@ -533,3 +533,88 @@ def test_rename_ui_uses_backwards_compatible_save_endpoint():
     fragment=js[js.index('async function renameCurrentProject()'):js.index('function openSettings(){')]
     assert "json('PUT',{state:renamedState,expectedRevision:state.revision})" in fragment
     assert "json('PATCH'" not in fragment
+
+# v0.1.7: Excel full-replace safety and backward compatibility
+
+def _workbook_bytes(rows, *, sheet='第一幕', title_column=True):
+    wb = openpyxl.Workbook(); ws=wb.active; ws.title=sheet
+    ws.append(['台詞ID','シーン','話者','台詞','キャプション','間(秒)'] if title_column else ['備考'])
+    for row in rows: ws.append(row)
+    out=io.BytesIO();wb.save(out);return out.getvalue()
+
+
+def test_excel_replace_discards_old_script_but_keeps_audio_and_casts(client):
+    s=project(client); pid=s['id']; sid=s['scenes'][0]['id']
+    s['scenes'][0]['name']='第一幕'; discarded_scene=core.uid('scene'); s['scenes'].append({'id':discarded_scene,'name':'第二幕'})
+    retained=core.new_line(sid,'真歩流','残す台詞'); removed=core.new_line(sid,'愛理','消す台詞')
+    removed2=core.new_line(discarded_scene,'零度','削除シーンの台詞')
+    s['lines']=[retained,removed,removed2];s['voices']=[{'name':'真歩流','refs':[],'description':'探偵'}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    a=upload(client,pid,kind='voice');ref=upload(client,pid,kind='reference')
+    s=client.get(f'/api/projects/{pid}').json();s['voices'][0]['refs']=[ref['id']]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    s=client.post(f'/api/projects/{pid}/lines/{retained["id"]}/attach/{a["id"]}').json()
+    s['clips'] += [
+        {'id':'clip_fx_old','sceneId':sid,'trackId':'sfx','assetId':a['id'],'start':.2,'duration':.2,'anchorLineId':removed['id']},
+        {'id':'clip_fx_independent','sceneId':sid,'trackId':'sfx','assetId':a['id'],'start':.1,'duration':.2},
+        {'id':'clip_fx_old_scene','sceneId':discarded_scene,'trackId':'sfx','assetId':a['id'],'start':.1,'duration':.2},
+    ]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    orig=s.copy()
+    data=_workbook_bytes([[retained['id'],'第一幕','真歩流','残す台詞','驚いて',.6],
+                          [None,'第一幕','愛理','新しい台詞','普通',.3]])
+    r=client.post(f'/api/projects/{pid}/excel/import',data={'mode':'replace','expectedRevision':s['revision']},
+       files={'file':('correct.xlsx',data,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+    assert r.status_code==200,r.text
+    result=r.json();s=result['project'];summary=result['summary']
+    assert summary['mode']=='replace' and summary['removed']==2 and summary['removedScenes']==1
+    assert len(s['lines'])==2 and s['lines'][0]['id']==retained['id']
+    assert removed['id'] not in [x['id'] for x in s['lines']]
+    assert all(x['name']!='第二幕' for x in s['scenes'])
+    assert len(s['lines'][0]['takes'])==1 and s['lines'][0]['selectedTakeId']==orig['lines'][0]['selectedTakeId']
+    assert {x['id'] for x in s['clips']}=={'clip_fx_independent',*{c['id'] for c in orig['clips'] if c.get('lineId')==retained['id']}}
+    assert s['voices'][0]['description']=='探偵' and s['voices'][0]['refs']==[ref['id']]
+    assert len(s['assets'])==2
+    assert (core.workdir(pid)/'assets'/ref['filename']).exists()
+    backup=core.workdir(pid)/'backups'/summary['backup']
+    assert backup.exists()
+    import json
+    prior=json.loads(backup.read_text(encoding='utf-8'))
+    assert prior['revision']==orig['revision'] and len(prior['lines'])==3
+    assert prior['title']==orig['title']
+
+
+def test_excel_merge_retains_unmentioned_lines(client):
+    s=project(client);sid=s['scenes'][0]['id'];s['scenes'][0]['name']='第一幕'
+    s['lines']=[core.new_line(sid,'真歩流','前の台詞')]
+    s=client.put(f'/api/projects/{s["id"]}',json={'state':s,'expectedRevision':s['revision']}).json()
+    x=_workbook_bytes([[None,'第一幕','愛理','新しい台詞',None,.5]])
+    r=client.post(f'/api/projects/{s["id"]}/excel/import',files={'file':('new.xlsx',x)},data={'mode':'merge'})
+    assert r.status_code==200,r.text
+    assert len(r.json()['project']['lines'])==2 and r.json()['summary']['removed']==0
+    assert not (core.workdir(s['id'])/'backups').exists()
+
+
+def test_excel_replace_rejects_missing_data_duplicate_and_conflict(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    s['lines']=[core.new_line(sid,'真歩流','残る')]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    def attempt(data, **fields):
+        return client.post(f'/api/projects/{pid}/excel/import',data={'mode':'replace','expectedRevision':s['revision'],**fields},files={'file':('bad.xlsx',data)})
+    assert attempt(_workbook_bytes([],title_column=False)).status_code==400
+    assert attempt(_workbook_bytes([])).status_code==400
+    id=s['lines'][0]['id'];dupes=[[id,'シーン1','真歩流','1',None,.5],[id,'シーン1','真歩流','2',None,.5]]
+    assert attempt(_workbook_bytes(dupes)).status_code==400
+    good=_workbook_bytes([[None,'シーン1','真歩流','2',None,.5]])
+    assert attempt(good,expectedRevision=0).status_code==409
+    assert attempt(good,mode='invalid').status_code==400
+    unchanged=client.get(f'/api/projects/{pid}').json()
+    assert unchanged['revision']==s['revision'] and unchanged['lines'][0]['text']=='残る'
+    assert not (core.workdir(pid)/'backups').exists()
+
+
+def test_excel_ui_exposes_replace_and_confirmation():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf8')
+    assert 'chooseExcelImport' in js and "value=\"replace\"" in js
+    assert 'if(mode===\'replace\' && !confirm(' in js
+    assert "form.append('mode',mode)" in js

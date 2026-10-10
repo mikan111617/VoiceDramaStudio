@@ -7,6 +7,7 @@ let jobTimer=null;
 let bulkFiles=[],bulkMode='assign',bulkKind='voice',bulkCast='',bulkSort='natural',bulkScene='',bulkStart='',bulkOnlyMissing=true,bulkTargets={};
 let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
+let excelImportMode='merge';
 let castCopySelection=new Set();
 const AUDIO_EXT=/\.(wav|mp3|flac|ogg|m4a|aac|opus)$/i;
 
@@ -201,7 +202,31 @@ async function handleUpload(files){if(!files?.length)return;try{await saveNow();
  if(uploadContext.voiceName){let v=state.voices.find(x=>x.name===uploadContext.voiceName);if(v){v.refs=v.refs||[];v.refs.push(data.asset.id);dirtyState();await saveNow()}}
  else if(!uploadContext.lineId&&uploadContext.kind!=='reference'&&uploadContext.kind!=='voice')addClip(data.asset.id,uploadContext.kind);
  toast(`登録しました: ${file.name}`)}renderAll()}catch(e){toast(e.message,true)}}
-async function importExcel(file){if(!file)return;try{await saveNow();const form=new FormData();form.append('file',file);const response=await req(`/api/projects/${state.id}/excel/import`,{method:'POST',body:form});state=response.project;selectedScene=state.scenes[0]?.id;selectedLine=null;selectedClip=null;renderAll();let s=response.summary;modal(`<h2>Excel取り込み完了</h2><p>追加 ${s.added}件 / 更新 ${s.updated}件 / 既存一致 ${s.matched}件</p><p>既存の音声は削除していません。台詞が変更された場合は「要再生成」になります。</p>${s.warnings?.length?`<div class="empty" style="text-align:left">${s.warnings.map(esc).join('<hr>')}</div>`:''}<div class="modal-actions">${button('閉じる','data-close="1"','primary')}</div>`)}catch(e){toast('Excel取り込みに失敗: '+e.message,true)}}
+function chooseExcelImport(){
+ excelImportMode='merge';
+ modal(`<h2>Excelシナリオの取り込み方法</h2><p>読み込む前に、更新方法を選択してください。</p>
+  <label class="import-mode-choice"><input type="radio" name="excelMode" value="merge" checked><span><b>追加・更新（従来の方法）</b><small>Excelにない台詞も残します。</small></span></label>
+  <label class="import-mode-choice"><input type="radio" name="excelMode" value="replace"><span><b>シナリオをすべて置き換える</b><small>Excelにない台詞とシーンを削除します。既存の音声素材・キャスト設定は保持し、変更前の台本をバックアップします。</small></span></label>
+  <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('Excelファイルを選択','id="chooseExcelFileBtn"','primary')}</div>`);
+}
+async function importExcel(file){
+ if(!file)return;
+ const mode=excelImportMode;
+ if(mode==='replace' && !confirm(`「${file.name}」の内容でシナリオを全件置き換えますか？\n\nExcelに含まれない台詞・シーンと、それらに関連するタイムライン配置を取り除きます。\nキャスト設定・音声ファイルは残し、変更前のプロジェクト情報をバックアップします。`))return;
+ try{
+   await saveNow();
+   const form=new FormData();form.append('file',file);form.append('mode',mode);form.append('expectedRevision',String(state.revision));
+   const response=await req(`/api/projects/${state.id}/excel/import`,{method:'POST',body:form});
+   stop();state=response.project;selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;renderAll();
+   const info=response.summary;
+   const replaced=info.mode==='replace';
+   modal(`<h2>Excel取り込み完了</h2><p>${replaced?'全件置き換え':'追加・更新'} / 追加 ${info.added}件 / 更新 ${info.updated}件 / 既存一致 ${info.matched}件</p>
+     ${replaced?`<p>削除された台詞 ${info.removed}件・シーン ${info.removedScenes}件・クリップ ${info.removedClips}件</p><p>変更前の保存先: <code>workspace / プロジェクト / backups / ${esc(info.backup)}</code></p>`:''}
+     <p>音声ファイル・キャストの参照音声は削除していません。台詞の変更により「要再生成」となる場合があります。</p>
+     ${info.warnings?.length?`<div class="empty" style="text-align:left">${info.warnings.map(esc).join('<hr>')}</div>`:''}
+     <div class="modal-actions">${button('閉じる','data-close="1"','primary')}</div>`);
+ }catch(e){toast('Excel取り込みに失敗: '+e.message,true)}
+}
 function addVoice(){const name=prompt('キャラクター名を入力','新しいキャラクター');if(!name?.trim())return;if(state.voices.some(v=>v.name===name.trim())){toast('同じ名前のキャストが登録済み',true);return}state.voices.push({name:name.trim(),engine:'irodori',model:'Aratako/Irodori-TTS-v4.1-Small',mode:'clone',description:'',refs:[],refText:'',language:'Japanese'});dirtyState();renderAll()}
 function applyVoice(index){const v=state.voices[index];if(!v)return;let num=0;for(const l of state.lines.filter(l=>l.speaker===v.name)){l.engine=v.engine;l.mode=v.mode;l.language=v.language;l.model=v.engine==='qwen'?(v.mode==='design'?'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign':'Qwen/Qwen3-TTS-12Hz-1.7B-Base'):'Aratako/Irodori-TTS-v4.1-Small';l.status=l.selectedTakeId?'stale':'missing';num++}dirtyState();renderAll();toast(`${num}件の台詞に適用`)}
 async function designCharacterVoice(index){const voice=state.voices[index];if(!voice)return;const sampleText=prompt('作りたい声で読み上げるサンプル台詞を入力してください','こんにちは！ 今日はどんな素敵なことが起こるのか、楽しみですね。');if(!sampleText?.trim())return;
@@ -372,7 +397,8 @@ function handleGlobalClick(e){const target=e.target;
  const attach=target.closest('[data-attach]');if(attach)return attachAsset(attach.dataset.attach,selectedLine).catch(er=>toast(er.message,true));
  const add=target.closest('[data-addclip]');if(add){const [aid,track]=add.dataset.addclip.split(':');return addClip(aid,track)}
  const cl=target.closest('.tl-clip');if(cl)return selectClip(cl.dataset.clip);
- if(target.id==='importExcelBtn')$('excelPicker').click();
+ if(target.id==='importExcelBtn')chooseExcelImport();
+  if(target.id==='chooseExcelFileBtn'){excelImportMode=document.querySelector('input[name="excelMode"]:checked')?.value||'merge';closeModal();$('excelPicker').click();return}
  if(target.id==='batchAssignBtn')startBatchPicker('assign');
  if(target.id==='batchReferencesBtn')startBatchPicker('reference');
  if(target.id==='openCastCopyBtn')return openCastCopy();

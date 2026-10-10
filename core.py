@@ -479,89 +479,153 @@ def norm(s):
     return re.sub(r"\s+","",str(s or "").strip()).lower()
 
 
-def import_excel(project_id, stream):
-    """ID aware non-destructive merge; id-less rows match only exact text + speaker + scene."""
-    wb=openpyxl.load_workbook(stream, read_only=True, data_only=True)
-    with LOCK:
-        s=load_project(project_id)
-        sc_map={x["name"]:x["id"] for x in s["scenes"]}
-        old_by_id={l["id"]:l for l in s["lines"]}
-        seen=set()
-        warnings=[]
-        added=updated=matched=0
-        imported=[]
-        for ws in wb.worksheets:
-            header_row=keys=None
-            for row in list(ws.iter_rows(min_row=1,max_row=12,values_only=True)):
-                fields={k:i for i,v in enumerate(row) for k,labels in HEADERS.items() if norm(v) in labels}
-                if "text" in fields:
-                    header_row=list(ws.iter_rows(min_row=1,max_row=12,values_only=True)).index(row)+1
-                    keys=fields
-                    break
-            if not keys:
-                warnings.append(f"{ws.title}: 台詞列が見つからずスキップしました")
-                continue
-            def cell(row,key):
-                i=keys.get(key)
-                return row[i] if i is not None and i<len(row) else None
-            for row_no,row in enumerate(ws.iter_rows(min_row=header_row+1,values_only=True),start=header_row+1):
-                txt=str(cell(row,"text") or "").strip()
-                if not txt: continue
-                speaker=str(cell(row,"speaker") or "ナレーション").strip()
-                scene_name=str(cell(row,"scene") or ws.title).strip()
-                if scene_name not in sc_map:
-                    sid=uid("scene")
-                    s["scenes"].append({"id":sid,"name":scene_name})
-                    sc_map[scene_name]=sid
-                sid=sc_map[scene_name]
-                external_id=str(cell(row,"id") or "").strip()
-                line=None
-                if external_id:
-                    line=old_by_id.get(external_id)
-                    if line and line["id"] in seen:
+def import_excel(project_id, stream, mode="merge", expected_revision=None):
+    """Import a workbook. 'merge' retains unmatched rows; 'replace' replaces the script.
+
+    Audio assets and character profiles survive either operation. Matching stable
+    line IDs keep their takes; records not in a replacement workbook are detached.
+    A full JSON snapshot is saved before a replacement commit.
+    """
+    if mode not in ("merge", "replace"):
+        raise ValueError("取り込み方式が正しくありません")
+    wb = openpyxl.load_workbook(stream, read_only=True, data_only=True)
+    try:
+        with LOCK:
+            s = load_project(project_id)
+            original_revision = s["revision"]
+            if expected_revision is not None and int(expected_revision) != original_revision:
+                raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+            old_line_ids = {line["id"] for line in s["lines"]}
+            old_scene_ids = {scene["id"] for scene in s["scenes"]}
+            old_clips = list(s["clips"])
+            sc_map = {scene["name"]: scene["id"] for scene in s["scenes"]}
+            old_by_id = {line["id"]: line for line in s["lines"]}
+            seen = set()
+            warnings = []
+            added = updated = matched = 0
+            imported = []
+            imported_scene_ids = set()
+            for ws in wb.worksheets:
+                keys = None
+                header_row = None
+                for row_num, row in enumerate(ws.iter_rows(min_row=1, max_row=12, values_only=True), 1):
+                    fields = {k: i for i, v in enumerate(row) for k, labels in HEADERS.items() if norm(v) in labels}
+                    if "text" in fields:
+                        header_row, keys = row_num, fields
+                        break
+                if not keys:
+                    if mode == "replace":
+                        raise ValueError(f"{ws.title}: 台詞列がありません。全件置き換えを中止しました")
+                    warnings.append(f"{ws.title}: 台詞列が見つからずスキップしました")
+                    continue
+
+                def cell(row, key):
+                    i = keys.get(key)
+                    return row[i] if i is not None and i < len(row) else None
+
+                for row_no, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
+                    txt = str(cell(row, "text") or "").strip()
+                    if not txt:
+                        continue
+                    speaker = str(cell(row, "speaker") or "ナレーション").strip()
+                    scene_name = str(cell(row, "scene") or ws.title).strip()
+                    if scene_name not in sc_map:
+                        sid = uid("scene")
+                        s["scenes"].append({"id": sid, "name": scene_name})
+                        sc_map[scene_name] = sid
+                    sid = sc_map[scene_name]
+                    imported_scene_ids.add(sid)
+                    external_id = str(cell(row, "id") or "").strip()
+                    line = old_by_id.get(external_id) if external_id else None
+                    if external_id and external_id in seen:
+                        if mode == "replace":
+                            raise ValueError(f"{ws.title} {row_no}行目: 台詞IDが重複しています ({external_id})")
                         warnings.append(f"{ws.title} {row_no}行目: ID重複のためスキップ ({external_id})")
                         continue
-                    if line and line["sceneId"]!=sid:
-                        # moving a line between scenes is allowed
-                        for c in s["clips"]:
-                            if c.get("lineId")==line["id"]:c["sceneId"]=sid
-                if not line and not external_id:
-                    possibilities=[x for x in s["lines"] if x["id"] not in seen and x["sceneId"]==sid and x["speaker"]==speaker and x["text"]==txt]
-                    if len(possibilities)==1:line=possibilities[0];matched+=1
-                if not line:
-                    if external_id and external_id in old_by_id:
-                        warnings.append(f"{ws.title} {row_no}行目: IDの照合に失敗")
-                    line=new_line(sid)
-                    if external_id and re.fullmatch(r"line_[a-f0-9]{16}",external_id):line["id"]=external_id
-                    s["lines"].append(line)
-                    old_by_id[line["id"]]=line
-                    added+=1
-                else:updated+=1
-                line["speaker"]=speaker
-                line["text"]=txt
-                line["sceneId"]=sid
-                if "caption" in keys:line["caption"]=str(cell(row,"caption") or "")
-                if "after" in keys and cell(row,"after") not in (None,""):
-                    try:line["after"]=max(0,float(cell(row,"after")))
-                    except (TypeError,ValueError):warnings.append(f"{row_no}行目: 間の数値を読み取れません")
-                seen.add(line["id"])
-                imported.append(line["id"])
-        # Put imported lines in workbook order, preserve non-imported entries afterward.
-        order={line_id:i for i,line_id in enumerate(imported)}
-        s["lines"].sort(key=lambda ln:(0,order[ln["id"]]) if ln["id"] in order else (1,0))
-        # Imported speakers become editable cast entries automatically.
-        known={v.get("name") for v in s["voices"]}
-        for ln in s["lines"]:
-            speaker=ln.get("speaker","")
-            if speaker and speaker not in known:
-                s["voices"].append({"name":speaker,"engine":"irodori",
-                    "model":"Aratako/Irodori-TTS-v4.1-Small","mode":"clone",
-                    "description":"","language":"Japanese","refText":"","refs":[]})
-                known.add(speaker)
-        for scene in s["scenes"]:reflow_dialogue(s,scene["id"])
-        refresh_staleness(s)
-        s=save_project(project_id,s)
-        return {"project":s,"summary":{"added":added,"updated":updated,"matched":matched,"warnings":warnings}}
+                    if line and line["sceneId"] != sid:
+                        # Keep sound effects anchored to a retained dialogue line in the right scene.
+                        for clip in s["clips"]:
+                            if clip.get("lineId") == line["id"] or clip.get("anchorLineId") == line["id"]:
+                                clip["sceneId"] = sid
+                    if not line and not external_id:
+                        possibilities = [x for x in s["lines"] if x["id"] not in seen
+                                         and x["sceneId"] == sid and x["speaker"] == speaker and x["text"] == txt]
+                        if len(possibilities) == 1:
+                            line = possibilities[0]
+                            matched += 1
+                    if not line:
+                        if external_id and external_id in old_by_id:
+                            warnings.append(f"{ws.title} {row_no}行目: IDの照合に失敗")
+                        line = new_line(sid)
+                        if external_id and re.fullmatch(r"line_[a-f0-9]{16}", external_id):
+                            line["id"] = external_id
+                        s["lines"].append(line)
+                        old_by_id[line["id"]] = line
+                        added += 1
+                    else:
+                        updated += 1
+                    line["speaker"] = speaker
+                    line["text"] = txt
+                    line["sceneId"] = sid
+                    if "caption" in keys:
+                        line["caption"] = str(cell(row, "caption") or "")
+                    if "after" in keys and cell(row, "after") not in (None, ""):
+                        try:
+                            line["after"] = max(0, float(cell(row, "after")))
+                        except (TypeError, ValueError):
+                            warnings.append(f"{row_no}行目: 間の数値を読み取れません")
+                    seen.add(line["id"])
+                    imported.append(line["id"])
+            if mode == "replace" and not imported:
+                raise ValueError("読み込み可能な台詞が0件のため全件置き換えを中止しました")
+            if mode == "replace":
+                # 'Workbook is the complete script': remove all lines/scenes not represented.
+                s["lines"] = [line for line in s["lines"] if line["id"] in seen]
+                s["scenes"] = [scene for scene in s["scenes"] if scene["id"] in imported_scene_ids]
+                # Keep independent BGM/SFX clips in retained scenes, but discard
+                # orphaned voice clips / anchored effects and old scenes' clips.
+                s["clips"] = [clip for clip in s["clips"]
+                              if clip.get("sceneId") in imported_scene_ids
+                              and (not clip.get("lineId") or clip["lineId"] in seen)
+                              and (not clip.get("anchorLineId") or clip["anchorLineId"] in seen)]
+                order = {line_id: i for i, line_id in enumerate(imported)}
+                s["lines"].sort(key=lambda line: order[line["id"]])
+                s["scenes"].sort(key=lambda scene: min(
+                    (order[line["id"]] for line in s["lines"] if line["sceneId"] == scene["id"]),
+                    default=len(imported)))
+            else:
+                # Non-destructive merge: keep untouched entries after imported rows.
+                order = {line_id: i for i, line_id in enumerate(imported)}
+                s["lines"].sort(key=lambda line: (0, order[line["id"]]) if line["id"] in order else (1, 0))
+            known = {voice.get("name") for voice in s["voices"]}
+            for line in s["lines"]:
+                speaker = line.get("speaker", "")
+                if speaker and speaker not in known:
+                    s["voices"].append({"name": speaker, "engine": "irodori",
+                        "model": "Aratako/Irodori-TTS-v4.1-Small", "mode": "clone",
+                        "description": "", "language": "Japanese", "refText": "", "refs": []})
+                    known.add(speaker)
+            for scene in s["scenes"]:
+                reflow_dialogue(s, scene["id"])
+            refresh_staleness(s)
+            removed = len(old_line_ids - {line["id"] for line in s["lines"]})
+            removed_scenes = len(old_scene_ids - {scene["id"] for scene in s["scenes"]})
+            removed_clips = len(old_clips) - len(s["clips"])
+            backup_name = None
+            if mode == "replace":
+                # Save a full project metadata snapshot before modifying the state.
+                # Audio bytes are never removed by this operation.
+                backups = workdir(project_id) / "backups"
+                backups.mkdir(parents=True, exist_ok=True)
+                backup_name = f"before_excel_replace_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.json"
+                shutil.copy2(state_path(project_id), backups / backup_name)
+            s = save_project(project_id, s, expected_revision=original_revision)
+            return {"project": s, "summary": {"added": added, "updated": updated,
+                    "matched": matched, "removed": removed, "removedScenes": removed_scenes,
+                    "removedClips": max(0, removed_clips), "backup": backup_name,
+                    "mode": mode, "warnings": warnings}}
+    finally:
+        wb.close()
 
 
 def export_excel(project_id):
