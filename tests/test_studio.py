@@ -926,3 +926,94 @@ def test_global_settings_ui_load_and_save_api_wiring():
     assert "req('/api/settings/global',json('PUT',settings))" in modal_js
     assert 'state.settings={...state.settings,defaultGap:gap}' in modal_js
     assert 'state.settings||{}' in modal_js
+
+
+def test_selected_scene_takes_zip_uses_only_selected_take_and_custom_names(client):
+    from zipfile import ZipFile
+    state = project(client)
+    pid, scene_id = state['id'], state['scenes'][0]['id']
+    other_scene = {'id': core.uid('scene'), 'name': '第二幕'}
+    state['scenes'].append(other_scene)
+    lines = [core.new_line(scene_id,'真歩流','第一台詞'),
+             core.new_line(scene_id,'愛理','第二台詞'),
+             core.new_line(scene_id,'零度','未生成の台詞'),
+             core.new_line(other_scene['id'],'零度','別シーン')]
+    lines[0]['outputFilename'] = '会話.wav'
+    lines[1]['outputFilename'] = '会話.wav'
+    state['lines'] = lines
+    saved = client.put(f'/api/projects/{pid}',json={
+        'state':state,'expectedRevision':state['revision']})
+    assert saved.status_code == 200, saved.text
+    old_take = upload(client,pid,110)
+    current = client.post(f'/api/projects/{pid}/lines/{lines[0]["id"]}/attach/{old_take["id"]}').json()
+    chosen = upload(client,pid,220)
+    current = client.post(f'/api/projects/{pid}/lines/{lines[0]["id"]}/attach/{chosen["id"]}').json()
+    second = upload(client,pid,330)
+    current = client.post(f'/api/projects/{pid}/lines/{lines[1]["id"]}/attach/{second["id"]}').json()
+    separate = upload(client,pid,440)
+    current = client.post(f'/api/projects/{pid}/lines/{lines[3]["id"]}/attach/{separate["id"]}').json()
+    revision = current['revision']
+    # Non-dialogue-only audio never joins a ZIP of selected line takes.
+    extra = upload(client,pid,555,kind='bgm')
+    r=client.get(f'/api/projects/{pid}/scenes/{scene_id}/selected-takes.zip')
+    assert r.status_code == 200,r.text
+    assert r.headers['content-type'] == 'application/zip'
+    assert r.headers['x-vds-selected-takes'] == '2'
+    assert 'attachment' in r.headers['content-disposition']
+    with ZipFile(io.BytesIO(r.content)) as archive:
+        assert archive.namelist() == ['会話.wav','会話 (2).wav']
+        assert archive.read('会話.wav') == (core.workdir(pid)/'assets'/chosen['filename']).read_bytes()
+        assert archive.read('会話 (2).wav') == (core.workdir(pid)/'assets'/second['filename']).read_bytes()
+    after=client.get(f'/api/projects/{pid}').json()
+    assert after['revision'] == revision+1  # one extra asset upload, no mutation by ZIP
+    assert after['lines'][0]['takes'][0]['assetId'] == old_take['id']
+    assert len(after['assets']) == 5
+
+
+def test_selected_scene_zip_uses_asset_names_when_no_custom_filename_and_avoids_case_collisions(client):
+    from zipfile import ZipFile
+    state=project(client)
+    pid, scene_id = state['id'], state['scenes'][0]['id']
+    a = core.new_line(scene_id,'A','一')
+    b = core.new_line(scene_id,'B','二')
+    c = core.new_line(scene_id,'C','三')
+    state['lines']=[a,b,c]
+    state=client.put(f'/api/projects/{pid}',json={'state':state,'expectedRevision':state['revision']}).json()
+    audio=upload(client,pid)
+    for line in (a,b,c):
+        state=client.post(f'/api/projects/{pid}/lines/{line["id"]}/attach/{audio["id"]}').json()
+    # Names are inherited from asset metadata when not explicitly set on the line.
+    state['assets'][0]['name']='VOICE.wav'
+    state['lines'][1]['outputFilename']='voice.wav'
+    state['lines'][2]['outputFilename']='voIce.wav'
+    state=client.put(f'/api/projects/{pid}',json={'state':state,'expectedRevision':state['revision']}).json()
+    r=client.get(f'/api/projects/{pid}/scenes/{scene_id}/selected-takes.zip')
+    assert r.status_code==200,r.text
+    with ZipFile(io.BytesIO(r.content)) as archive:
+        assert archive.namelist()==['VOICE.wav','voice (2).wav','voIce (3).wav']
+        assert all(archive.read(name)==(core.workdir(pid)/'assets'/audio['filename']).read_bytes()
+                   for name in archive.namelist())
+
+
+def test_selected_scene_zip_rejects_empty_invalid_scene_and_missing_audio(client):
+    state=project(client)
+    pid, scene_id=state['id'],state['scenes'][0]['id']
+    route=f'/api/projects/{pid}/scenes/{scene_id}/selected-takes.zip'
+    assert client.get(route).status_code == 400
+    assert client.get(f'/api/projects/{pid}/scenes/scene_unknown/selected-takes.zip').status_code == 400
+    line=core.new_line(scene_id,'A','こんにちは')
+    state['lines']=[line]
+    state=client.put(f'/api/projects/{pid}',json={'state':state,'expectedRevision':state['revision']}).json()
+    asset=upload(client,pid)
+    client.post(f'/api/projects/{pid}/lines/{line["id"]}/attach/{asset["id"]}')
+    (core.workdir(pid)/'assets'/asset['filename']).unlink()
+    r=client.get(route)
+    assert r.status_code==404
+
+
+def test_scene_zip_ui_button_wiring():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert 'downloadSceneTakesZipBtn' in js
+    assert 'downloadSceneSelectedTakes()' in js
+    assert '/selected-takes.zip' in js
+    assert "await saveNow()" in js

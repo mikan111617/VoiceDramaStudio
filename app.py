@@ -11,6 +11,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from starlette.background import BackgroundTask
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
@@ -22,7 +23,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.1")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.2")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -153,6 +154,32 @@ def download_audio_asset(pid: str, aid: str):
         return FileResponse(physical, filename=name)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(404, str(exc))
+
+
+@app.get('/api/projects/{pid}/scenes/{sid}/selected-takes.zip')
+def download_selected_scene_takes(pid: str, sid: str):
+    """Download only selected takes from this scene; no BGM or other scenes."""
+    temporary = None
+    ready = False
+    try:
+        with tempfile.NamedTemporaryFile(prefix="vds_voices_", suffix=".zip",
+                                         delete=False) as output:
+            temporary = Path(output.name)
+        count = core.export_scene_selected_takes_zip(pid, sid, temporary)
+        ready = True
+        return FileResponse(
+            temporary, media_type="application/zip",
+            filename="selected_scene_voices.zip",
+            headers={"X-VDS-Selected-Takes": str(count)},
+            background=BackgroundTask(lambda: temporary.unlink(missing_ok=True)))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    finally:
+        # The response owns a valid archive; errors must not leave temp ZIPs behind.
+        if temporary and not ready:
+            temporary.unlink(missing_ok=True)
 
 
 @app.post('/api/projects/{pid}/assets')

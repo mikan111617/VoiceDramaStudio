@@ -173,6 +173,73 @@ def save_project(project_id, state, expected_revision=None, *, allow_new_assets=
         return state
 
 
+def export_scene_selected_takes_zip(project_id, scene_id, destination):
+    """Archive exactly the current scene's selected takes in script order.
+
+    The persistent file path and asset ID are never used as ZIP entry names.
+    Explicit per-line filenames take priority; duplicate names get numbered.
+    No project data is modified.
+    """
+    import unicodedata
+    from zipfile import ZipFile, ZIP_DEFLATED
+
+    def safe_name(value, extension, fallback):
+        name = str(value or "").replace("\\", "/").split("/")[-1].strip()
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name).strip(" .")
+        if not name:
+            name = fallback + extension
+        stem = name[:-len(extension)] if name.lower().endswith(extension.lower()) else Path(name).stem
+        if not stem or stem.upper().split(".")[0] in {
+                "CON", "PRN", "AUX", "NUL",
+                *[f"COM{i}" for i in range(1, 10)],
+                *[f"LPT{i}" for i in range(1, 10)]}:
+            stem = fallback
+        return stem[:160].rstrip(" .") + extension
+
+    with LOCK:
+        state = load_project(project_id)
+        if scene_id not in {scene["id"] for scene in state["scenes"]}:
+            raise ValueError("指定したシーンが見つかりません")
+        assets = {asset["id"]: asset for asset in state["assets"]}
+        items = []
+        used_names = set()
+        for line in state["lines"]:
+            if line.get("sceneId") != scene_id or not line.get("selectedTakeId"):
+                continue
+            take = next((t for t in line.get("takes", [])
+                         if t.get("id") == line["selectedTakeId"]), None)
+            if take is None:
+                continue
+            asset = assets.get(take.get("assetId"))
+            if asset is None:
+                raise ValueError("選択テイクに対応する音声素材がありません")
+            filename = asset.get("filename", "")
+            if not isinstance(filename, str) or Path(filename).name != filename:
+                raise ValueError("保存されている音声のパスが不正です")
+            audio_path = workdir(project_id) / "assets" / filename
+            if not audio_path.is_file():
+                raise FileNotFoundError(f"音声ファイルが見つかりません: {line['id']}")
+            extension = audio_path.suffix.lower()
+            if extension not in (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"):
+                raise ValueError("音声形式が正しくありません")
+            preferred = line.get("outputFilename") or asset.get("name") or filename
+            name = safe_name(preferred, extension, line["id"])
+            stem = name[:-len(extension)]
+            index = 2
+            while unicodedata.normalize("NFC", name).casefold() in used_names:
+                name = f"{stem} ({index}){extension}"
+                index += 1
+            used_names.add(unicodedata.normalize("NFC", name).casefold())
+            items.append((audio_path, name))
+        if not items:
+            raise ValueError("このシーンに選択済みの音声テイクがありません")
+        with ZipFile(destination, "w", compression=ZIP_DEFLATED, compresslevel=3,
+                     allowZip64=True) as archive:
+            for physical, public_name in items:
+                archive.write(physical, arcname=public_name)
+        return len(items)
+
+
 def generated_audio_filename(line, engine="irodori"):
     """Name the user-facing WAV; the file stored on disk retains its opaque asset ID."""
     requested = line.get("outputFilename", "") or ""

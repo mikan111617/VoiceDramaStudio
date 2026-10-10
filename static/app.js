@@ -56,7 +56,7 @@ function bulkDropZone(mode){return `<div class="batch-dropzone" data-audio-drop=
 function renderEditor(){if(!state)return;const act=$('panelActions');const title=$('editorTitle');const sub=$('editorSub');const key=$('editorKicker');
  if(view==='script'){
   key.textContent='SCRIPT EDITOR';title.textContent=sceneName(selectedScene);sub.textContent=`${activeLines().length} セリフ · 編集すると音声の更新を検出`;
-  act.innerHTML=button('↑ Excel取込','id="importExcelBtn"')+button('🗑 台本を全削除','id="openClearScriptBtn"','danger')+button('↓ 既存音声を一括割当','id="batchAssignBtn"')+button('✦ 要生成を一括', 'id="generateMissingBtn"')+button('＋ セリフ','id="addLineTop"','primary');
+  act.innerHTML=button('↑ Excel取込','id="importExcelBtn"')+button('🗑 台本を全削除','id="openClearScriptBtn"','danger')+button('↓ このシーンの音声ZIP','id="downloadSceneTakesZipBtn"')+button('↓ 既存音声を一括割当','id="batchAssignBtn"')+button('✦ 要生成を一括', 'id="generateMissingBtn"')+button('＋ セリフ','id="addLineTop"','primary');
   $('editorContent').innerHTML=bulkDropZone('assign')+activeLines().map((l,i)=>`<article class="script-line ${selectedLine===l.id?'active':''}" data-id="${esc(l.id)}"><div class="line-top"><span class="line-number">${String(i+1).padStart(2,'0')}</span><input class="speaker-select" data-line-field="speaker" list="speakers" value="${esc(l.speaker)}" title="話者を入力"><span class="line-status ${esc(l.status)}">${{ready:'音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成'}</span><div class="line-actions"><button class="icon-btn" data-move="-1" title="上へ">↑</button><button class="icon-btn" data-move="1" title="下へ">↓</button><button class="icon-btn" data-delete="line" title="削除">×</button></div></div><textarea class="line-text" data-line-field="text" placeholder="ここに台詞を入力">${esc(l.text)}</textarea><div class="caption-box"><span class="caption-tag">演技指示</span><textarea data-line-field="caption" placeholder="例：声をひそめて、辺りを警戒しながら…">${esc(l.caption)}</textarea></div><div class="file-name-box"><label>生成音声のファイル名（任意） <input data-line-field="outputFilename" type="text" maxlength="120" value="${esc(l.outputFilename||'')}" placeholder="未指定なら自動命名 · 例: mahoru_001.wav" spellcheck="false"></label></div><div class="line-footer"><label>次の台詞まで <input class="gap-input" type="number" min="0" max="60" step="0.1" data-line-field="after" value="${fnum(l.after,1)}"> 秒</label><span><button data-action="addBelow">＋ 次に追加</button>　<button data-action="select">${l.takes?.length||0} テイク　→</button></span></div></article>`).join('')+`<button class="editor-bigaction" id="addLineBottom">＋ セリフを追加</button><datalist id="speakers">${getVoices().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
  }else if(view==='voices'){
   key.textContent='VOICE LIBRARY';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')+button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
@@ -238,6 +238,20 @@ async function clearEntireScript(){
    <p class="small muted">バックアップ: workspace / このプロジェクト / backups / ${esc(info.backup)}</p>
    <div class="modal-actions">${button('閉じる','data-close="1"','primary')}</div>`);
  }catch(e){toast('シナリオを削除できません: '+e.message,true);if(btn){btn.disabled=false;btn.textContent='すべて削除する'}}
+}
+async function downloadSceneSelectedTakes(){
+ if(!selectedScene)return toast('シーンが選択されていません',true);
+ const count=activeLines().filter(l=>l.selectedTakeId&&l.takes?.some(t=>t.id===l.selectedTakeId)).length;
+ if(!count)return toast('このシーンに選択済みの音声テイクがありません',true);
+ try{
+  await saveNow();
+  const link=document.createElement('a');
+  link.href=`/api/projects/${state.id}/scenes/${selectedScene}/selected-takes.zip`;
+  link.download='selected_scene_voices.zip';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+ }catch(e){toast('音声ZIPの保存に失敗: '+e.message,true)}
 }
 function chooseExcelImport(){
  excelImportMode='merge';
@@ -453,6 +467,7 @@ function handleGlobalClick(e){const target=e.target;
  const attach=target.closest('[data-attach]');if(attach)return attachAsset(attach.dataset.attach,selectedLine).catch(er=>toast(er.message,true));
  const add=target.closest('[data-addclip]');if(add){const [aid,track]=add.dataset.addclip.split(':');return addClip(aid,track)}
  const cl=target.closest('.tl-clip');if(cl)return selectClip(cl.dataset.clip);
+ if(target.id==='downloadSceneTakesZipBtn')return downloadSceneSelectedTakes();
  if(target.id==='importExcelBtn')chooseExcelImport();
  if(target.id==='openClearScriptBtn'){openClearScript();return}
  if(target.id==='confirmClearScriptBtn'){clearEntireScript();return}
