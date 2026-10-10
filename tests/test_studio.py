@@ -618,3 +618,110 @@ def test_excel_ui_exposes_replace_and_confirmation():
     assert 'chooseExcelImport' in js and "value=\"replace\"" in js
     assert 'if(mode===\'replace\' && !confirm(' in js
     assert "form.append('mode',mode)" in js
+
+
+def test_cast_anime_model_is_default_for_legacy_and_new_lines(client):
+    initial = project(client)
+    pid = initial['id']
+    current = client.get(f'/api/projects/{pid}').json()
+    sid = current['scenes'][0]['id']
+    anime = 'phasefield-audio/Irodori-TTS-v4.1-Anime'
+    current['voices'] = [{'name': '真歩流', 'engine': 'irodori', 'mode': 'clone', 'model': anime, 'refs': []}]
+    for i in range(164):
+        item = core.new_line(sid, '真歩流', f'セリフ{i}')
+        if i < 163:
+            item.pop('ttsSource', None)
+        current['lines'].append(item)
+    saved = client.put(f'/api/projects/{pid}', json={
+        'state': current, 'expectedRevision': current['revision']}).json()
+    response = client.post(f'/api/projects/{pid}/generate/preview', json={
+        'lineIds': [line['id'] for line in saved['lines']]})
+    assert response.status_code == 200, response.text
+    assert response.json()['total'] == 164
+    assert response.json()['groups'] == [{'engine':'irodori','model':anime,'count':164}]
+    assert core.resolve_line_tts(saved['lines'][0], saved['voices'][0])['model'] == anime
+    assert core.resolve_line_tts(saved['lines'][-1], saved['voices'][0])['source'] == 'cast'
+
+
+def test_individual_override_keeps_custom_small_even_with_anime_cast(client):
+    s=project(client)
+    anime = 'phasefield-audio/Irodori-TTS-v4.1-Anime'
+    s['voices'] = [{'name':'愛理','engine':'irodori','model':anime,'mode':'clone','refs':[]}]
+    sid = s['scenes'][0]['id']
+    normal = core.new_line(sid,'愛理','通常はAnime')
+    explicit = core.new_line(sid,'愛理','このセリフだけSmall')
+    explicit['ttsSource'] = 'line'
+    legacy_custom = core.new_line(sid,'愛理','旧版のカスタムモデル')
+    legacy_custom.pop('ttsSource',None)
+    legacy_custom['model'] = 'Aratako/Irodori-TTS-v4-Large'
+    s['lines'] = [normal,explicit,legacy_custom]
+    r=client.put(f'/api/projects/{s["id"]}',json={'state':s,'expectedRevision':s['revision']})
+    assert r.status_code==200,r.text
+    preview=client.post(f'/api/projects/{s["id"]}/generate/preview',json={
+        'lineIds':[x['id'] for x in s['lines']]})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['groups']==[
+        {'engine':'irodori','model':anime,'count':1},
+        {'engine':'irodori','model':'Aratako/Irodori-TTS-v4.1-Small','count':1},
+        {'engine':'irodori','model':'Aratako/Irodori-TTS-v4-Large','count':1},
+    ]
+
+
+def test_actual_generation_sends_cast_anime_model(client,monkeypatch):
+    import app as api
+    import json
+    s=project(client)
+    anime='phasefield-audio/Irodori-TTS-v4.1-Anime'
+    s['voices']=[{'name':'真歩流','engine':'irodori','model':anime,'mode':'clone','refs':[]}]
+    sid=s['scenes'][0]['id']
+    line=core.new_line(sid,'真歩流','テスト用台詞')
+    line.pop('ttsSource',None)
+    s['lines']=[line]
+    s=client.put(f'/api/projects/{s["id"]}',json={'state':s,'expectedRevision':s['revision']}).json()
+    monkeypatch.setattr(api,'python_for',lambda *_:sys.executable)
+    captured=[]
+    def fake_run(cmd,**kw):
+        job=json.loads(Path(cmd[-2]).read_text(encoding='utf-8'))
+        captured.append(job)
+        items=[]
+        for it in job['items']:
+            out=Path(it['output'])
+            sf.write(out,np.zeros(4410,dtype='float32'),44100)
+            items.append({'id':it['id'],'ok':True,'output':str(out)})
+        Path(cmd[-1]).write_text(json.dumps({'ok':True,'items':items}),encoding='utf-8')
+        return type('Result',(),{'returncode':0})()
+    monkeypatch.setattr(api.subprocess,'run',fake_run)
+    jid=core.uid('job')
+    api.JOBS[jid]={'status':'running','completed':0,'total':0,'errors':[],'message':''}
+    api.run_generation(jid,s['id'],[line['id']],40)
+    assert api.JOBS[jid]['status']=='done',api.JOBS[jid]
+    assert captured[0]['model']==anime
+    done=client.get(f'/api/projects/{s["id"]}').json()
+    assert len(done['lines'][0]['takes'])==1
+    assert done['lines'][0]['status']=='ready'
+
+
+def test_legacy_small_model_with_anime_cast_marks_previous_take_stale(client):
+    s=project(client)
+    sid=s['scenes'][0]['id']
+    line=core.new_line(sid,'真歩流','こんにちは')
+    line.pop('ttsSource',None)
+    s['lines']=[line]
+    s=client.put(f'/api/projects/{s["id"]}',json={'state':s,'expectedRevision':s['revision']}).json()
+    audio=upload(client,s['id'],kind='voice')
+    s=client.post(f'/api/projects/{s["id"]}/lines/{line["id"]}/attach/{audio["id"]}').json()
+    assert s['lines'][0]['status']=='ready'
+    s['voices']=[{'name':'真歩流','engine':'irodori','model':'phasefield-audio/Irodori-TTS-v4.1-Anime','refs':[]}]
+    s=client.put(f'/api/projects/{s["id"]}',json={'state':s,'expectedRevision':s['revision']}).json()
+    assert s['lines'][0]['status']=='stale'
+    assert client.get(f'/api/projects/{s["id"]}').json()['lines'][0]['status']=='stale'
+
+
+def test_tts_cast_defaults_ui_and_preview_are_available():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert "l.ttsSource='cast'" in js
+    assert "v.model||'Aratako/Irodori-TTS-v4.1-Small'" in js
+    assert '/generate/preview' in js
+    assert 'lineTtsSource' in js
+    assert 'この台詞だけ個別設定' in js
+    assert 'このキャストの全台詞へ設定を適用' in js

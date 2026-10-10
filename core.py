@@ -410,7 +410,7 @@ def new_line(scene_id, speaker="", text="", caption="", after=0.65):
     return {"id":uid("line"), "sceneId":scene_id, "speaker":speaker,
             "text":text, "caption":caption,"after":after,
             "status":"missing", "takes":[], "selectedTakeId":None,
-            "engine":"irodori", "model":"Aratako/Irodori-TTS-v4.1-Small", "mode":"clone", "language":"Japanese"}
+            "engine":"irodori", "model":"Aratako/Irodori-TTS-v4.1-Small", "mode":"clone", "language":"Japanese", "ttsSource":"cast"}
 
 
 def attach_take(s, line, asset, generator=None, *, reflow=True):
@@ -449,10 +449,48 @@ def reflow_dialogue(s,scene_id):
         cursor+=max(0,float(line.get("after",0.65)))
 
 
+DEFAULT_IRODORI_MODEL = "Aratako/Irodori-TTS-v4.1-Small"
+
+
+def line_tts_source(line, voice=None):
+    """Resolve legacy lines safely: default Small follows the cast, custom models stay explicit."""
+    source = line.get("ttsSource")
+    if source in ("cast", "line"):
+        return "cast" if source == "cast" and voice else "line"
+    if not voice:
+        return "line"
+    # Old script imports created Small settings on *every* line automatically.
+    # Do not let those implicit defaults override the speaker's Anime model.
+    # Preserve legacy manually-changed nondefault models and engine/mode choices.
+    if (line.get("engine", "irodori") != "irodori"
+            or line.get("model", DEFAULT_IRODORI_MODEL) not in ("", DEFAULT_IRODORI_MODEL)
+            or line.get("mode", "clone") != "clone"):
+        return "line"
+    return "cast"
+
+
+def resolve_line_tts(line, voice=None):
+    """Return the actual TTS settings used by both preview and generation."""
+    voice = voice or {}
+    source = line_tts_source(line, voice)
+    cfg = voice if source == "cast" else line
+    engine = cfg.get("engine") or voice.get("engine") or "irodori"
+    if engine not in ("irodori", "qwen"):
+        raise ValueError("未対応エンジン: " + str(engine))
+    mode = cfg.get("mode") or voice.get("mode") or "clone"
+    model = cfg.get("model") or voice.get("model") or (
+        DEFAULT_IRODORI_MODEL if engine == "irodori" else "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+    if engine == "qwen" and mode == "design":
+        model = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    language = cfg.get("language") or voice.get("language") or "Japanese"
+    return {"source": source, "engine": engine, "mode": mode, "model": model, "language": language}
+
+
 def generation_signature(line,s):
     import hashlib
     voice=next((v for v in s["voices"] if v["name"]==line.get("speaker")),{})
-    data={k:line.get(k) for k in ("text","caption","engine","model","mode","language")}
+    data={"text":line.get("text"),"caption":line.get("caption"),
+          "effectiveTTS":resolve_line_tts(line,voice)}
     data["profile"]={k:voice.get(k) for k in ("refs","description","refText","language","model","engine","mode")}
     return hashlib.sha256(json.dumps(data,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
 

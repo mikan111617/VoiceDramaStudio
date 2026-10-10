@@ -22,7 +22,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.1.7")
+app=FastAPI(title="VoiceDrama Studio",version="0.1.8")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -84,7 +84,10 @@ def cast_copy(pid: str, body: CastCopyRequest):
 
 @app.get('/api/projects/{pid}')
 def get_project(pid:str):
-    try:return core.load_project(pid)
+    try:
+        project=core.load_project(pid)
+        core.refresh_staleness(project)
+        return project
     except (ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
 
 @app.put('/api/projects/{pid}')
@@ -310,11 +313,8 @@ def run_generation(job_id,pid,line_ids,steps):
         groups={}
         for line in selected:
             voice=voices.get(line['speaker'],{})
-            engine=line.get('engine') or voice.get('engine') or 'irodori'
-            if engine not in ('irodori','qwen'):raise ValueError('未対応エンジン: '+engine)
-            mode=line.get('mode') or voice.get('mode') or 'clone'
-            model=line.get('model') or voice.get('model') or ('Aratako/Irodori-TTS-v4.1-Small' if engine=='irodori' else 'Qwen/Qwen3-TTS-12Hz-1.7B-Base')
-            if engine=='qwen' and mode=='design':model='Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'
+            resolved=core.resolve_line_tts(line,voice)
+            engine,mode,model=resolved['engine'],resolved['mode'],resolved['model']
             # Only the configured engine's native voice references are used.
             refs=[]
             for aid in voice.get('refs',[]):
@@ -322,7 +322,7 @@ def run_generation(job_id,pid,line_ids,steps):
                 if asset:refs.append(str(core.workdir(pid)/'assets'/asset['filename']))
             descriptor=voice.get('description','')
             spec={'id':line['id'],'text':line['text'],'caption':line.get('caption','') or descriptor,
-                  'description':descriptor,'refs':refs,'mode':mode,'language':line.get('language') or voice.get('language','Japanese'),
+                  'description':descriptor,'refs':refs,'mode':mode,'language':resolved['language'],
                   'ref_text':voice.get('refText',''),'num_steps':steps,'output':'',
                   'schedule':'linear','sway_coeff':-1.0}
             groups.setdefault((engine,model),[]).append(spec)
@@ -362,6 +362,29 @@ def run_generation(job_id,pid,line_ids,steps):
         job['status']='cancelled' if job.get('cancel') else ('done_with_errors' if job['errors'] else 'done')
     except Exception as e:
         job['status']='error';job['message']=str(e)
+
+@app.post('/api/projects/{pid}/generate/preview')
+def generate_preview(pid: str, body: Generation):
+    """Show the exact model grouping before any GPU work starts."""
+    try:
+        state=core.load_project(pid)
+        voices={v['name']:v for v in state['voices']}
+        requested=set(body.lineIds)
+        groups={}
+        for line in state['lines']:
+            if line['id'] not in requested or not line.get('text','').strip():
+                continue
+            config=core.resolve_line_tts(line, voices.get(line.get('speaker'),{}))
+            key=(config['engine'],config['model'])
+            groups[key]=groups.get(key,0)+1
+        return {'total':sum(groups.values()), 'groups':[
+            {'engine':engine,'model':model,'count':count}
+            for (engine,model),count in groups.items()]}
+    except FileNotFoundError as e:
+        raise HTTPException(404,str(e))
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+
 
 @app.post('/api/projects/{pid}/generate')
 def generate(pid:str,body:Generation):
