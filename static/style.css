@@ -37,13 +37,12 @@
 .cast-copy-item span{flex:1;overflow-wrap:anywhere}
 .cast-copy-item b{margin:0}
 
-/* Current project display name editor */
-.project-rename-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.project-rename-row input{min-width:180px;flex:1 1 240px}
-.project-rename-row .btn{flex:0 0 auto}
-
 /* Excel import: explicit full-replacement selection */
 .import-mode-choice{display:flex;align-items:flex-start;gap:12px;margin:12px 0;padding:14px;border:1px solid var(--line,#454e62);border-radius:8px;cursor:pointer}
 .import-mode-choice input{margin-top:5px;flex:0 0 auto}
 .import-mode-choice span{display:grid;gap:5px}
 .import-mode-choice small{color:var(--muted,#a0a7b8);line-height:1.6}
+
+.file-name-box{border-top:1px solid #303643;margin-top:10px;padding-top:8px}
+.file-name-box label{font-size:10px;color:#9fa8b6;display:block}
+.file-name-box input{margin-top:5px;width:100%;padding:7px 9px;font-size:12px;background:#111722}

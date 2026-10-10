@@ -467,73 +467,6 @@ def test_cast_copy_ui_has_bulk_single_and_all_actions():
     assert 'castCopyConfirmBtn' in js
     assert '/casts/copy' in js
 
-
-def test_project_rename_preserves_assets_casts_and_id(client):
-    initial = project(client)
-    pid = initial['id']
-    ref = upload(client, pid, kind='reference')
-    state = client.get(f'/api/projects/{pid}').json()
-    state['voices'] = [{'name': '真歩流', 'refs': [ref['id']]}]
-    state['lines'] = [core.new_line(state['scenes'][0]['id'], '真歩流', 'おはよう')]
-    state = client.put(f'/api/projects/{pid}', json={'state':state, 'expectedRevision':state['revision']}).json()
-    copy = {k:state[k] for k in ('id','scenes','lines','tracks','clips','assets','voices','settings')}
-    path = core.workdir(pid)/'assets'/ref['filename']
-    r = client.patch(f'/api/projects/{pid}/title', json={'title':'  新しい作品名  ', 'expectedRevision':state['revision']})
-    assert r.status_code == 200, r.text
-    after = r.json()
-    assert after['title'] == '新しい作品名'
-    assert after['revision'] == state['revision'] + 1
-    assert all(after[k] == value for k,value in copy.items())
-    assert path.exists()
-    assert any(p['id'] == pid and p['title'] == '新しい作品名' for p in client.get('/api/projects').json())
-    same = client.patch(f'/api/projects/{pid}/title', json={'title':after['title'], 'expectedRevision':after['revision']})
-    assert same.status_code == 200 and same.json()['revision'] == after['revision']
-
-
-def test_project_rename_rejects_invalid_title_and_conflicts(client):
-    state = project(client)
-    route = f'/api/projects/{state["id"]}/title'
-    for title in ('', '   ', 'x'*121, 'bad\nname'):
-        assert client.patch(route,json={'title':title}).status_code == 400
-    assert client.patch(route,json={'title':'新タイトル','expectedRevision':0}).status_code == 409
-    assert client.get(f'/api/projects/{state["id"]}').json()['title'] == state['title']
-    assert client.patch('/api/projects/p_0000000000000000/title',json={'title':'new'}).status_code == 404
-
-
-def test_project_rename_button_is_connected():
-    js = (Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
-    assert 'renameProjectTitle' in js and 'renameProjectBtn' in js
-    assert "json('PATCH'" in js and 'renameCurrentProject()' in js
-
-
-def test_project_title_rename_works_via_legacy_save_endpoint(client):
-    """The existing PUT route works even on installations without PATCH /title."""
-    s=project(client)
-    pid=s['id']
-    sid=s['scenes'][0]['id']
-    original_id=s['id']
-    s['lines'].append(core.new_line(sid,'真歩流','これは音声ドラマです'))
-    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
-    old_revision=s['revision']
-    s['title']='変更後の作品名'
-    response=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':old_revision})
-    assert response.status_code==200,response.text
-    changed=response.json()
-    assert changed['id']==original_id
-    assert changed['title']=='変更後の作品名'
-    assert changed['lines'][0]['text']=='これは音声ドラマです'
-    assert changed['revision']==old_revision+1
-    assert client.get(f'/api/projects/{pid}').json()['title']=='変更後の作品名'
-    # Stale requests may not silently overwrite another browser's edits.
-    assert client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':old_revision}).status_code==409
-
-
-def test_rename_ui_uses_backwards_compatible_save_endpoint():
-    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
-    fragment=js[js.index('async function renameCurrentProject()'):js.index('function openSettings(){')]
-    assert "json('PUT',{state:renamedState,expectedRevision:state.revision})" in fragment
-    assert "json('PATCH'" not in fragment
-
 # v0.1.7: Excel full-replace safety and backward compatibility
 
 def _workbook_bytes(rows, *, sheet='第一幕', title_column=True):
@@ -620,6 +553,7 @@ def test_excel_ui_exposes_replace_and_confirmation():
     assert "form.append('mode',mode)" in js
 
 
+
 def test_cast_anime_model_is_default_for_legacy_and_new_lines(client):
     initial = project(client)
     pid = initial['id']
@@ -627,6 +561,7 @@ def test_cast_anime_model_is_default_for_legacy_and_new_lines(client):
     sid = current['scenes'][0]['id']
     anime = 'phasefield-audio/Irodori-TTS-v4.1-Anime'
     current['voices'] = [{'name': '真歩流', 'engine': 'irodori', 'mode': 'clone', 'model': anime, 'refs': []}]
+    # Old lines already stored Small; newer lines explicitly track cast defaults.
     for i in range(164):
         item = core.new_line(sid, '真歩流', f'セリフ{i}')
         if i < 163:
@@ -634,11 +569,11 @@ def test_cast_anime_model_is_default_for_legacy_and_new_lines(client):
         current['lines'].append(item)
     saved = client.put(f'/api/projects/{pid}', json={
         'state': current, 'expectedRevision': current['revision']}).json()
-    response = client.post(f'/api/projects/{pid}/generate/preview', json={
+    result = client.post(f'/api/projects/{pid}/generate/preview', json={
         'lineIds': [line['id'] for line in saved['lines']]})
-    assert response.status_code == 200, response.text
-    assert response.json()['total'] == 164
-    assert response.json()['groups'] == [{'engine':'irodori','model':anime,'count':164}]
+    assert result.status_code == 200, result.text
+    assert result.json()['total'] == 164
+    assert result.json()['groups'] == [{'engine':'irodori','model':anime,'count':164}]
     assert core.resolve_line_tts(saved['lines'][0], saved['voices'][0])['model'] == anime
     assert core.resolve_line_tts(saved['lines'][-1], saved['voices'][0])['source'] == 'cast'
 
@@ -725,3 +660,162 @@ def test_tts_cast_defaults_ui_and_preview_are_available():
     assert 'lineTtsSource' in js
     assert 'この台詞だけ個別設定' in js
     assert 'このキャストの全台詞へ設定を適用' in js
+
+
+
+def test_script_clear_replaces_wrong_import_and_retains_cast_audio(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    s['scenes'].append({'id':core.uid('scene'),'name':'間違った第二幕'})
+    s['lines']=[core.new_line(sid,'真歩流','間違い'),core.new_line(s['scenes'][1]['id'],'愛理','間違い2')]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    ref=upload(client,pid,kind='reference');audio=upload(client,pid,kind='voice')
+    s=client.get(f'/api/projects/{pid}').json()
+    s['voices']=[{'name':'真歩流','refs':[ref['id']],'model':'phasefield-audio/Irodori-TTS-v4.1-Anime'}]
+    s['clips']=[{'id':core.uid('clip'),'sceneId':sid,'trackId':'bgm','assetId':audio['id'],
+                 'start':0,'duration':0.1}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    result=client.post(f'/api/projects/{pid}/script/clear',json={'expectedRevision':s['revision']})
+    assert result.status_code==200,result.text
+    data=result.json();cleared=data['project'];summary=data['summary']
+    assert cleared['id']==pid and cleared['title']==s['title']
+    assert cleared['lines']==[] and cleared['clips']==[]
+    assert len(cleared['scenes'])==1 and cleared['scenes'][0]['name']=='シーン1'
+    assert cleared['voices']==s['voices'] and cleared['assets']==s['assets']
+    assert cleared['settings']==s['settings'] and cleared['tracks']==s['tracks']
+    assert summary['removedLines']==2 and summary['removedClips']==1 and summary['removedScenes']==2
+    backup=core.workdir(pid)/'backups'/summary['backup']
+    assert backup.is_file()
+    original=__import__('json').loads(backup.read_text(encoding='utf-8'))
+    assert len(original['lines'])==2 and len(original['clips'])==1
+    assert (core.workdir(pid)/'assets'/audio['filename']).is_file()
+    assert (core.workdir(pid)/'assets'/ref['filename']).is_file()
+    import io as _io
+    import openpyxl as _openpyxl
+    wb=_openpyxl.Workbook();ws=wb.active;ws.title='新しい第一幕'
+    ws.append(['話者','台詞']);ws.append(['真歩流','正しい台詞'])
+    buf=_io.BytesIO();wb.save(buf)
+    response=client.post(f'/api/projects/{pid}/excel/import',files={'file':('new.xlsx',buf.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+    assert response.status_code==200,response.text
+    after=response.json()['project']
+    assert len(after['lines'])==1 and after['lines'][0]['text']=='正しい台詞'
+    assert [scene['name'] for scene in after['scenes']]==['新しい第一幕']
+    assert after['voices'][0]['model']=='phasefield-audio/Irodori-TTS-v4.1-Anime'
+
+
+def test_script_clear_rejects_conflicts_and_missing_project(client):
+    current=project(client);pid=current['id']
+    response=client.post(f'/api/projects/{pid}/script/clear',json={'expectedRevision':current['revision']-1})
+    assert response.status_code==409
+    assert client.get(f'/api/projects/{pid}').json()==current
+    assert not (core.workdir(pid)/'backups').exists()
+    missing=client.post('/api/projects/p_0000000000000000/script/clear',json={'expectedRevision':1})
+    assert missing.status_code==404
+    no_revision=client.post(f'/api/projects/{pid}/script/clear',json={})
+    assert no_revision.status_code==422
+
+
+def test_script_clear_frontend_has_explicit_confirmation():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert 'openClearScriptBtn' in js
+    assert 'confirmClearScriptBtn' in js
+    assert 'script/clear' in js
+    assert 'removedLines' in js and 'removedClips' in js
+
+
+def test_generated_audio_filename_defaults_custom_and_safe_names():
+    l = {'id': 'line_1111111111111111'}
+    assert core.generated_audio_filename(l, 'irodori') == 'line_1111111111111111 - irodori.wav'
+    l['outputFilename'] = '真歩流_第01話'
+    assert core.generated_audio_filename(l) == '真歩流_第01話.wav'
+    l['outputFilename'] = '真歩流_第01話.WAV'
+    assert core.generated_audio_filename(l) == '真歩流_第01話.wav'
+    for bad in ('../bad', '..\\secret', 'bad/name', 'bad:name', '.hidden', 'CON',
+                'COM1', 'hello.mp3', 'a..wav', 'bad\nfile', 'trailing.', 'x'*121):
+        l['outputFilename'] = bad
+        with pytest.raises(ValueError):
+            core.generated_audio_filename(l)
+
+
+def test_custom_filename_is_validated_at_save_and_does_not_invalidate_audio(client):
+    s = project(client); pid=s['id']
+    line=core.new_line(s['scenes'][0]['id'], '真歩流','こんにちは')
+    s['lines']=[line]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    uploaded=upload(client,pid,kind='voice')
+    s=client.post(f'/api/projects/{pid}/lines/{line["id"]}/attach/{uploaded["id"]}').json()
+    current=s['lines'][0]
+    assert current['status']=='ready'
+    current['outputFilename']='take_new'
+    saved=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']})
+    assert saved.status_code==200, saved.text
+    s=saved.json()
+    assert s['lines'][0]['status']=='ready'
+    assert len(s['lines'][0]['takes'])==1
+    assert s['assets'][0]['name']=='voice.wav'
+    s['lines'][0]['outputFilename']='a/b.wav'
+    bad=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']})
+    assert bad.status_code==400
+
+
+def test_custom_filename_generation_and_download(client,monkeypatch):
+    import json
+    import app as api
+    from urllib.parse import unquote
+    s=project(client); pid=s['id']
+    one=core.new_line(s['scenes'][0]['id'],'真歩流','台詞1')
+    two=core.new_line(s['scenes'][0]['id'],'真歩流','台詞2')
+    one['outputFilename']='探偵001.wav'
+    s['lines']=[one,two]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    monkeypatch.setattr(api,'python_for',lambda *_:sys.executable)
+    def fake(cmd,**kwargs):
+        data=json.loads(Path(cmd[-2]).read_text(encoding='utf-8'))
+        rows=[]
+        for item in data['items']:
+            p=Path(item['output']);sf.write(p,np.zeros(4410,dtype='float32'),44100)
+            rows.append({'id':item['id'],'ok':True,'output':str(p)})
+        Path(cmd[-1]).write_text(json.dumps({'ok':True,'items':rows}),encoding='utf-8')
+        return type('Ok',(),{'returncode':0})()
+    monkeypatch.setattr(api.subprocess,'run',fake)
+    jid=core.uid('job');api.JOBS[jid]={'status':'running','completed':0,'total':0,'errors':[],'message':''}
+    api.run_generation(jid,pid,[one['id'],two['id']],40)
+    assert api.JOBS[jid]['status']=='done',api.JOBS[jid]
+    fresh=client.get(f'/api/projects/{pid}').json()
+    by_id={x['id']:x for x in fresh['assets']}
+    named=[]
+    for line in fresh['lines']:
+        aid=line['takes'][-1]['assetId']; named.append((line['id'],by_id[aid]['name']))
+        response=client.get(f'/api/projects/{pid}/assets/{aid}/download')
+        assert response.status_code==200
+        assert len(response.content)>100
+        filename=unquote(response.headers['content-disposition'])
+        assert by_id[aid]['name'] in filename
+        assert by_id[aid]['filename'].startswith(aid)  # Stored safely, distinct from display name
+    assert named==[(one['id'],'探偵001.wav'),(two['id'],f'{two["id"]} - irodori.wav')]
+    assert client.get(f'/api/projects/{pid}/assets/asset_missing/download').status_code==404
+
+
+def test_excel_roundtrip_retains_optional_output_filename(client):
+    s=project(client); pid=s['id']
+    l=core.new_line(s['scenes'][0]['id'],'真歩流','事件です')
+    l['outputFilename']='case_001'
+    s['lines']=[l]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    xlsx=client.get(f'/api/projects/{pid}/excel/export')
+    w=openpyxl.load_workbook(io.BytesIO(xlsx.content)); sheet=w.active
+    assert sheet.cell(1,7).value=='音声ファイル名'
+    assert sheet.cell(2,7).value=='case_001'
+    sheet.cell(2,7).value='case_002.wav'
+    output=io.BytesIO();w.save(output)
+    imported=client.post(f'/api/projects/{pid}/excel/import',files={'file':('script.xlsx',output.getvalue(),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+    assert imported.status_code==200,imported.text
+    line=imported.json()['project']['lines'][0]
+    assert line['id']==l['id'] and line['outputFilename']=='case_002.wav'
+    assert core.generated_audio_filename(line)=='case_002.wav'
+
+
+def test_script_clear_and_filename_ui_have_controls():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert 'data-line-field="outputFilename"' in js
+    assert 'id="downloadTakeBtn"' in js
+    assert 'confirmClearScriptBtn' in js

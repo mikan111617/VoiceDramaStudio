@@ -74,27 +74,6 @@ def create_project(title):
         return state
 
 
-def rename_project(project_id, title, expected_revision=None):
-    """Rename a project without changing its stable ID or linked assets."""
-    if not isinstance(title, str):
-        raise ValueError("プロジェクト名は文字列で入力してください")
-    new_title = title.strip()
-    if not new_title:
-        raise ValueError("プロジェクト名を入力してください")
-    if len(new_title) > 120:
-        raise ValueError("プロジェクト名は120文字以内で入力してください")
-    if any(ord(char) < 32 or ord(char) == 127 for char in new_title):
-        raise ValueError("プロジェクト名に制御文字は使用できません")
-    with LOCK:
-        state = load_project(project_id)
-        if expected_revision is not None and state["revision"] != int(expected_revision):
-            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
-        if state["title"] == new_title:
-            return state
-        state["title"] = new_title
-        return save_project(project_id, state, expected_revision=state["revision"])
-
-
 def load_project(project_id):
     p=state_path(project_id)
     if not p.is_file():
@@ -121,6 +100,28 @@ def save_project(project_id, state, expected_revision=None, *, allow_new_assets=
         return state
 
 
+def generated_audio_filename(line, engine="irodori"):
+    """Name the user-facing WAV; the file stored on disk retains its opaque asset ID."""
+    requested = line.get("outputFilename", "") or ""
+    if not isinstance(requested, str):
+        raise ValueError("音声ファイル名は文字列で指定してください")
+    requested = requested.strip()
+    if not requested:
+        return f'{line["id"]} - {engine}.wav'
+    if len(requested) > 120:
+        raise ValueError("音声ファイル名は120文字以内で指定してください")
+    if (any(ch in requested for ch in '/\\<>:\"|?*')
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in requested)
+            or requested.startswith('.') or requested.endswith(('.', ' '))):
+        raise ValueError("ファイル名に使用できない文字が含まれています")
+    stem = requested[:-4] if requested.lower().endswith('.wav') else requested
+    if not stem or '.' in stem or stem.endswith((' ', '.')):
+        raise ValueError("拡張子は.wavのみ指定できます")
+    if stem.upper().split('.')[0] in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(1, 10)], *[f"LPT{i}" for i in range(1, 10)]}:
+        raise ValueError("Windowsで使用できない予約名です")
+    return stem + ".wav"
+
+
 def validate_state(s, prev, *, allow_new_assets=False):
     for k in ("scenes","lines","clips","tracks","assets","voices"):
         if not isinstance(s.get(k),list):
@@ -134,6 +135,7 @@ def validate_state(s, prev, *, allow_new_assets=False):
     for l in s["lines"]:
         if l.get("sceneId") not in scene_ids: raise ValueError("Line scene mismatch")
         if len(str(l.get("text","")))>10000: raise ValueError("Line too long")
+        generated_audio_filename(l)  # Validate optional per-dialogue WAV name.
         for take in l.get("takes",[]):
             if take.get("assetId") not in asset_ids: raise ValueError("Take asset missing")
     track_ids={x["id"] for x in s["tracks"]}
@@ -409,7 +411,7 @@ def copy_casts(source_project_id, target_project_id, cast_names, *, conflict="sk
 def new_line(scene_id, speaker="", text="", caption="", after=0.65):
     return {"id":uid("line"), "sceneId":scene_id, "speaker":speaker,
             "text":text, "caption":caption,"after":after,
-            "status":"missing", "takes":[], "selectedTakeId":None,
+            "status":"missing", "takes":[], "selectedTakeId":None, "outputFilename":"",
             "engine":"irodori", "model":"Aratako/Irodori-TTS-v4.1-Small", "mode":"clone", "language":"Japanese", "ttsSource":"cast"}
 
 
@@ -511,10 +513,42 @@ HEADERS={
     "text":{"台詞","セリフ","本文","text","dialogue","発話"},
     "caption":{"キャプション","演技指示","指示","caption","emotion","ト書き","演出"},
     "after":{"間","間(秒)","間（秒）","次までの間","pause","gap","gap_after","after"},
+    "filename":{"音声ファイル名","出力ファイル名","ファイル名","output_filename","outputfilename","wav_filename"},
 }
 
 def norm(s):
     return re.sub(r"\s+","",str(s or "").strip()).lower()
+
+
+def clear_script(project_id, expected_revision):
+    """Remove the imported screenplay/timeline, retaining all media and cast profiles.
+
+    The previous project metadata is backed up before the atomic save. Clearing a
+    screenplay never removes physical assets or the reusable character profiles.
+    """
+    with LOCK:
+        state = load_project(project_id)
+        revision = state["revision"]
+        if int(expected_revision) != revision:
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+        removed_lines = len(state["lines"])
+        removed_scenes = len(state["scenes"])
+        removed_clips = len(state["clips"])
+        # Reset to one empty editable scene, not the previously imported scene list.
+        state["scenes"] = [{"id": uid("scene"), "name": "シーン1"}]
+        state["lines"] = []
+        state["clips"] = []
+        # Validate the new state before creating a backup or writing to disk.
+        validate_state(state, load_project(project_id))
+        backups = workdir(project_id) / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        backup_name = ("before_script_clear_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+                       + "_" + uuid.uuid4().hex[:8] + ".json")
+        shutil.copy2(state_path(project_id), backups / backup_name)
+        saved = save_project(project_id, state, expected_revision=revision)
+        return {"project": saved, "summary": {"removedLines": removed_lines,
+                "removedScenes": removed_scenes, "removedClips": removed_clips,
+                "backup": backup_name}}
 
 
 def import_excel(project_id, stream, mode="merge", expected_revision=None):
@@ -605,6 +639,8 @@ def import_excel(project_id, stream, mode="merge", expected_revision=None):
                     line["speaker"] = speaker
                     line["text"] = txt
                     line["sceneId"] = sid
+                    if "filename" in keys:
+                        line["outputFilename"] = str(cell(row,"filename") or "").strip()
                     if "caption" in keys:
                         line["caption"] = str(cell(row, "caption") or "")
                     if "after" in keys and cell(row, "after") not in (None, ""):
@@ -614,6 +650,13 @@ def import_excel(project_id, stream, mode="merge", expected_revision=None):
                             warnings.append(f"{row_no}行目: 間の数値を読み取れません")
                     seen.add(line["id"])
                     imported.append(line["id"])
+            # Remove the empty default scene when the Excel declares its own scenes.
+            # Otherwise a cleared project shows a misleading extra "シーン1" tab.
+            if (imported and not old_line_ids and not old_clips
+                    and len(old_scene_ids) == 1 and len(s["scenes"]) > 1):
+                empty_defaults = {x["id"] for x in s["scenes"]
+                                  if x["name"] == "シーン1" and x["id"] not in imported_scene_ids}
+                s["scenes"] = [x for x in s["scenes"] if x["id"] not in empty_defaults]
             if mode == "replace" and not imported:
                 raise ValueError("読み込み可能な台詞が0件のため全件置き換えを中止しました")
             if mode == "replace":
@@ -678,13 +721,13 @@ def export_excel(project_id):
         while name in wb.sheetnames:
             i+=1;name=base[:25]+f"_{i}"
         ws=wb.create_sheet(name)
-        ws.append(["台詞ID","シーン","話者","台詞","キャプション","間(秒)"])
+        ws.append(["台詞ID","シーン","話者","台詞","キャプション","間(秒)","音声ファイル名"])
         for line in (l for l in s["lines"] if l["sceneId"]==scene["id"]):
-            ws.append([line["id"],scene["name"],line["speaker"],line["text"],line.get("caption",""),line.get("after",0.65)])
+            ws.append([line["id"],scene["name"],line["speaker"],line["text"],line.get("caption",""),line.get("after",0.65),line.get("outputFilename","")])
         ws.freeze_panes="A2"
         from openpyxl.styles import Font,PatternFill,Alignment
         for c in ws[1]:c.font=Font(color="FFFFFF",bold=True);c.fill=PatternFill("solid",fgColor="1C3347")
-        for col,width in {"A":24,"B":20,"C":18,"D":64,"E":56,"F":14}.items():ws.column_dimensions[col].width=width
+        for col,width in {"A":24,"B":20,"C":18,"D":64,"E":56,"F":14,"G":32}.items():ws.column_dimensions[col].width=width
         for row in ws.iter_rows(min_row=2):
             for c in row:c.alignment=Alignment(vertical="top",wrap_text=True)
     buf=BytesIO();wb.save(buf);buf.seek(0);return buf

@@ -22,7 +22,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.1.8")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.0")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -44,22 +44,6 @@ def projects():return core.list_projects()
 
 @app.post('/api/projects')
 def project_create(v:ProjectCreate):return core.create_project(v.title)
-
-class ProjectRename(BaseModel):
-    title: str
-    expectedRevision: int | None = None
-
-@app.patch('/api/projects/{pid}/title')
-def project_rename(pid: str, body: ProjectRename):
-    try:
-        return core.rename_project(pid, body.title, body.expectedRevision)
-    except RuntimeError as exc:
-        raise HTTPException(409, str(exc))
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-
 
 class CastCopyRequest(BaseModel):
     targetProjectId: str
@@ -98,6 +82,21 @@ def project_save(pid:str,data:StateSave):
     except RuntimeError as e:raise HTTPException(409,str(e))
     except (ValueError,FileNotFoundError) as e:raise HTTPException(400,str(e))
 
+class ScriptClearRequest(BaseModel):
+    expectedRevision: int
+
+@app.post('/api/projects/{pid}/script/clear')
+def clear_script(pid: str, body: ScriptClearRequest):
+    try:
+        return core.clear_script(pid, body.expectedRevision)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post('/api/projects/{pid}/excel/import')
 def excel_import(pid:str,file:UploadFile=File(...),mode:str=Form('merge'),expectedRevision:int|None=Form(None)):
     if not file.filename.lower().endswith('.xlsx'):raise HTTPException(400,'Excel .xlsx ファイルを指定してください')
@@ -113,6 +112,22 @@ def excel_export(pid:str):
     try:result=core.export_excel(pid)
     except Exception as e:raise HTTPException(400,str(e))
     return StreamingResponse(result,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':"attachment; filename*=UTF-8''script.xlsx"})
+
+@app.get('/api/projects/{pid}/assets/{aid}/download')
+def download_audio_asset(pid: str, aid: str):
+    try:
+        state = core.load_project(pid)
+        audio = next((a for a in state['assets'] if a['id'] == aid), None)
+        if audio is None:
+            raise FileNotFoundError('音声が見つかりません')
+        physical = core.workdir(pid) / 'assets' / audio['filename']
+        if not physical.is_file():
+            raise FileNotFoundError('音声ファイルが見つかりません')
+        name = str(audio.get('name') or audio['filename']).replace('\\', '/').split('/')[-1]
+        return FileResponse(physical, filename=name)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(404, str(exc))
+
 
 @app.post('/api/projects/{pid}/assets')
 async def asset_upload(pid:str,file:UploadFile=File(...),kind:str=Form('other')):
@@ -310,6 +325,7 @@ def run_generation(job_id,pid,line_ids,steps):
             asset_map={a['id']:a for a in state['assets']}
             voices={v['name']:v for v in state['voices']}
         if not selected:raise ValueError('生成する台詞がありません')
+        filenames={line["id"]:line.get("outputFilename", "") for line in selected}
         groups={}
         for line in selected:
             voice=voices.get(line['speaker'],{})
@@ -349,7 +365,7 @@ def run_generation(job_id,pid,line_ids,steps):
                         job['errors'].append({'lineId':row.get('id'),'error':row.get('error','Generation failed')})
                     else:
                         src=Path(row['output'])
-                        registered=core.register_asset(pid,src,f'{row["id"]} - {engine}.wav','voice')
+                        registered=core.register_asset(pid,src,core.generated_audio_filename({"id":row["id"],"outputFilename":filenames.get(row["id"])},engine),'voice')
                         with LOCK:
                             fresh=core.load_project(pid)
                             line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
