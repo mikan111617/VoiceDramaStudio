@@ -46,3 +46,43 @@
 .file-name-box{border-top:1px solid #303643;margin-top:10px;padding-top:8px}
 .file-name-box label{font-size:10px;color:#9fa8b6;display:block}
 .file-name-box input{margin-top:5px;width:100%;padding:7px 9px;font-size:12px;background:#111722}
+
+/* v0.2.3 — resizable workspace. Grid handles are actual, narrow columns, so
+   resizing cannot intercept dragging timeline clips or scrolling panels. */
+.main-layout{
+ --vds-sidebar-width:220px;--vds-editor-width:42%;
+ grid-template-columns:minmax(160px,var(--vds-sidebar-width)) 8px minmax(300px,var(--vds-editor-width)) 8px minmax(320px,1fr);
+}
+.sidebar{grid-column:1;grid-row:1}
+#resizeSidebar{grid-column:2;grid-row:1}
+.editor-panel{grid-column:3;grid-row:1}
+#resizeEditor{grid-column:4;grid-row:1}
+.workbench{grid-column:5;grid-row:1}
+.panel-resizer{position:relative;z-index:10;background:#181d27;touch-action:none;user-select:none;outline-offset:-2px;transition:background .12s}
+.panel-resizer::after{content:'';position:absolute;background:#4e596a;border-radius:6px;opacity:.65;transition:background .12s,opacity .12s}
+.panel-resizer:hover,.panel-resizer:focus-visible,.panel-resizer.is-resizing{background:#343345;outline-color:var(--accent)}
+.panel-resizer:hover::after,.panel-resizer:focus-visible::after,.panel-resizer.is-resizing::after{background:var(--accent);opacity:1}
+.panel-resizer-vertical{width:8px;cursor:col-resize}
+.panel-resizer-vertical::after{width:3px;height:42px;top:50%;left:2.5px;transform:translateY(-50%)}
+.panel-resizer-horizontal{height:8px;flex:0 0 8px;cursor:row-resize}
+.panel-resizer-horizontal::after{height:3px;width:48px;left:50%;top:2.5px;transform:translateX(-50%)}
+.workbench-body{flex:1 1 0;min-height:170px}
+.workbench-foot{flex:0 0 var(--vds-inspector-height,300px);height:auto;min-height:120px;max-height:none}
+.transport{flex-wrap:wrap}
+body.vds-resizing,body.vds-resizing *{user-select:none!important}
+body.vds-resizing-columns,body.vds-resizing-columns *{cursor:col-resize!important}
+body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
+@media(max-width:1250px) and (min-width:951px){.main-layout{--vds-sidebar-width:170px;--vds-editor-width:41%}}
+@media(max-width:950px){
+ .main-layout{grid-template-columns:150px minmax(0,1fr);grid-template-rows:minmax(460px,auto) minmax(650px,auto);height:auto;min-height:0;overflow:visible}
+ .panel-resizer-vertical{display:none}
+ .sidebar{grid-column:1;grid-row:1/3}
+ .editor-panel{grid-column:2;grid-row:1;min-height:460px}
+ .workbench{grid-column:2;grid-row:2;min-height:650px;height:650px}
+}
+@media(max-width:600px){
+ .main-layout{grid-template-columns:minmax(0,1fr)}
+ .sidebar{display:none}
+ .editor-panel{grid-column:1;grid-row:1;min-height:400px}
+ .workbench{grid-column:1;grid-row:2;min-height:650px}
+}

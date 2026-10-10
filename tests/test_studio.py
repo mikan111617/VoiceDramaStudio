@@ -1017,3 +1017,34 @@ def test_scene_zip_ui_button_wiring():
     assert 'downloadSceneSelectedTakes()' in js
     assert '/selected-takes.zip' in js
     assert "await saveNow()" in js
+
+
+def test_resizable_layout_contains_three_accessible_splitters():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static'/'index.html').read_text(encoding='utf-8')
+    for handle in ('resizeSidebar','resizeEditor','resizeInspector'):
+        assert html.count(f'id="{handle}"')==1
+    assert html.count('role="separator"')==3
+    assert 'aria-orientation="horizontal"' in html
+    assert 'aria-orientation="vertical"' in html
+    assert '/static/app.js?v=023' in html
+    assert '/static/style.css?v=023' in html
+
+
+def test_resizable_layout_saves_and_restores_without_mutating_project():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static'/'app.js').read_text(encoding='utf-8')
+    css=(root/'static'/'style.css').read_text(encoding='utf-8')
+    assert 'installPanelResizers();' in js
+    assert "window.localStorage.setItem(PANEL_SIZE_KEY" in js
+    assert 'window.localStorage.getItem(PANEL_SIZE_KEY)' in js
+    assert "window.localStorage.removeItem(PANEL_SIZE_KEY)" in js
+    assert "grip.addEventListener('pointerdown'" in js
+    assert "grip.addEventListener('pointermove'" in js
+    assert "grip.addEventListener('dblclick',resetPanelSizes)" in js
+    assert "grip.addEventListener('keydown'" in js
+    assert "--vds-editor-width" in css
+    assert "--vds-sidebar-width" in css
+    assert "--vds-inspector-height" in css
+    assert '@media(max-width:950px)' in css
+    assert '.panel-resizer-vertical{display:none}' in css

@@ -524,6 +524,93 @@ function handleChange(e){handleBatchModalChange(e);const target=e.target;const i
 }
 async function suggestCaption(){if(!selectedLine)return;const model=prompt('Ollamaのモデル名','gemma3:4b');if(!model)return;try{await saveNow();toast('Ollamaで演技指示を解析しています');const r=await req(`/api/projects/${state.id}/caption/suggest`,json('POST',{lineId:selectedLine,model}));const l=lineById(selectedLine);l.caption=r.caption;l.status=l.selectedTakeId?'stale':'missing';dirtyState();renderEditor();renderInspector();toast('演技指示の候補を入力しました（必要なら修正してください）')}catch(e){toast(e.message,true)}}
 function setView(v){view=v;renderSidebar();renderEditor()}
+// Panel sizing is a browser-local UI preference, independent of project data.
+// Users can resize the side navigation, script editor, timeline and inspector.
+const PANEL_SIZE_KEY='vds.layout.v1';
+const PANEL_LIMITS={sidebar:160,editor:300,workbench:320,timeline:170,inspector:120,gutter:8};
+let preferredPanelSizes=null;
+function clampPanelSize(value,min,max){return Math.min(Math.max(Number(value)||min,min),Math.max(min,max))}
+function horizontalPanelsActive(){return window.matchMedia('(min-width: 951px)').matches}
+function measuredPanelSizes(){
+ return {sidebar:document.querySelector('.sidebar').getBoundingClientRect().width,
+  editor:document.querySelector('.editor-panel').getBoundingClientRect().width,
+  inspector:document.querySelector('.workbench-foot').getBoundingClientRect().height};
+}
+function applyPanelSizes(sizes){
+ const layout=document.querySelector('.main-layout');
+ if(horizontalPanelsActive()){
+  const maxWidth=layout.getBoundingClientRect().width;
+  const remaining=maxWidth-2*PANEL_LIMITS.gutter;
+  const sidebar=clampPanelSize(sizes.sidebar,PANEL_LIMITS.sidebar,remaining-PANEL_LIMITS.editor-PANEL_LIMITS.workbench);
+  const editor=clampPanelSize(sizes.editor,PANEL_LIMITS.editor,remaining-sidebar-PANEL_LIMITS.workbench);
+  layout.style.setProperty('--vds-sidebar-width',Math.round(sidebar)+'px');
+  layout.style.setProperty('--vds-editor-width',Math.round(editor)+'px');
+ }
+ const workbench=document.querySelector('.workbench');
+ const header=workbench.querySelector('.workbench-head').getBoundingClientRect().height;
+ const available=workbench.getBoundingClientRect().height-header-PANEL_LIMITS.gutter-PANEL_LIMITS.timeline;
+ workbench.style.setProperty('--vds-inspector-height',Math.round(clampPanelSize(sizes.inspector,PANEL_LIMITS.inspector,available))+'px');
+}
+function savePanelSizes(){
+ preferredPanelSizes=measuredPanelSizes();
+ try{window.localStorage.setItem(PANEL_SIZE_KEY,JSON.stringify(preferredPanelSizes))}catch(_){/* private mode */}
+}
+function resetPanelSizes(){
+ preferredPanelSizes=null;
+ const layout=document.querySelector('.main-layout');
+ layout.style.removeProperty('--vds-sidebar-width');
+ layout.style.removeProperty('--vds-editor-width');
+ document.querySelector('.workbench').style.removeProperty('--vds-inspector-height');
+ try{window.localStorage.removeItem(PANEL_SIZE_KEY)}catch(_){/* private mode */}
+}
+function installPanelResizers(){
+ try{
+  const saved=JSON.parse(window.localStorage.getItem(PANEL_SIZE_KEY)||'null');
+  if(saved && ['sidebar','editor','inspector'].every(k=>Number.isFinite(saved[k])&&saved[k]>0))preferredPanelSizes=saved;
+ }catch(_){/* localStorage disabled or old data */}
+ if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes);
+ const layout=document.querySelector('.main-layout');
+ const workbench=document.querySelector('.workbench');
+ const handlers=[['resizeSidebar','sidebar'],['resizeEditor','editor'],['resizeInspector','inspector']];
+ for(const [id,part] of handlers){
+  const grip=$(id);
+  let pointerId=null;
+  function changeAt(x,y){
+   if(part!=='inspector'&&!horizontalPanelsActive())return;
+   const sizes={...measuredPanelSizes()};
+   if(part==='sidebar')sizes.sidebar=x-layout.getBoundingClientRect().left;
+   if(part==='editor')sizes.editor=x-document.querySelector('.editor-panel').getBoundingClientRect().left;
+   if(part==='inspector')sizes.inspector=workbench.getBoundingClientRect().bottom-y;
+   applyPanelSizes(sizes);
+  }
+  grip.addEventListener('pointerdown',e=>{
+   if(e.button!==0 || (part!=='inspector'&&!horizontalPanelsActive()))return;
+   e.preventDefault();e.stopPropagation();pointerId=e.pointerId;
+   grip.setPointerCapture(pointerId);grip.classList.add('is-resizing');
+   document.body.classList.add('vds-resizing',part==='inspector'?'vds-resizing-rows':'vds-resizing-columns');
+  });
+  grip.addEventListener('pointermove',e=>{if(pointerId===e.pointerId)changeAt(e.clientX,e.clientY)});
+  function endDrag(e){
+   if(pointerId!==e.pointerId)return;
+   pointerId=null;grip.classList.remove('is-resizing');
+   document.body.classList.remove('vds-resizing','vds-resizing-columns','vds-resizing-rows');
+   if(grip.hasPointerCapture(e.pointerId))grip.releasePointerCapture(e.pointerId);
+   savePanelSizes();
+  }
+  grip.addEventListener('pointerup',endDrag);
+  grip.addEventListener('pointercancel',endDrag);
+  grip.addEventListener('dblclick',resetPanelSizes);
+  grip.addEventListener('keydown',e=>{
+   const horizontal=part!=='inspector';
+   const direction=horizontal?(e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0):
+    (e.key==='ArrowUp'?1:e.key==='ArrowDown'?-1:0);
+   if(!direction || (horizontal&&!horizontalPanelsActive()))return;
+   e.preventDefault();const sizes=measuredPanelSizes();sizes[part]+=24*direction;
+   applyPanelSizes(sizes);savePanelSizes();
+  });
+ }
+ window.addEventListener('resize',()=>{if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes)});
+}
 function wire(){
  $('projectButton').onclick=openProjects;$('settingsBtn').onclick=openSettings;$('exportExcelBtn').onclick=async()=>{try{await saveNow();location.href=`/api/projects/${state.id}/excel/export`}catch(e){toast(e.message,true)}};
  $('renderBtn').onclick=renderAudio;$('addSceneBtn').onclick=addScene;
@@ -548,4 +635,5 @@ function wire(){
  document.addEventListener('keydown',e=>{const writing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''} });
 }
+installPanelResizers();
 wire();ensureProject().catch(e=>{toast('初期化に失敗しました: '+e.message,true);$('saveState').textContent='起動エラー'});
