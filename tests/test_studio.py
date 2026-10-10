@@ -353,3 +353,116 @@ def test_bulk_trash_unused_only_and_rejects_linked(client):
     assert response.status_code==409
     current=client.get(f'/api/projects/{pid}').json()
     assert {x['id'] for x in current['assets']}=={another['id'],extra['id']}
+
+
+def test_copy_selected_casts_with_independent_reference_assets(client):
+    """Multi-select copies settings/files, preserves sharing, and source remains intact."""
+    source = project(client)
+    target = client.post('/api/projects', json={'title': '続編'}).json()
+    pid, tid = source['id'], target['id']
+    shared = upload(client, pid, 180, 'reference')
+    separate = upload(client, pid, 440, 'reference')
+    source = client.get(f'/api/projects/{pid}').json()
+    source['voices'] = [
+        {'name': '真歩流', 'engine': 'irodori', 'model': 'Aratako/Irodori-TTS-v4.1-Anime',
+         'mode': 'clone', 'language': 'Japanese', 'description': '若い元気な探偵',
+         'refText': '', 'refs': [shared['id'], separate['id']]},
+        {'name': '愛理', 'engine': 'qwen', 'model': 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+         'mode': 'clone', 'language': 'Japanese', 'description': '落ち着いた妹',
+         'refText': '私は愛理です。', 'refs': [shared['id']]},
+        {'name': '零度', 'engine': 'irodori', 'model': 'test', 'mode': 'design',
+         'description': '渋い', 'refs': []},
+    ]
+    source = client.put(f'/api/projects/{pid}', json={
+        'state': source, 'expectedRevision': source['revision']
+    }).json()
+    resp = client.post(f'/api/projects/{pid}/casts/copy', json={
+        'targetProjectId': tid, 'castNames': ['真歩流', '愛理'],
+        'expectedSourceRevision': source['revision'],
+        'expectedTargetRevision': target['revision'],
+    })
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    dest = payload['project']
+    assert payload['summary'] == {'copied': 2, 'skipped': [], 'renamed': [], 'referencesCopied': 2}
+    assert [v['name'] for v in dest['voices']] == ['真歩流', '愛理']
+    assert dest['voices'][0]['description'] == '若い元気な探偵'
+    assert dest['voices'][1]['refText'] == '私は愛理です。'
+    assert dest['lines'] == [] and dest['clips'] == []
+    assert len(dest['assets']) == 2
+    copied_shared = dest['voices'][0]['refs'][0]
+    assert dest['voices'][1]['refs'] == [copied_shared]
+    assert copied_shared != shared['id']
+    assert all(a['kind'] == 'reference' for a in dest['assets'])
+    by_id = {a['id']: a for a in dest['assets']}
+    dest_file = core.workdir(tid) / 'assets' / by_id[copied_shared]['filename']
+    src_file = core.workdir(pid) / 'assets' / shared['filename']
+    assert dest_file.read_bytes() == src_file.read_bytes()
+    assert client.delete(f'/api/projects/{pid}/assets/{shared["id"]}?detach=true').status_code == 200
+    assert dest_file.exists()
+    assert client.get(f'/api/projects/{tid}').json()['voices'][1]['refs'] == [copied_shared]
+
+
+def test_copy_single_cast_collision_skip_and_rename(client):
+    src = project(client)
+    tgt = client.post('/api/projects', json={'title': '別作品'}).json()
+    src['voices'] = [{'name': '真歩流', 'refs': [], 'description': '探偵'},
+                     {'name': '愛理', 'refs': [], 'description': '妹'}]
+    tgt['voices'] = [{'name': '真歩流', 'refs': [], 'description': '変更禁止'},
+                     {'name': '愛理', 'refs': [], 'description': '既存の愛理'},
+                     {'name': '愛理（コピー）', 'refs': [], 'description': '既存'}]
+    src = client.put(f'/api/projects/{src["id"]}', json={'state': src, 'expectedRevision': src['revision']}).json()
+    tgt = client.put(f'/api/projects/{tgt["id"]}', json={'state': tgt, 'expectedRevision': tgt['revision']}).json()
+    req = {'targetProjectId': tgt['id'], 'castNames': ['真歩流'], 'conflict': 'skip'}
+    r = client.post(f'/api/projects/{src["id"]}/casts/copy', json=req)
+    assert r.status_code == 200
+    assert r.json()['summary']['copied'] == 0 and r.json()['summary']['skipped'] == ['真歩流']
+    assert r.json()['project']['revision'] == tgt['revision']
+    req['castNames'] = ['真歩流', '愛理']
+    req['conflict'] = 'rename'
+    r = client.post(f'/api/projects/{src["id"]}/casts/copy', json=req)
+    assert r.status_code == 200, r.text
+    voices = r.json()['project']['voices']
+    assert [v['name'] for v in voices] == ['真歩流', '愛理', '愛理（コピー）', '真歩流（コピー）', '愛理（コピー2）']
+    assert voices[0]['description'] == '変更禁止'
+    assert r.json()['summary']['copied'] == 2
+
+
+def test_copy_casts_rejects_invalid_request_and_stale_revision_without_mutation(client):
+    src = project(client)
+    tgt = client.post('/api/projects', json={'title': '続編'}).json()
+    src['voices'] = [{'name': '零度', 'refs': []}]
+    src = client.put(f'/api/projects/{src["id"]}', json={'state': src, 'expectedRevision': src['revision']}).json()
+    route = f'/api/projects/{src["id"]}/casts/copy'
+    base = {'targetProjectId': tgt['id'], 'castNames': ['零度']}
+    assert client.post(route, json={**base, 'targetProjectId': src['id']}).status_code == 400
+    assert client.post(route, json={**base, 'castNames': ['零度', '零度']}).status_code == 400
+    assert client.post(route, json={**base, 'castNames': ['存在しない人物']}).status_code == 400
+    assert client.post(route, json={**base, 'expectedSourceRevision': 0}).status_code == 409
+    assert client.post(route, json={**base, 'expectedTargetRevision': 0}).status_code == 409
+    assert client.get(f'/api/projects/{tgt["id"]}').json()['revision'] == tgt['revision']
+    assert not list((core.workdir(tgt['id']) / 'assets').iterdir())
+
+
+def test_copy_casts_missing_source_reference_is_atomic(client):
+    src = project(client)
+    tgt = client.post('/api/projects', json={'title': '続編'}).json()
+    ref = upload(client, src['id'], kind='reference')
+    src = client.get(f'/api/projects/{src["id"]}').json()
+    src['voices'] = [{'name': '零度', 'refs': [ref['id']]}]
+    src = client.put(f'/api/projects/{src["id"]}', json={'state': src, 'expectedRevision': src['revision']}).json()
+    (core.workdir(src['id']) / 'assets' / ref['filename']).unlink()
+    r = client.post(f'/api/projects/{src["id"]}/casts/copy', json={
+        'targetProjectId': tgt['id'], 'castNames': ['零度']})
+    assert r.status_code == 400, r.text
+    assert client.get(f'/api/projects/{tgt["id"]}').json()['revision'] == tgt['revision']
+    assert not list((core.workdir(tgt['id']) / 'assets').iterdir())
+
+
+def test_cast_copy_ui_has_bulk_single_and_all_actions():
+    js = (Path(__file__).resolve().parents[1] / 'static' / 'app.js').read_text(encoding='utf-8')
+    assert 'openCastCopyBtn' in js
+    assert 'data-cast-copy' in js
+    assert 'castCopyAllBtn' in js and 'castCopyNoneBtn' in js
+    assert 'castCopyConfirmBtn' in js
+    assert '/casts/copy' in js

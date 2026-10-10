@@ -7,6 +7,7 @@ let jobTimer=null;
 let bulkFiles=[],bulkMode='assign',bulkKind='voice',bulkCast='',bulkSort='natural',bulkScene='',bulkStart='',bulkOnlyMissing=true,bulkTargets={};
 let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
+let castCopySelection=new Set();
 const AUDIO_EXT=/\.(wav|mp3|flac|ogg|m4a|aac|opus)$/i;
 
 const $=id=>document.getElementById(id);
@@ -57,8 +58,8 @@ function renderEditor(){if(!state)return;const act=$('panelActions');const title
   act.innerHTML=button('↑ Excel取込','id="importExcelBtn"')+button('↓ 既存音声を一括割当','id="batchAssignBtn"')+button('✦ 要生成を一括', 'id="generateMissingBtn"')+button('＋ セリフ','id="addLineTop"','primary');
   $('editorContent').innerHTML=bulkDropZone('assign')+activeLines().map((l,i)=>`<article class="script-line ${selectedLine===l.id?'active':''}" data-id="${esc(l.id)}"><div class="line-top"><span class="line-number">${String(i+1).padStart(2,'0')}</span><input class="speaker-select" data-line-field="speaker" list="speakers" value="${esc(l.speaker)}" title="話者を入力"><span class="line-status ${esc(l.status)}">${{ready:'音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成'}</span><div class="line-actions"><button class="icon-btn" data-move="-1" title="上へ">↑</button><button class="icon-btn" data-move="1" title="下へ">↓</button><button class="icon-btn" data-delete="line" title="削除">×</button></div></div><textarea class="line-text" data-line-field="text" placeholder="ここに台詞を入力">${esc(l.text)}</textarea><div class="caption-box"><span class="caption-tag">演技指示</span><textarea data-line-field="caption" placeholder="例：声をひそめて、辺りを警戒しながら…">${esc(l.caption)}</textarea></div><div class="line-footer"><label>次の台詞まで <input class="gap-input" type="number" min="0" max="60" step="0.1" data-line-field="after" value="${fnum(l.after,1)}"> 秒</label><span><button data-action="addBelow">＋ 次に追加</button>　<button data-action="select">${l.takes?.length||0} テイク　→</button></span></div></article>`).join('')+`<button class="editor-bigaction" id="addLineBottom">＋ セリフを追加</button><datalist id="speakers">${getVoices().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
  }else if(view==='voices'){
-  key.textContent='VOICE LIBRARY';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
-  $('editorContent').innerHTML=bulkDropZone('reference')+(state.voices.length?state.voices.map((v,i)=>`<div class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><b>${esc(v.name)}</b><div class="inspector-grid"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><div class="asset-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('このキャストの台詞へ既定値を反映',`data-voice-apply="${i}"`)}</div></div>`).join(''):'<div class="empty">キャストがありません。追加すると声を登録できます。</div>')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
+  key.textContent='VOICE LIBRARY';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')+button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
+  $('editorContent').innerHTML=bulkDropZone('reference')+(state.voices.length?state.voices.map((v,i)=>`<div class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><b>${esc(v.name)}</b><div class="inspector-grid"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><div class="asset-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('このキャストの台詞へ既定値を反映',`data-voice-apply="${i}"`)}${button('⇄ 別作品へコピー',`data-cast-copy="${i}"`)}</div></div>`).join(''):'<div class="empty">キャストがありません。追加すると声を登録できます。</div>')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
  }else{
  key.textContent='AUDIO LIBRARY';title.textContent='音声ライブラリ';sub.textContent='ドラマで使用する台詞・BGM・効果音・環境音';act.innerHTML=button('↓ 音声をまとめて取り込む',`id="batchLibraryBtn"`,'primary')+button('＋ 音声ファイル',`id="uploadAudioBtn"`)+button(`🗑 選択削除 (${trashSelection.size})`,`id="trashSelectedBtn" ${trashSelection.size?'':'disabled'}`);
  $('editorContent').innerHTML=bulkDropZone('library')+(state.assets.filter(a=>a.kind!=='reference').length?state.assets.filter(a=>a.kind!=='reference').slice().reverse().map(a=>`<div class="asset-card"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc((a.kind||'audio').toUpperCase())}</span><div class="asset-meta"><b>${esc(a.name)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div><div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${a.kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join(''):'<div class="empty">音声素材はまだありません。WAV / MP3などを取り込めます。</div>')+`<button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
@@ -246,6 +247,58 @@ async function openTrash(){
 async function restoreAsset(aid){
  try{const result=await req(`/api/projects/${state.id}/trash/assets/${aid}/restore`,{method:'POST'});state=result.project;renderAll();await openTrash();toast('音声をライブラリへ復元しました')}catch(e){toast('復元できません: '+e.message,true)}
 }
+async function openCastCopy(presetName=''){
+  try{
+    await saveNow();
+    const otherProjects=(await req('/api/projects')).filter(p=>p.id!==state.id);
+    if(!state.voices.length){toast('コピーするキャラクターを先に登録してください',true);return}
+    castCopySelection=new Set(presetName?[presetName]:[]);
+    modal(`<h2>キャスト設定を別のプロジェクトへコピー</h2>
+      <p>声の説明・TTSモデル・言語・参照音声をコピーします。台詞や生成済みテイクはコピーしません。参照音声はコピー先に独立保存されます。</p>
+      <div class="field"><label>コピー先プロジェクト</label>
+       <select id="castCopyTarget">${otherProjects.map(p=>`<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('')}<option value="__new__">＋ 新しいプロジェクトを作成</option></select></div>
+      <div class="field" id="castCopyNewField" style="display:${otherProjects.length?'none':'block'}"><label>新しいプロジェクトのタイトル</label><input id="castCopyNewTitle" placeholder="作品タイトル"></div>
+      <div class="field"><label>同名キャラクターがコピー先にいる場合</label><select id="castCopyConflict"><option value="skip">スキップ（上書きしない）</option><option value="rename">名前に「コピー」を付けて追加</option></select></div>
+      <div class="field"><label>コピーするキャスト <span id="castCopyCount" class="muted small"></span></label>
+        <div class="buttonline">${button('すべて選択','id="castCopyAllBtn"')}${button('選択解除','id="castCopyNoneBtn"')}</div>
+        <div class="cast-copy-list">${state.voices.map((v,i)=>`<label class="cast-copy-item"><input type="checkbox" data-copy-cast="${i}" ${castCopySelection.has(v.name)?'checked':''}><span><b>${esc(v.name)}</b><small>${esc(v.engine||'irodori')} · 参照音声 ${(v.refs||[]).length}件</small></span></label>`).join('')}</div>
+      </div><div class="modal-actions">${button('キャンセル','data-close="1"')}${button('選択キャストをコピー','id="castCopyConfirmBtn"','primary')}</div>`);
+    updateCastCopyModal();
+  }catch(e){toast(e.message,true)}
+}
+function updateCastCopyModal(){
+  const select=$('castCopyTarget');if(!select)return;
+  $('castCopyNewField').style.display=select.value==='__new__'?'block':'none';
+  const label=$('castCopyCount');if(label)label.textContent=`${castCopySelection.size} / ${state.voices.length} 件選択`;
+  const btn=$('castCopyConfirmBtn');if(btn)btn.disabled=!castCopySelection.size;
+}
+async function commitCastCopy(){
+  if(!castCopySelection.size)return toast('コピーするキャラクターを選択してください',true);
+  const btn=$('castCopyConfirmBtn');if(btn)btn.disabled=true;
+  let created=null;
+  try{
+    await saveNow();
+    let pid=$('castCopyTarget').value;
+    if(pid==='__new__'){
+      const title=$('castCopyNewTitle').value.trim();
+      if(!title){throw new Error('新しいプロジェクト名を入力してください')}
+      created=await req('/api/projects',json('POST',{title}));pid=created.id;
+    }
+    const target=await req(`/api/projects/${pid}`);
+    const result=await req(`/api/projects/${state.id}/casts/copy`,json('POST',{
+      targetProjectId:pid,castNames:[...castCopySelection],conflict:$('castCopyConflict').value,
+      expectedSourceRevision:state.revision,expectedTargetRevision:target.revision
+    }));
+    closeModal();
+    const summary=result.summary;
+    toast(`${summary.copied}キャスト・参照音声${summary.referencesCopied}件をコピーしました${summary.skipped.length?`（同名${summary.skipped.length}件スキップ）`:''}`);
+    if(created || (summary.copied>0 && confirm('コピー先のプロジェクトを開きますか？'))){
+      await switchProject(pid);setView('voices');
+    }
+  }catch(e){toast('コピーできません: '+e.message,true);if(btn)btn.disabled=false;
+    if(created)toast('コピー用プロジェクトが作成されましたが、キャストのコピーは完了していません',true);
+  }
+}
 async function openProjects(){try{await saveNow();const list=await req('/api/projects');modal(`<h2>プロジェクトを選択</h2><p>プロジェクトごとに台本・音声素材・編集状態を分けて保存します。</p>${list.map(x=>`<button class="project-choice" data-open="${esc(x.id)}">${esc(x.title)}<small>${esc(x.updatedAt||'')}</small></button>`).join('')}<div class="field" style="margin-top:20px"><label>新規プロジェクト</label><input id="newProjectTitle" placeholder="作品タイトルを入力"></div><div class="modal-actions">${button('キャンセル','data-close="1"')}${button('新規作成','id="createProjectBtn"','primary')}</div>`)}catch(e){toast(e.message,true)}}
 function openSettings(){const c=state.settings||{};modal(`<h2>TTS・実行環境の設定</h2><p>ユーザーごとのPC環境を設定します。音声編集・再生はTTSを導入しなくても利用できます。</p><div class="field"><label>Irodori-TTSのフォルダ（infer.pyが入っている場所）</label><input id="settingIrodori" value="${esc(c.irodori_dir||'D:\\Irodori-TTS')}"></div><div class="field"><label>Irodori用Python実行ファイル（空欄は .venv\\Scripts\\python.exe）</label><input id="settingIrodoriPython" value="${esc(c.irodori_python||'')}"></div><div class="field"><label>Qwen3-TTS用Python実行ファイル（仮想環境）</label><input id="settingQwen" value="${esc(c.qwen_python||'')}"></div><div class="field"><label>台詞の標準の間（秒）</label><input id="settingGap" type="number" min="0" step="0.05" value="${esc(c.defaultGap??0.65)}"></div><p>GPU 12GB環境ではIrodori v4-Largeの通常版は厳しい場合があります。量子化モデルは「その他（直接入力）」で指定できます。</p><div class="modal-actions">${button('閉じる','data-close="1"')}${button('保存','id="saveSettingsBtn"','primary')}</div>`);$('saveSettingsBtn').onclick=()=>{state.settings={irodori_dir:$('settingIrodori').value.trim(),irodori_python:$('settingIrodoriPython').value.trim(),qwen_python:$('settingQwen').value.trim(),defaultGap:Math.max(0,Number($('settingGap').value)||0)};dirtyState();closeModal();toast('実行環境の設定を保存しました')}}
 async function playPreview(aid){try{stop();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
@@ -292,6 +345,11 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='importExcelBtn')$('excelPicker').click();
  if(target.id==='batchAssignBtn')startBatchPicker('assign');
  if(target.id==='batchReferencesBtn')startBatchPicker('reference');
+ if(target.id==='openCastCopyBtn')return openCastCopy();
+ const castToCopy=target.closest('[data-cast-copy]');if(castToCopy){const v=state.voices[Number(castToCopy.dataset.castCopy)];if(v)return openCastCopy(v.name)}
+ if(target.id==='castCopyAllBtn'){castCopySelection=new Set(state.voices.map(v=>v.name));document.querySelectorAll('[data-copy-cast]').forEach(x=>x.checked=true);updateCastCopyModal();return}
+ if(target.id==='castCopyNoneBtn'){castCopySelection.clear();document.querySelectorAll('[data-copy-cast]').forEach(x=>x.checked=false);updateCastCopyModal();return}
+ if(target.id==='castCopyConfirmBtn')return commitCastCopy();
  if(target.id==='batchLibraryBtn')startBatchPicker('library');
  const drop=target.closest('[data-audio-drop]');if(drop)startBatchPicker(drop.dataset.audioDrop);
  if(target.id==='addLineTop'||target.id==='addLineBottom')addLine();
@@ -309,6 +367,8 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='deleteClipBtn'){const c=clipById(selectedClip);if(!c)return;state.clips=state.clips.filter(x=>x.id!==c.id);selectedClip=null;dirtyState();renderTimeline();renderInspector()}
 }
 function handleChange(e){handleBatchModalChange(e);const target=e.target;const id=target.id;
+ if(id==='castCopyTarget'){updateCastCopyModal();return}
+ if(target.dataset.copyCast!==undefined){const v=state.voices[Number(target.dataset.copyCast)];if(v){if(target.checked)castCopySelection.add(v.name);else castCopySelection.delete(v.name);updateCastCopyModal()}return}
  const field=target.dataset.lineField;if(field){const l=lineById(target.closest('.script-line').dataset.id);if(!l)return;l[field]=field==='after'?Math.max(0,Number(target.value)||0):target.value;l.status=l.selectedTakeId?'stale':'missing';if(field==='after')reflow();dirtyState();if(field==='speaker'||field==='after'){renderSidebar();renderTimeline();renderInspector()}return}
  if(target.dataset.trashSelect){if(target.checked)trashSelection.add(target.dataset.trashSelect);else trashSelection.delete(target.dataset.trashSelect);const btn=$('trashSelectedBtn');if(btn){btn.disabled=!trashSelection.size;btn.textContent=`🗑 選択削除 (${trashSelection.size})`}return}
  const vField=target.dataset.vfield;const card=target.closest('[data-voice]');if(vField&&card){const v=state.voices[Number(card.dataset.voice)];if(!v)return;const old=v.name;v[vField]=target.value;if(vField==='name'){state.lines.filter(l=>l.speaker===old).forEach(l=>l.speaker=v.name)}if(vField==='engine')v.model=(models[v.engine]||models.irodori)[0][0];dirtyState();if(vField==='engine')renderEditor();return}

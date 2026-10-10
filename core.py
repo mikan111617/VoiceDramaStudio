@@ -273,6 +273,118 @@ def restore_asset(project_id, asset_id):
         return {"project": result, "asset": asset}
 
 
+def copy_casts(source_project_id, target_project_id, cast_names, *, conflict="skip",
+               expected_source_revision=None, expected_target_revision=None):
+    """Copy selected casts and their reference WAV/assets into another project.
+
+    Source content is read-only. Each reference asset gets a destination-local ID,
+    so future deletes/renames in either project cannot break the other's voices.
+    Duplicate reference IDs shared by selected casts are copied only once.
+    """
+    if source_project_id == target_project_id:
+        raise ValueError("コピー元とコピー先には別のプロジェクトを選んでください")
+    if conflict not in ("skip", "rename"):
+        raise ValueError("同名キャラクターの処理が不正です")
+    if not isinstance(cast_names, list) or not 1 <= len(cast_names) <= 200:
+        raise ValueError("1〜200件のキャラクターを選んでください")
+    if any(not isinstance(n, str) or not n.strip() for n in cast_names) or len(set(cast_names)) != len(cast_names):
+        raise ValueError("選択されたキャラクター名が不正または重複しています")
+
+    with LOCK:
+        source = load_project(source_project_id)
+        target = load_project(target_project_id)
+        if (expected_source_revision is not None and
+                int(source["revision"]) != int(expected_source_revision)):
+            raise RuntimeError("コピー元が更新されています。画面を再読み込みしてください")
+        if (expected_target_revision is not None and
+                int(target["revision"]) != int(expected_target_revision)):
+            raise RuntimeError("コピー先が更新されています。再度コピー操作をしてください")
+
+        source_casts = {}
+        for cast in source["voices"]:
+            source_casts.setdefault(cast.get("name", ""), []).append(cast)
+        for name in cast_names:
+            if name not in source_casts or len(source_casts[name]) != 1:
+                raise ValueError(f"コピーするキャラクターが存在しないか同名で複数登録されています: {name}")
+
+        used_names = {c.get("name", "") for c in target["voices"]}
+        plan, skipped, renamed = [], [], []
+        for name in cast_names:
+            output_name = name
+            if output_name in used_names:
+                if conflict == "skip":
+                    skipped.append(name)
+                    continue
+                suffix = 1
+                while True:
+                    output_name = f"{name}（コピー{suffix if suffix > 1 else ''}）"
+                    if output_name not in used_names:
+                        break
+                    suffix += 1
+                renamed.append({"from": name, "to": output_name})
+            used_names.add(output_name)
+            plan.append((source_casts[name][0], output_name))
+
+        asset_lookup = {a["id"]: a for a in source["assets"]}
+        refs_required = []
+        for cast, _ in plan:
+            for asset_id in cast.get("refs", []):
+                if asset_id not in asset_lookup:
+                    raise ValueError(f"参照音声が見つかりません: {cast.get('name', '')}")
+                if asset_id not in refs_required:
+                    refs_required.append(asset_id)
+
+        sources = {}
+        source_assets_dir = (workdir(source_project_id) / "assets").resolve()
+        for asset_id in refs_required:
+            asset = asset_lookup[asset_id]
+            filename = str(asset.get("filename", ""))
+            if not filename or Path(filename).name != filename or Path(filename).suffix.lower() not in SUPPORTED_AUDIO_EXTS:
+                raise ValueError(f"参照音声のファイル名が不正です: {asset_id}")
+            source_file = (source_assets_dir / filename).resolve()
+            if source_file.parent != source_assets_dir or not source_file.is_file():
+                raise FileNotFoundError(f"参照音声の実体が見つかりません: {asset.get('name', asset_id)}")
+            sources[asset_id] = source_file
+
+        # Create copies before committing the project state; clean up on errors.
+        copied_paths = []
+        ref_map = {}
+        try:
+            target_dir = workdir(target_project_id) / "assets"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for source_aid, source_file in sources.items():
+                source_asset = asset_lookup[source_aid]
+                new_aid = uid("asset")
+                dest = target_dir / (new_aid + source_file.suffix.lower())
+                shutil.copy2(source_file, dest)
+                copied_paths.append(dest)
+                new_asset = copy.deepcopy(source_asset)
+                new_asset.update({"id": new_aid, "filename": dest.name, "kind": "reference"})
+                target["assets"].append(new_asset)
+                ref_map[source_aid] = new_aid
+
+            for cast, name in plan:
+                copied_cast = copy.deepcopy(cast)
+                copied_cast["name"] = name
+                copied_cast["refs"] = [ref_map[asset_id] for asset_id in cast.get("refs", [])]
+                if "id" in copied_cast:
+                    copied_cast["id"] = uid("cast")
+                target["voices"].append(copied_cast)
+
+            if plan:
+                target = save_project(target_project_id, target,
+                                      expected_revision=target["revision"], allow_new_assets=True)
+        except Exception:
+            for path in copied_paths:
+                path.unlink(missing_ok=True)
+            raise
+
+        return {"project": target, "summary": {
+            "copied": len(plan), "skipped": skipped, "renamed": renamed,
+            "referencesCopied": len(ref_map),
+        }}
+
+
 def new_line(scene_id, speaker="", text="", caption="", after=0.65):
     return {"id":uid("line"), "sceneId":scene_id, "speaker":speaker,
             "text":text, "caption":caption,"after":after,

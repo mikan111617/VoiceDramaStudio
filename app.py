@@ -22,7 +22,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.1.2")
+app=FastAPI(title="VoiceDrama Studio",version="0.1.4")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -44,6 +44,27 @@ def projects():return core.list_projects()
 
 @app.post('/api/projects')
 def project_create(v:ProjectCreate):return core.create_project(v.title)
+
+class CastCopyRequest(BaseModel):
+    targetProjectId: str
+    castNames: list[str]
+    conflict: str = "skip"
+    expectedSourceRevision: int | None = None
+    expectedTargetRevision: int | None = None
+
+
+@app.post('/api/projects/{pid}/casts/copy')
+def cast_copy(pid: str, body: CastCopyRequest):
+    try:
+        return core.copy_casts(pid, body.targetProjectId, body.castNames,
+                               conflict=body.conflict,
+                               expected_source_revision=body.expectedSourceRevision,
+                               expected_target_revision=body.expectedTargetRevision)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+
 
 @app.get('/api/projects/{pid}')
 def get_project(pid:str):

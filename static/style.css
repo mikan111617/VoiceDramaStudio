@@ -26,3 +26,13 @@
 .ref-manage h3{margin:0 0 4px;font-size:1.02rem}
 .ref-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid rgba(160,170,185,.16);overflow-wrap:anywhere}
 .ref-row:last-child{border:0}.ref-row>div{display:flex;gap:6px;flex-shrink:0}
+
+/* Cast-copy modal: compact multi-selection with scroll for large casts. */
+.cast-copy-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;max-height:270px;overflow:auto;margin-top:10px;padding:2px}
+.cast-copy-item{display:flex;align-items:center;gap:9px;border:1px solid var(--border,#384254);border-radius:9px;padding:10px;cursor:pointer;background:rgba(255,255,255,.025)}
+.cast-copy-item input{flex-shrink:0}
+.cast-copy-item span{min-width:0;display:flex;flex-direction:column;gap:4px}
+.cast-copy-item small{opacity:.7;font-size:11px}
+.cast-copy-item input[type="checkbox"]{width:16px;height:16px;flex:0 0 16px;margin:0;accent-color:var(--accent)}
+.cast-copy-item span{flex:1;overflow-wrap:anywhere}
+.cast-copy-item b{margin:0}
