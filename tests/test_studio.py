@@ -1027,8 +1027,8 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=027' in html
-    assert '/static/style.css?v=027' in html
+    assert '/static/app.js?v=028' in html
+    assert '/static/style.css?v=028' in html
 
 
 def test_resizable_layout_saves_and_restores_without_mutating_project():
@@ -1114,7 +1114,7 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert 'confirmCastDeleteBtn' in js
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
-    assert '/static/app.js?v=027' in html
+    assert '/static/app.js?v=028' in html
 
 
 def test_asset_files_are_separated_and_servable(client):
@@ -1338,4 +1338,45 @@ def test_scene_and_take_delete_ui_wiring():
     assert '/scenes/${sid}/delete' in js
     assert 'id="deleteSelectedTakeBtn"' in js
     assert '/lines/${line.id}/takes/${take.id}/delete' in js
-    assert '/static/app.js?v=027' in html
+    assert '/static/app.js?v=028' in html
+
+
+def test_undo_redo_controls_are_present_and_cache_busted():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static'/'index.html').read_text(encoding='utf-8')
+    js=(root/'static'/'app.js').read_text(encoding='utf-8')
+    assert 'id="undoBtn"' in html and 'id="redoBtn"' in html
+    assert '/static/app.js?v=028' in html
+    assert '/static/style.css?v=028' in html
+    assert 'function undoEdit()' in js and 'function redoEdit()' in js
+    assert "key==='z'&&!e.shiftKey" in js
+    assert "key==='y'" in js
+    assert "historyRestoring=true" in js
+    assert "if(historyRestoring)return;handleBatchModalChange" in js
+    assert "const HISTORY_LIMIT=80" in js
+    assert "function clearEditHistory()" in js
+
+
+def test_audio_library_cards_support_track_drop_and_time_position():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static'/'app.js').read_text(encoding='utf-8')
+    css=(root/'static'/'style.css').read_text(encoding='utf-8')
+    assert 'draggable="true" data-drag-asset="${esc(a.id)}"' in js
+    assert 'data-drop-track="${esc(track.id)}"' in js
+    assert 'function onLibraryDragStart(e)' in js
+    assert 'function onTimelineDrop(e)' in js
+    assert 'function uploadToLane(files,trackId,atTime)' in js
+    assert 'addClip(aid,track.id,seconds)' in js
+    assert 'state=response.project;clearEditHistory();' in js
+    assert "if(!track||track.kind==='dialogue')" in js
+    assert '.tl-lane.timeline-drop-target' in css
+
+
+def test_edit_history_never_rolls_back_asset_files():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static'/'app.js').read_text(encoding='utf-8')
+    snapshot=js[js.index('const HISTORY_FIELDS='):js.index('function recordEdit')]
+    for key in ['title','scenes','lines','clips','tracks','voices','settings']:
+        assert f"'{key}'" in snapshot
+    assert "'assets'" not in snapshot
+    assert 'setTimeout(()=>{historyRestoring=false},0)' in js

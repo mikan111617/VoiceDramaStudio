@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VoiceDrama Studio — シナリオから音へ</title>
-<link rel="stylesheet" href="/static/style.css?v=027"></head>
+<link rel="stylesheet" href="/static/style.css?v=028"></head>
 <body>
 <div id="app">
 <header class="topbar">
  <div class="brand"><div class="brand-icon"><svg viewBox="0 0 32 32" fill="none"><path d="M4 18V14M9 23V9M14 27V5M19 23V9M24 19V13M29 16v0" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></div><div><b>VOICE<span>DRAMA</span></b><small>STUDIO <em>LOCAL</em></small></div></div>
  <button id="projectButton" class="project-name" title="プロジェクトの管理・名前変更">無題の作品 <span>⌄</span></button>
- <div class="top-actions"><span class="status-dot"></span><span id="saveState" class="small muted">読み込み中</span><button id="settingsBtn" class="btn ghost">⚙ 設定</button><button id="exportExcelBtn" class="btn ghost">台本を書き出す</button><button id="renderBtn" class="btn primary">↧ 音声を書き出す</button></div>
+ <div class="top-actions"><span class="status-dot"></span><button id="undoBtn" class="btn ghost history-action" title="編集を戻す (Ctrl+Z)" disabled>↶ 戻す</button><button id="redoBtn" class="btn ghost history-action" title="やり直す (Ctrl+Y / Ctrl+Shift+Z)" disabled>↷ やり直す</button><span id="saveState" class="small muted">読み込み中</span><button id="settingsBtn" class="btn ghost">⚙ 設定</button><button id="exportExcelBtn" class="btn ghost">台本を書き出す</button><button id="renderBtn" class="btn primary">↧ 音声を書き出す</button></div>
 </header>
 <div class="main-layout">
  <aside class="sidebar">
@@ -34,5 +34,5 @@
 <input type="file" id="excelPicker" accept=".xlsx" hidden>
 <input type="file" id="audioPicker" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.opus" multiple hidden>
 <input type="file" id="bulkAudioPicker" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" multiple hidden>
-<script src="/static/app.js?v=027" defer></script>
+<script src="/static/app.js?v=028" defer></script>
 </body></html>

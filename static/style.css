@@ -117,3 +117,10 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .scene-delete-btn{flex:none;width:28px;height:30px;border:1px solid transparent;border-radius:6px;background:transparent;color:#8b93a3;font-size:18px;cursor:pointer}
 .scene-row:hover .scene-delete-btn,.scene-delete-btn:focus-visible{color:#ef9b9d;border-color:#775052;background:#432629}
 .scene-delete-btn:hover{color:#fff;background:#773941}
+
+/* Dragging audio from the library / desktop to a specific time and track. */
+.asset-draggable{cursor:grab}.asset-draggable:active{cursor:grabbing}
+.asset-draggable:hover{border-color:#a78656;box-shadow:0 0 0 1px #a786563b}
+.tl-lane.timeline-drop-target{background-color:#203b3a;outline:2px dashed #73d5af;outline-offset:-3px}
+.history-action{font-size:11px;padding:8px 10px}
+@media(max-width:1200px){.history-action{font-size:0;padding:7px 9px}.history-action::first-letter{font-size:15px}}

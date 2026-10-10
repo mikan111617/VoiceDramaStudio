@@ -9,6 +9,49 @@ let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
 let excelImportMode='merge';
 let castCopySelection=new Set();
+// Local edit history only: never roll back audio files, uploads or server-side
+// destructive actions. Keep asset metadata and the server revision authoritative.
+const HISTORY_LIMIT=80;
+const HISTORY_FIELDS=['title','scenes','lines','clips','tracks','voices','settings'];
+let undoHistory=[],redoHistory=[],historyBaseline=null,historyLastKey='',historyLastAt=0,historyRestoring=false;
+function editSnapshot(){const snapshot={};for(const key of HISTORY_FIELDS)snapshot[key]=structuredClone(state?.[key]);return snapshot}
+function historyButtons(){const a=$('undoBtn'),b=$('redoBtn');if(a)a.disabled=!undoHistory.length;if(b)b.disabled=!redoHistory.length}
+function clearEditHistory(){undoHistory=[];redoHistory=[];historyLastKey='';historyLastAt=0;historyBaseline=state?editSnapshot():null;historyButtons()}
+function recordEdit(key=''){
+ if(!state)return;
+ if(!historyBaseline){historyBaseline=editSnapshot();return}
+ const next=editSnapshot();
+ if(JSON.stringify(historyBaseline)===JSON.stringify(next))return;
+ const now=Date.now();
+ const sameTyping=key.startsWith('typing:')&&historyLastKey===key&&now-historyLastAt<1100;
+ if(!sameTyping){undoHistory.push(historyBaseline);if(undoHistory.length>HISTORY_LIMIT)undoHistory.shift()}
+ historyBaseline=next;redoHistory=[];historyLastKey=key;historyLastAt=now;historyButtons();
+}
+function markUnsaved(){dirty=true;$('saveState').textContent='未保存';clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveNow().catch(err=>toast(err.message,true)),650)}
+function restoreEdit(snapshot){
+ if(!state)return;
+ historyRestoring=true;
+ stopNodes();
+ for(const key of HISTORY_FIELDS)state[key]=structuredClone(snapshot[key]);
+ historyBaseline=editSnapshot();historyLastKey='';historyLastAt=0;
+ if(!state.scenes.some(s=>s.id===selectedScene))selectedScene=state.scenes[0]?.id||null;
+ if(!state.lines.some(l=>l.id===selectedLine))selectedLine=null;
+ if(!state.clips.some(c=>c.id===selectedClip))selectedClip=null;
+ renderAll();markUnsaved();historyButtons();
+ setTimeout(()=>{historyRestoring=false},0);
+}
+function undoEdit(){if(!undoHistory.length)return;redoHistory.push(editSnapshot());restoreEdit(undoHistory.pop());toast('編集を元に戻しました')}
+function redoEdit(){if(!redoHistory.length)return;undoHistory.push(editSnapshot());restoreEdit(redoHistory.pop());toast('編集をやり直しました')}
+function restoreEditingFocus(source){
+ const field=source?.dataset?.lineField,lin=source?.closest?.('.script-line')?.dataset?.id;
+ const vfield=source?.dataset?.vfield,cast=source?.closest?.('.cast-card')?.dataset?.voice;
+ let target=null;
+ if(field&&lin)target=[...document.querySelectorAll('[data-line-field]')].find(el=>el.dataset.lineField===field&&el.closest('.script-line')?.dataset.id===lin);
+ else if(vfield&&cast!==undefined)target=[...document.querySelectorAll('[data-vfield]')].find(el=>el.dataset.vfield===vfield&&el.closest('.cast-card')?.dataset.voice===cast);
+ else if(source?.id)target=$(source.id);
+ if(target){target.focus({preventScroll:true});if(typeof target.setSelectionRange==='function')try{target.setSelectionRange(target.value.length,target.value.length)}catch{}}
+}
+
 const AUDIO_EXT=/\.(wav|mp3|flac|ogg|m4a|aac|opus)$/i;
 
 const $=id=>document.getElementById(id);
@@ -28,7 +71,7 @@ function toast(msg,bad=false){const el=document.createElement('div');el.classNam
 function modal(html){$('modalBody').innerHTML=html;$('modalBackdrop').classList.remove('hidden')}
 function closeModal(){$('modalBackdrop').classList.add('hidden')}
 const button=(label,attr='',kind='ghost')=>`<button class="btn ${kind}" ${attr}>${label}</button>`;
-function dirtyState(){dirty=true;$('saveState').textContent='未保存';clearTimeout(saveTimer);saveTimer=setTimeout(()=>saveNow().catch(err=>toast(err.message,true)),650)}
+function dirtyState(historyKey=''){recordEdit(historyKey);markUnsaved()}
 async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clearTimeout(saveTimer);if(saving){await saving;if(dirty)return saveNow();return}
   const revision=state.revision,payload=structuredClone(state);dirty=false;$('saveState').textContent='保存中…';
   saving=req(`/api/projects/${state.id}`,json('PUT',{state:payload,expectedRevision:revision}));
@@ -37,7 +80,7 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();view='script';renderAll();$('saveState').textContent='保存済み'}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker)].filter(Boolean))]}
@@ -57,7 +100,7 @@ async function confirmSceneDelete(sid){
  try{
   await saveNow();
   const result=await req(`/api/projects/${state.id}/scenes/${sid}/delete`,json('POST',{expectedRevision:state.revision}));
-  stop();state=result.project;dirty=false;
+  stop();state=result.project;clearEditHistory();dirty=false;
   if(!state.scenes.some(s=>s.id===selectedScene))selectedScene=state.scenes[0]?.id||null;
   selectedLine=null;selectedClip=null;currentTime=0;renderAll();closeModal();
   $('saveState').textContent='保存済み';
@@ -76,7 +119,7 @@ async function removeSelectedTake(){
  try{
   await saveNow();
   const response=await req(`/api/projects/${state.id}/lines/${line.id}/takes/${take.id}/delete`,json('POST',{expectedRevision:state.revision}));
-  stop();state=response.project;selectedClip=null;dirty=false;audioCache.delete(take.assetId);
+  stop();state=response.project;clearEditHistory();selectedClip=null;dirty=false;audioCache.delete(take.assetId);
   renderAll();$('saveState').textContent='保存済み';toast('選択したテイクをゴミ箱へ移動しました');
  }catch(e){toast('テイクを削除できません: '+e.message,true)}
 }
@@ -97,14 +140,14 @@ function renderEditor(){if(!state)return;const act=$('panelActions');const title
   key.textContent='VOICE LIBRARY';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')+button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
   $('editorContent').innerHTML=bulkDropZone('reference')+(state.voices.length?state.voices.map((v,i)=>`<article class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><header class="cast-card-heading"><div class="cast-identity"><span class="cast-number">CAST ${String(i+1).padStart(2,'0')}</span><h3>${esc(v.name)}</h3></div><span class="cast-reference-count">参照音声 ${(v.refs||[]).length}件</span></header><div class="inspector-grid cast-fields"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><section class="cast-reference-section"><div class="cast-reference-heading"><div class="cast-reference-kicker">VOICE SAMPLES</div><h4>${esc(v.name)} の参照音声</h4></div><div class="cast-reference-preview">${(v.refs||[]).map(id=>state.assets.find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)}</span>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}</div>`).join('')||'<span class="small muted">参照音声はまだありません</span>'}</div></section><div class="asset-actions cast-card-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('このキャストの全台詞へ設定を適用',`data-voice-apply="${i}"`)}${button('⇄ 別作品へコピー',`data-cast-copy="${i}"`)}${button('🗑 このキャストを削除',`data-cast-delete="${i}"`,'danger')}</div></article>`).join(''):'<div class="empty">キャストがありません。追加すると声を登録できます。</div>')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
  }else{
- key.textContent='AUDIO LIBRARY';title.textContent='音声ライブラリ';sub.textContent='ドラマで使用する台詞・BGM・効果音・環境音';act.innerHTML=button('↓ 音声をまとめて取り込む',`id="batchLibraryBtn"`,'primary')+button('＋ 音声ファイル',`id="uploadAudioBtn"`)+button(`🗑 選択削除 (${trashSelection.size})`,`id="trashSelectedBtn" ${trashSelection.size?'':'disabled'}`);
- $('editorContent').innerHTML=bulkDropZone('library')+(state.assets.filter(a=>a.kind!=='reference').length?state.assets.filter(a=>a.kind!=='reference').slice().reverse().map(a=>`<div class="asset-card"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc((a.kind||'audio').toUpperCase())}</span><div class="asset-meta"><b>${esc(a.name)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div><div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${a.kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join(''):'<div class="empty">音声素材はまだありません。WAV / MP3などを取り込めます。</div>')+`<button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
+ key.textContent='AUDIO LIBRARY';title.textContent='音声ライブラリ';sub.textContent='音声をドラッグして右のマルチトラックへ配置できます。BGM・効果音・環境音など';act.innerHTML=button('↓ 音声をまとめて取り込む',`id="batchLibraryBtn"`,'primary')+button('＋ 音声ファイル',`id="uploadAudioBtn"`)+button(`🗑 選択削除 (${trashSelection.size})`,`id="trashSelectedBtn" ${trashSelection.size?'':'disabled'}`);
+ $('editorContent').innerHTML=bulkDropZone('library')+(state.assets.filter(a=>a.kind!=='reference').length?state.assets.filter(a=>a.kind!=='reference').slice().reverse().map(a=>`<div class="asset-card asset-draggable" draggable="true" data-drag-asset="${esc(a.id)}" title="マルチトラックのBGM・効果音・環境音のレーンへドラッグできます"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc((a.kind||'audio').toUpperCase())}</span><div class="asset-meta"><b>${esc(a.name)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div><div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${a.kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join(''):'<div class="empty">音声素材はまだありません。WAV / MP3などを取り込めます。</div>')+`<button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
  }
 }
 function timelineDuration(){return Math.max(40,...activeClips().map(c=>Number(c.start||0)+Number(c.duration||0)+7))}
 function renderTimeline(){if(!state)return;const duration=timelineDuration(),width=Math.ceil(duration*pxPerSec),clips=activeClips();let html=`<div class="tl-ruler"><div class="tl-ruler-side">TIME</div><div class="tl-ruler-scale" data-ruler="1" style="width:${width}px">`;
  for(let t=0;t<duration;t+=5)html+=`<div class="tl-tick" style="left:${t*pxPerSec}px">${fmt(t)}</div>`;html+='</div></div>';
- for(const track of state.tracks){const these=clips.filter(c=>c.trackId===track.id);html+=`<div class="tl-row"><div class="tl-label"><b>${esc(track.name)}</b><small>${these.length} clips</small></div><div class="tl-lane" style="width:${width}px;--fiveSec:${5*pxPerSec}px;--oneSec:${pxPerSec}px" data-lane="${esc(track.id)}">`;
+ for(const track of state.tracks){const these=clips.filter(c=>c.trackId===track.id);html+=`<div class="tl-row"><div class="tl-label"><b>${esc(track.name)}</b><small>${these.length} clips</small></div><div class="tl-lane" data-drop-track="${esc(track.id)}" title="音声をここへドロップして配置" style="width:${width}px;--fiveSec:${5*pxPerSec}px;--oneSec:${pxPerSec}px" data-lane="${esc(track.id)}">`;
  for(const c of these){const a=asset(c.assetId);if(!a)continue;const w=Math.max(14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);let label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClip===c.id?'selected':''}" data-clip="${esc(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span><div class="clip-handle" data-resize="1"></div></div>`}html+='</div></div>'}
  html+='<div id="playhead" class="tl-playhead" style="left:'+((108+currentTime*pxPerSec))+'px"></div>';$('timeline').innerHTML=html;
  $('timelineInfo').textContent=`${clips.length} clips · ${fmt(duration)} · ${state.tracks.length} tracks`;$('zoomNumber').textContent=`${pxPerSec} px/s`;updatePlayhead()}
@@ -131,8 +174,8 @@ function renderInspector(){if(!state)return;const inspector=$('inspector'),l=lin
  if(l){const hasAudio=l.takes?.length>0, effective=displayLineTts(l),isOverride=effective.source==='line';inspector.innerHTML=`<div class="inspector-grid"><div class="field wide"><label>台詞 ${esc(l.speaker)}</label><div style="font-size:12px">${esc(l.text.slice(0,90)||'（空の台詞）')}</div></div><div class="field wide"><label>音声生成の設定元</label><select id="lineTtsSource"><option value="cast" ${!isOverride?'selected':''}>キャスト設定を使う（推奨）</option><option value="line" ${isOverride?'selected':''}>この台詞だけ個別設定</option></select></div>${!isOverride?`<div class="field wide"><label>実際に使用するモデル</label><div class="inspector-note">${esc(effective.model)}（キャスト・声で変更できます）</div></div>`:`<div class="field"><label>TTSエンジン</label><select id="lineEngine"><option value="irodori" ${l.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${l.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>声の方式</label><select id="lineMode"><option value="clone" ${l.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${l.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>モデル</label>${modelSelect(l.engine,l.model)}</div>`}<div class="field wide"><label>生成済みテイク</label><select id="lineTake"><option value="">未選択</option>${(l.takes||[]).map((t,i)=>`<option value="${esc(t.id)}" ${t.id===l.selectedTakeId?'selected':''}>テイク ${i+1} · ${esc(t.engine||'import')} · ${esc((t.createdAt||'').slice(0,16))}</option>`).join('')}</select></div></div><div class="inspect-actions">${button('▶ 音声生成',`id="generateLineBtn"`,'primary')}${button('＋ 既存音声を割当',`id="attachPickerBtn"`)}${button('✦ 演技指示を提案',`id="suggestCaptionBtn"`)}${hasAudio?button('▶ テイクを試聴',`id="previewTakeBtn"`)+button('↓ 選択テイクを保存',`id="downloadTakeBtn"`)+(l.selectedTakeId?button('🗑 選択テイクを削除',`id="deleteSelectedTakeBtn"`,'danger'):''):''}</div><p class="inspector-note" style="margin-top:10px">生成時は、キャスト設定の参照音声・声の説明を利用します。モデルと台詞の変更はテイク履歴に影響せず、再生成を促します。</p>`;return}
  inspector.innerHTML=`<div class="inspector-note">タイムラインのクリップか、左側の台詞を選択してください。<br>音声ライブラリからBGM・効果音を追加できます。</div><div class="inspect-actions">${button('＋ BGM / 効果音を取り込む','id="insUploadBtn"')}${button('＋ トラックを追加','id="addTrackBtn"')}</div>`;
 }
-function addClip(aid,track='sfx'){const a=asset(aid);if(!a)return;const t=state.tracks.find(x=>x.id===track);if(!t)return;const c={id:newid('clip'),sceneId:selectedScene,trackId:track,assetId:aid,lineId:null,start:Math.max(0,currentTime),duration:a.duration,trimStart:0,trimEnd:0,loop:false,gain:1,fadeIn:0,fadeOut:0,pinned:true};state.clips.push(c);selectedClip=c.id;selectedLine=null;dirtyState();renderTimeline();renderInspector();toast(`${a.name} を${t.name}へ追加`)}
-async function attachAsset(aid,lineid){if(!lineid){toast('先に台詞を選択してください',true);return}await saveNow();const data=await req(`/api/projects/${state.id}/lines/${lineid}/attach/${aid}`,{method:'POST'});state=data;selectedLine=lineid;selectedClip=state.clips.find(x=>x.lineId===lineid)?.id||null;renderAll();toast('音声を台詞へ紐付けました')}
+function addClip(aid,track='sfx',atTime=currentTime){const a=asset(aid);if(!a)return;const t=state.tracks.find(x=>x.id===track);if(!t)return;const c={id:newid('clip'),sceneId:selectedScene,trackId:track,assetId:aid,lineId:null,start:Math.max(0,Number(atTime)||0),duration:a.duration,trimStart:0,trimEnd:0,loop:false,gain:1,fadeIn:0,fadeOut:0,pinned:true};state.clips.push(c);selectedClip=c.id;selectedLine=null;dirtyState();renderTimeline();renderInspector();toast(`${a.name} を${t.name}へ追加`)}
+async function attachAsset(aid,lineid){if(!lineid){toast('先に台詞を選択してください',true);return}await saveNow();const data=await req(`/api/projects/${state.id}/lines/${lineid}/attach/${aid}`,{method:'POST'});state=data;clearEditHistory();selectedLine=lineid;selectedClip=state.clips.find(x=>x.lineId===lineid)?.id||null;renderAll();toast('音声を台詞へ紐付けました')}
 function uploadAudio(kind='sfx',lineId=null,voiceName=null){uploadContext={kind,lineId,voiceName};$('audioPicker').value='';$('audioPicker').click()}
 
 // Batch import is intentionally staged: no files are copied until the user reviews the mapping.
@@ -213,7 +256,7 @@ async function submitAudioBatch(){
     form.append('lineIds',JSON.stringify(bulkFiles.map(f=>bulkMode==='assign'?bulkTargets[f.key]||null:null)));
     form.append('castName',bulkMode==='reference'?bulkCast:'');
     const result=await req(`/api/projects/${state.id}/assets/batch`,{method:'POST',body:form});
-    state=result.project;if(bulkMode==='assign')selectedScene=bulkScene;audioCache.clear();closeModal();renderAll();
+    state=result.project;clearEditHistory();if(bulkMode==='assign')selectedScene=bulkScene;audioCache.clear();closeModal();renderAll();
     toast(`取り込み完了 ${result.summary.imported}件${result.summary.assigned?' · 台詞へ'+result.summary.assigned+'件割当':''}`);
     bulkFiles=[];
   }catch(e){toast('一括取り込みに失敗: '+e.message,true);if(msg)msg.textContent='取り込み失敗: '+e.message}
@@ -239,6 +282,50 @@ function handleBatchModalClick(e){
   else {const j=i+Number(move.dataset.dir);if(j>=0&&j<bulkFiles.length)[bulkFiles[i],bulkFiles[j]]=[bulkFiles[j],bulkFiles[i]];bulkSort='manual';rebuildBatchAssignments()}
   if(!bulkFiles.length){closeModal();return true}showAudioBatchModal();return true;
 }
+// HTML5 DnD adds new clips; existing pointer-based clip move/resize stays intact.
+const DRAG_ASSET_TYPE='application/x-voicedrama-asset';
+let highlightedLane=null;
+function laneFromTarget(target){return target?.closest?.('.tl-lane[data-drop-track]')||null}
+function highlightLane(lane){if(highlightedLane!==lane){highlightedLane?.classList.remove('timeline-drop-target');highlightedLane=lane;if(lane)lane.classList.add('timeline-drop-target')}}
+function laneTime(lane,clientX){return Math.max(0,Math.round((clientX-lane.getBoundingClientRect().left)/pxPerSec*20)/20)}
+function onLibraryDragStart(e){
+ const card=e.target.closest?.('.asset-draggable[data-drag-asset]');if(!card||!e.dataTransfer)return;
+ const entry=asset(card.dataset.dragAsset);if(!entry||entry.kind==='reference'){e.preventDefault();return}
+ e.dataTransfer.setData(DRAG_ASSET_TYPE,entry.id);e.dataTransfer.effectAllowed='copy';
+}
+function onLaneDragOver(e){
+ const lane=laneFromTarget(e.target),types=[...e.dataTransfer?.types||[]];
+ if(lane&&(types.includes(DRAG_ASSET_TYPE)||types.includes('Files'))){e.preventDefault();e.dataTransfer.dropEffect='copy';highlightLane(lane)}
+ else highlightLane(null);
+}
+async function uploadToLane(files,trackId,atTime){
+ const candidates=[...files].filter(f=>AUDIO_EXT.test(f.name));
+ if(candidates.length!==files.length||!candidates.length)return toast('WAV / MP3等の音声ファイルだけドロップしてください',true);
+ if(candidates.length>20)return toast('トラックへの同時ドロップは20ファイルまでです',true);
+ const track=state.tracks.find(t=>t.id===trackId);if(!track||track.kind==='dialogue')return toast('BGM・効果音・環境音トラックへドロップしてください',true);
+ try{
+  await saveNow();let cursor=atTime;
+  for(const file of candidates){
+   const fd=new FormData();fd.append('file',file);fd.append('kind',['bgm','ambience','sfx'].includes(track.kind)?track.kind:'sfx');
+   const response=await req(`/api/projects/${state.id}/assets`,{method:'POST',body:fd});
+   state=response.project;clearEditHistory();
+   addClip(response.asset.id,trackId,cursor);cursor+=response.asset.duration;
+   await saveNow();
+  }
+  renderAll();toast(`${candidates.length}件の音声を${track.name}へ配置しました`);
+ }catch(e){toast('音声をトラックへ配置できません: '+e.message,true)}
+}
+function onTimelineDrop(e){
+ const lane=laneFromTarget(e.target);if(!lane||!e.dataTransfer)return;
+ const aid=e.dataTransfer.getData(DRAG_ASSET_TYPE),files=e.dataTransfer.files;
+ if(!aid&&!files?.length)return;
+ e.preventDefault();e.stopPropagation();highlightLane(null);$('editorContent').classList.remove('file-drag-active');
+ const track=state.tracks.find(t=>t.id===lane.dataset.dropTrack);
+ if(!track||track.kind==='dialogue')return toast('BGM・効果音・環境音のトラックを指定してください',true);
+ const seconds=laneTime(lane,e.clientX);
+ if(aid){const a=asset(aid);if(!a||a.kind==='reference')return toast('この音声はドラッグ配置できません',true);addClip(aid,track.id,seconds)}
+ else uploadToLane(files,track.id,seconds);
+}
 function handleAudioFileDrop(e){
   if(!e.dataTransfer?.files?.length)return;
   e.preventDefault();$('editorContent').classList.remove('file-drag-active');
@@ -247,7 +334,7 @@ function handleAudioFileDrop(e){
   stageAudioBatch(e.dataTransfer.files,mode,cast||'');
 }
 
-async function handleUpload(files){if(!files?.length)return;try{await saveNow();for(const file of files){const fd=new FormData();fd.append('file',file);fd.append('kind',uploadContext.kind);const data=await req(`/api/projects/${state.id}/assets`,{method:'POST',body:fd});state=data.project;
+async function handleUpload(files){if(!files?.length)return;try{await saveNow();for(const file of files){const fd=new FormData();fd.append('file',file);fd.append('kind',uploadContext.kind);const data=await req(`/api/projects/${state.id}/assets`,{method:'POST',body:fd});state=data.project;clearEditHistory();
  if(uploadContext.lineId)await attachAsset(data.asset.id,uploadContext.lineId);
  if(uploadContext.voiceName){let v=state.voices.find(x=>x.name===uploadContext.voiceName);if(v){v.refs=v.refs||[];v.refs.push(data.asset.id);dirtyState();await saveNow()}}
  else if(!uploadContext.lineId&&uploadContext.kind!=='reference'&&uploadContext.kind!=='voice')addClip(data.asset.id,uploadContext.kind);
@@ -265,7 +352,7 @@ async function clearEntireScript(){
  try{
   await saveNow();
   const result=await req(`/api/projects/${state.id}/script/clear`,json('POST',{expectedRevision:state.revision}));
-  stop();state=result.project;selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;
+  stop();state=result.project;clearEditHistory();selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;
   dirty=false;renderAll();$('saveState').textContent='保存済み';
   const info=result.summary;
   modal(`<h2>シナリオを削除しました</h2><p>台詞 ${info.removedLines}件、シーン ${info.removedScenes}件、配置 ${info.removedClips}件をクリアしました。</p>
@@ -303,7 +390,7 @@ async function importExcel(file){
    await saveNow();
    const form=new FormData();form.append('file',file);form.append('mode',mode);form.append('expectedRevision',String(state.revision));
    const response=await req(`/api/projects/${state.id}/excel/import`,{method:'POST',body:form});
-   stop();state=response.project;selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;renderAll();
+   stop();state=response.project;clearEditHistory();selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;renderAll();
    const info=response.summary;
    const replaced=info.mode==='replace';
    modal(`<h2>Excel取り込み完了</h2><p>${replaced?'全件置き換え':'追加・更新'} / 追加 ${info.added}件 / 更新 ${info.updated}件 / 既存一致 ${info.matched}件</p>
@@ -329,7 +416,7 @@ async function deleteCast(name){
  try{
   await saveNow();
   const updated=await req(`/api/projects/${state.id}/casts/delete`,json('POST',{name,expectedRevision:state.revision}));
-  state=updated;closeModal();renderAll();$('saveState').textContent='保存済み';
+  state=updated;clearEditHistory();closeModal();renderAll();$('saveState').textContent='保存済み';
   toast(`キャスト「${name}」を削除しました（音声素材は保持）`);
  }catch(e){toast('キャストを削除できません: '+e.message,true);if(btn)btn.disabled=false}
 }
@@ -355,7 +442,7 @@ async function generate(ids){
  }catch(e){toast('生成前の設定確認に失敗: '+e.message,true)}
 }
 function showJob(jid){clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div><div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
- const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
+ const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){try{await saveNow();modal(`<h2>完成音声を書き出す</h2><p>すべてのトラックを同時にミックスし、フェードやループを反映します。</p><div class="field"><label>出力範囲</label><select id="exportScope"><option value="scene">現在のシーン (${esc(sceneName(selectedScene))})</option><option value="all">全シーン（順番に連結）</option></select></div><div class="field"><label>出力形式</label><select id="exportFormat"><option value="wav">WAV / PCM16</option><option value="mp3">MP3 / 192kbps（FFmpeg必要）</option></select></div><div class="modal-actions">${button('キャンセル','data-close="1"')}${button('書き出す','id="renderConfirmBtn"','primary')}</div>`);
  $('renderConfirmBtn').onclick=async()=>{const format=$('exportFormat').value,sceneId=$('exportScope').value==='scene'?selectedScene:null;$('renderConfirmBtn').disabled=true;$('renderConfirmBtn').textContent='処理中…';try{const result=await req(`/api/projects/${state.id}/render`,json('POST',{sceneId,format}));closeModal();const a=document.createElement('a');a.href=result.url;a.download=result.file;document.body.append(a);a.click();a.remove();toast(`書き出しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`)}catch(e){toast(e.message,true);$('renderConfirmBtn').disabled=false;$('renderConfirmBtn').textContent='再試行'}};
  }catch(e){toast(e.message,true)}}
@@ -366,7 +453,7 @@ async function trashSelectedAssets(){
  try{
    await saveNow();
    const result=await req(`/api/projects/${state.id}/assets/bulk/trash`,json('POST',{assetIds:ids}));
-   trashSelection.clear();state=result.project;audioCache.clear();renderAll();
+   trashSelection.clear();state=result.project;clearEditHistory();audioCache.clear();renderAll();
    const failed=result.errors?.length||0;
    toast(`ゴミ箱へ${result.trashed.length}件移動${failed?'（失敗 '+failed+'件）':''}`,!!failed);
  }catch(e){toast('一括削除できません: '+e.message,true)}
@@ -381,7 +468,7 @@ async function trashAsset(aid){
    const message=used?`「${assetInfo.name}」は現在使用中です（${details}）。\n\n削除すると、これらの紐付けが解除されます。\nファイル自体はゴミ箱に保存されます。続行しますか？`:`「${assetInfo.name}」をゴミ箱へ移動しますか？\n元ファイルはゴミ箱から復元できます。`;
    if(!confirm(message))return;
    const response=await req(`/api/projects/${state.id}/assets/${aid}?detach=${used?'true':'false'}`,{method:'DELETE'});
-   state=response.project;trashSelection.delete(aid);audioCache.delete(aid);selectedClip=null;renderAll();toast('ゴミ箱へ移動しました');
+   state=response.project;clearEditHistory();trashSelection.delete(aid);audioCache.delete(aid);selectedClip=null;renderAll();toast('ゴミ箱へ移動しました');
  }catch(e){toast('削除できません: '+e.message,true)}
 }
 async function openTrash(){
@@ -391,7 +478,7 @@ async function openTrash(){
  }catch(e){toast('ゴミ箱の取得に失敗: '+e.message,true)}
 }
 async function restoreAsset(aid){
- try{const result=await req(`/api/projects/${state.id}/trash/assets/${aid}/restore`,{method:'POST'});state=result.project;renderAll();await openTrash();toast('音声をライブラリへ復元しました')}catch(e){toast('復元できません: '+e.message,true)}
+ try{const result=await req(`/api/projects/${state.id}/trash/assets/${aid}/restore`,{method:'POST'});state=result.project;clearEditHistory();renderAll();await openTrash();toast('音声をライブラリへ復元しました')}catch(e){toast('復元できません: '+e.message,true)}
 }
 async function openCastCopy(presetName=''){
   try{
@@ -554,7 +641,7 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='playClipBtn'){currentTime=clipById(selectedClip)?.start||0;play()}
  if(target.id==='deleteClipBtn'){const c=clipById(selectedClip);if(!c)return;state.clips=state.clips.filter(x=>x.id!==c.id);selectedClip=null;dirtyState();renderTimeline();renderInspector()}
 }
-function handleChange(e){handleBatchModalChange(e);const target=e.target;const id=target.id;
+function handleChange(e){if(historyRestoring)return;handleBatchModalChange(e);const target=e.target;const id=target.id;
  if(id==='castCopyTarget'){updateCastCopyModal();return}
  if(target.dataset.copyCast!==undefined){const v=state.voices[Number(target.dataset.copyCast)];if(v){if(target.checked)castCopySelection.add(v.name);else castCopySelection.delete(v.name);updateCastCopyModal()}return}
  const field=target.dataset.lineField;if(field){const l=lineById(target.closest('.script-line').dataset.id);if(!l)return;l[field]=field==='after'?Math.max(0,Number(target.value)||0):target.value;if(field!=='outputFilename')l.status=l.selectedTakeId?'stale':'missing';if(field==='after')reflow();dirtyState();if(field==='speaker'||field==='after'){renderSidebar();renderTimeline();renderInspector()}return}
@@ -670,6 +757,7 @@ function installPanelResizers(){
  window.addEventListener('resize',()=>{if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes)});
 }
 function wire(){
+ $('undoBtn').onclick=undoEdit;$('redoBtn').onclick=redoEdit;historyButtons();
  $('projectButton').onclick=openProjects;$('settingsBtn').onclick=openSettings;$('exportExcelBtn').onclick=async()=>{try{await saveNow();location.href=`/api/projects/${state.id}/excel/export`}catch(e){toast(e.message,true)}};
  $('renderBtn').onclick=renderAudio;$('addSceneBtn').onclick=addScene;
  $('navScript').onclick=()=>setView('script');$('navVoices').onclick=()=>setView('voices');$('navAssets').onclick=()=>setView('assets');
@@ -680,17 +768,26 @@ function wire(){
  $('audioPicker').onchange=e=>{handleUpload([...e.target.files]);e.target.value=''};
  $('bulkAudioPicker').onchange=e=>{const files=[...e.target.files];stageAudioBatch(files,uploadContext.kind,uploadContext.voiceName||'');e.target.value=''};
  document.addEventListener('click',handleGlobalClick);
- document.addEventListener('dragover',e=>{if([...e.dataTransfer?.types||[]].includes('Files')){e.preventDefault();e.dataTransfer.dropEffect='copy';$('editorContent').classList.add('file-drag-active')}});
+ document.addEventListener('dragover',e=>{onLaneDragOver(e);if([...e.dataTransfer?.types||[]].includes('Files')){e.preventDefault();e.dataTransfer.dropEffect='copy';$('editorContent').classList.add('file-drag-active')}});
  document.addEventListener('dragleave',e=>{if(!e.relatedTarget)$('editorContent').classList.remove('file-drag-active')});
- document.addEventListener('drop',e=>{if(e.dataTransfer?.files?.length)handleAudioFileDrop(e)});
+ document.addEventListener('drop',e=>{if(laneFromTarget(e.target))return onTimelineDrop(e);highlightLane(null);if(e.dataTransfer?.files?.length)handleAudioFileDrop(e)});
+ document.addEventListener('dragstart',onLibraryDragStart);document.addEventListener('dragend',()=>highlightLane(null));
 
  document.addEventListener('change',handleChange);
- document.addEventListener('input',e=>{const t=e.target;if(t.dataset.lineField==='text'||t.dataset.lineField==='caption'){const l=lineById(t.closest('.script-line').dataset.id);if(l){l[t.dataset.lineField]=t.value;l.status=l.selectedTakeId?'stale':'missing';const badge=t.closest('.script-line')?.querySelector('.line-status');if(badge){badge.className='line-status '+l.status;badge.textContent=l.status==='stale'?'要再生成':'未生成'}dirtyState()}}else if(t.id==='modelCustom'){const l=lineById(selectedLine);if(l){l.model=t.value;dirtyState()}}});
+ document.addEventListener('input',e=>{if(historyRestoring)return;const t=e.target;if(t.dataset.lineField==='text'||t.dataset.lineField==='caption'){const l=lineById(t.closest('.script-line').dataset.id);if(l){l[t.dataset.lineField]=t.value;l.status=l.selectedTakeId?'stale':'missing';const badge=t.closest('.script-line')?.querySelector('.line-status');if(badge){badge.className='line-status '+l.status;badge.textContent=l.status==='stale'?'要再生成':'未生成'}dirtyState(`typing:${l.id}:${t.dataset.lineField}`)}}else if(t.id==='modelCustom'){const l=lineById(selectedLine);if(l){l.model=t.value;dirtyState()}}});
  $('timeline').addEventListener('pointerdown',dragStart);
  document.addEventListener('pointermove',dragMove);
  document.addEventListener('pointerup',dragEnd);
  $('timeline').addEventListener('click',e=>{if(e.target.closest('[data-ruler]')){const b=e.target.closest('[data-ruler]').getBoundingClientRect();stopNodes();currentTime=Math.max(0,(e.clientX-b.left)/pxPerSec);updatePlayhead()}});
- document.addEventListener('keydown',e=>{const writing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
+ document.addEventListener('keydown',e=>{
+  const focus=document.activeElement;
+  if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.repeat&&!document.querySelector('.modal-backdrop:not(.hidden)')){
+    const key=e.key.toLowerCase(),undo=key==='z'&&!e.shiftKey,redo=(key==='z'&&e.shiftKey)||key==='y';
+    if((undo&&undoHistory.length)||(redo&&redoHistory.length)){
+      e.preventDefault();if(undo)undoEdit();else redoEdit();restoreEditingFocus(focus);return;
+    }
+  }
+  const writing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''} });
 }
 installPanelResizers();
