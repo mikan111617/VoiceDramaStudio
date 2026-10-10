@@ -504,3 +504,32 @@ def test_project_rename_button_is_connected():
     js = (Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
     assert 'renameProjectTitle' in js and 'renameProjectBtn' in js
     assert "json('PATCH'" in js and 'renameCurrentProject()' in js
+
+
+def test_project_title_rename_works_via_legacy_save_endpoint(client):
+    """The existing PUT route works even on installations without PATCH /title."""
+    s=project(client)
+    pid=s['id']
+    sid=s['scenes'][0]['id']
+    original_id=s['id']
+    s['lines'].append(core.new_line(sid,'真歩流','これは音声ドラマです'))
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    old_revision=s['revision']
+    s['title']='変更後の作品名'
+    response=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':old_revision})
+    assert response.status_code==200,response.text
+    changed=response.json()
+    assert changed['id']==original_id
+    assert changed['title']=='変更後の作品名'
+    assert changed['lines'][0]['text']=='これは音声ドラマです'
+    assert changed['revision']==old_revision+1
+    assert client.get(f'/api/projects/{pid}').json()['title']=='変更後の作品名'
+    # Stale requests may not silently overwrite another browser's edits.
+    assert client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':old_revision}).status_code==409
+
+
+def test_rename_ui_uses_backwards_compatible_save_endpoint():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    fragment=js[js.index('async function renameCurrentProject()'):js.index('function openSettings(){')]
+    assert "json('PUT',{state:renamedState,expectedRevision:state.revision})" in fragment
+    assert "json('PATCH'" not in fragment

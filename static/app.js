@@ -321,7 +321,11 @@ async function renameCurrentProject(){
  const btn=$('renameProjectBtn');if(btn)btn.disabled=true;
  try{
   await saveNow();
-  const saved=await req(`/api/projects/${state.id}/title`,json('PATCH',{title,expectedRevision:state.revision}));
+  // Use the existing project-save endpoint. It also works when an older
+  // local server process is still running with a newer browser UI.
+  const renamedState=structuredClone(state);
+  renamedState.title=title;
+  const saved=await req(`/api/projects/${state.id}`,json('PUT',{state:renamedState,expectedRevision:state.revision}));
   state=saved;renderSidebar();$('saveState').textContent='保存済み';closeModal();toast('プロジェクト名を変更しました');
  }catch(e){toast('名前を変更できません: '+e.message,true);if(btn)btn.disabled=false}
 }
