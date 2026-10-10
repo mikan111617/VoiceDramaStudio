@@ -23,7 +23,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.4")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.5")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -164,7 +164,7 @@ def download_audio_asset(pid: str, aid: str):
         audio = next((a for a in state['assets'] if a['id'] == aid), None)
         if audio is None:
             raise FileNotFoundError('音声が見つかりません')
-        physical = core.workdir(pid) / 'assets' / audio['filename']
+        physical = core.asset_path(pid, audio)
         if not physical.is_file():
             raise FileNotFoundError('音声ファイルが見つかりません')
         name = str(audio.get('name') or audio['filename']).replace('\\', '/').split('/')[-1]
@@ -262,7 +262,7 @@ def asset_stream(pid:str,aid:str):
     try:
         s=core.load_project(pid)
         a=next(x for x in s['assets'] if x['id']==aid)
-        p=core.workdir(pid)/'assets'/a['filename']
+        p=core.asset_path(pid, a)
         if not p.is_file():raise FileNotFoundError('Audio file missing')
         return FileResponse(p,filename=a['name'],content_disposition_type='inline')
     except (StopIteration,ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
@@ -405,7 +405,7 @@ def run_generation(job_id,pid,line_ids,steps):
             refs=[]
             for aid in voice.get('refs',[]):
                 asset=asset_map.get(aid)
-                if asset:refs.append(str(core.workdir(pid)/'assets'/asset['filename']))
+                if asset:refs.append(str(core.asset_path(pid,asset)))
             descriptor=voice.get('description','')
             spec={'id':line['id'],'text':line['text'],'caption':line.get('caption','') or descriptor,
                   'description':descriptor,'refs':refs,'mode':mode,'language':resolved['language'],
@@ -525,6 +525,7 @@ def run_voice_design(job_id,pid,speaker,text):
                     if engine=='qwen':dest['model']='Qwen/Qwen3-TTS-12Hz-1.7B-Base'
                     core.save_project(pid,latest)
             job['completed']=1
+            job['referenceAssetId']=registered['asset']['id']
             job['message']='声のサンプルを生成してキャストの参照音声に登録しました'
             job['status']='done'
     except Exception as exc:

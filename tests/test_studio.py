@@ -186,7 +186,7 @@ def test_batch_upload_assigns_in_file_order_and_keeps_old_takes(client):
     assert len(s['lines'][0]['takes'])==2 and s['lines'][0]['takes'][0]['id']==old_take_id
     assert [c['lineId'] for c in s['clips']]==[l['id'] for l in lines]
     assert [round(c['start'],2) for c in s['clips']]==[0,.5,1.0]
-    assert len(list((core.workdir(pid)/'assets').glob('*.wav')))==4
+    assert len(list((core.workdir(pid)/'dialogue_audio').glob('*.wav')))==4
     assert s['revision']==5 # create, save lines, upload original, attach original, entire batch
     rr=client.post(f'/api/projects/{pid}/render',json={'sceneId':sid,'format':'wav'})
     assert rr.status_code==200,rr.text
@@ -268,7 +268,7 @@ def test_cast_references_are_separate_from_dialogue_assets(client):
 
 def test_unused_asset_trash_and_restore(client):
     s=project(client);pid=s['id'];asset=upload(client,pid)
-    original=core.workdir(pid)/'assets'/asset['filename']
+    original=core.asset_path(pid, asset)
     assert original.is_file()
     response=client.delete(f'/api/projects/{pid}/assets/{asset["id"]}')
     assert response.status_code==200,response.text
@@ -395,8 +395,8 @@ def test_copy_selected_casts_with_independent_reference_assets(client):
     assert copied_shared != shared['id']
     assert all(a['kind'] == 'reference' for a in dest['assets'])
     by_id = {a['id']: a for a in dest['assets']}
-    dest_file = core.workdir(tid) / 'assets' / by_id[copied_shared]['filename']
-    src_file = core.workdir(pid) / 'assets' / shared['filename']
+    dest_file = core.asset_path(tid, by_id[copied_shared])
+    src_file = core.asset_path(pid, shared)
     assert dest_file.read_bytes() == src_file.read_bytes()
     assert client.delete(f'/api/projects/{pid}/assets/{shared["id"]}?detach=true').status_code == 200
     assert dest_file.exists()
@@ -451,7 +451,7 @@ def test_copy_casts_missing_source_reference_is_atomic(client):
     src = client.get(f'/api/projects/{src["id"]}').json()
     src['voices'] = [{'name': '零度', 'refs': [ref['id']]}]
     src = client.put(f'/api/projects/{src["id"]}', json={'state': src, 'expectedRevision': src['revision']}).json()
-    (core.workdir(src['id']) / 'assets' / ref['filename']).unlink()
+    (core.asset_path(src['id'], ref)).unlink()
     r = client.post(f'/api/projects/{src["id"]}/casts/copy', json={
         'targetProjectId': tgt['id'], 'castNames': ['零度']})
     assert r.status_code == 400, r.text
@@ -508,7 +508,7 @@ def test_excel_replace_discards_old_script_but_keeps_audio_and_casts(client):
     assert {x['id'] for x in s['clips']}=={'clip_fx_independent',*{c['id'] for c in orig['clips'] if c.get('lineId')==retained['id']}}
     assert s['voices'][0]['description']=='探偵' and s['voices'][0]['refs']==[ref['id']]
     assert len(s['assets'])==2
-    assert (core.workdir(pid)/'assets'/ref['filename']).exists()
+    assert (core.asset_path(pid, ref)).exists()
     backup=core.workdir(pid)/'backups'/summary['backup']
     assert backup.exists()
     import json
@@ -687,8 +687,8 @@ def test_script_clear_replaces_wrong_import_and_retains_cast_audio(client):
     assert backup.is_file()
     original=__import__('json').loads(backup.read_text(encoding='utf-8'))
     assert len(original['lines'])==2 and len(original['clips'])==1
-    assert (core.workdir(pid)/'assets'/audio['filename']).is_file()
-    assert (core.workdir(pid)/'assets'/ref['filename']).is_file()
+    assert (core.asset_path(pid, audio)).is_file()
+    assert (core.asset_path(pid, ref)).is_file()
     import io as _io
     import openpyxl as _openpyxl
     wb=_openpyxl.Workbook();ws=wb.active;ws.title='新しい第一幕'
@@ -962,8 +962,8 @@ def test_selected_scene_takes_zip_uses_only_selected_take_and_custom_names(clien
     assert 'attachment' in r.headers['content-disposition']
     with ZipFile(io.BytesIO(r.content)) as archive:
         assert archive.namelist() == ['会話.wav','会話 (2).wav']
-        assert archive.read('会話.wav') == (core.workdir(pid)/'assets'/chosen['filename']).read_bytes()
-        assert archive.read('会話 (2).wav') == (core.workdir(pid)/'assets'/second['filename']).read_bytes()
+        assert archive.read('会話.wav') == (core.asset_path(pid, chosen)).read_bytes()
+        assert archive.read('会話 (2).wav') == (core.asset_path(pid, second)).read_bytes()
     after=client.get(f'/api/projects/{pid}').json()
     assert after['revision'] == revision+1  # one extra asset upload, no mutation by ZIP
     assert after['lines'][0]['takes'][0]['assetId'] == old_take['id']
@@ -991,7 +991,7 @@ def test_selected_scene_zip_uses_asset_names_when_no_custom_filename_and_avoids_
     assert r.status_code==200,r.text
     with ZipFile(io.BytesIO(r.content)) as archive:
         assert archive.namelist()==['VOICE.wav','voice (2).wav','voIce (3).wav']
-        assert all(archive.read(name)==(core.workdir(pid)/'assets'/audio['filename']).read_bytes()
+        assert all(archive.read(name)==(core.asset_path(pid, audio)).read_bytes()
                    for name in archive.namelist())
 
 
@@ -1006,7 +1006,7 @@ def test_selected_scene_zip_rejects_empty_invalid_scene_and_missing_audio(client
     state=client.put(f'/api/projects/{pid}',json={'state':state,'expectedRevision':state['revision']}).json()
     asset=upload(client,pid)
     client.post(f'/api/projects/{pid}/lines/{line["id"]}/attach/{asset["id"]}')
-    (core.workdir(pid)/'assets'/asset['filename']).unlink()
+    (core.asset_path(pid, asset)).unlink()
     r=client.get(route)
     assert r.status_code==404
 
@@ -1071,8 +1071,8 @@ def test_delete_unused_cast_preserves_audio_and_other_casts(client):
     assert after['revision']==original_revision+1
     assert after['assets']==s['assets']
     assert after['lines']==s['lines'] and after['clips']==s['clips']
-    assert (core.workdir(pid)/'assets'/reference['filename']).exists()
-    assert (core.workdir(pid)/'assets'/spoken['filename']).exists()
+    assert (core.asset_path(pid, reference)).exists()
+    assert (core.asset_path(pid, spoken)).exists()
     assert client.get(f'/api/projects/{pid}').json()['voices']==after['voices']
 
 
@@ -1115,3 +1115,104 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
     assert '/static/app.js?v=024' in html
+
+
+def test_asset_files_are_separated_and_servable(client):
+    s=project(client);pid=s['id']
+    ref=upload(client,pid,180,'reference')
+    voice=upload(client,pid,220,'voice')
+    sfx=upload(client,pid,330,'sfx')
+    assert core.asset_path(pid,ref).parent.name=='reference_audio'
+    assert core.asset_path(pid,voice).parent.name=='dialogue_audio'
+    assert core.asset_path(pid,sfx).parent.name=='assets'
+    for asset in (ref,voice,sfx):
+        assert core.asset_path(pid,asset).is_file()
+        response=client.get(f'/api/projects/{pid}/assets/{asset["id"]}')
+        assert response.status_code==200,response.text
+        assert response.content==core.asset_path(pid,asset).read_bytes()
+        downloaded=client.get(f'/api/projects/{pid}/assets/{asset["id"]}/download')
+        assert downloaded.status_code==200
+        assert downloaded.content==response.content
+    assert not list((core.workdir(pid)/'assets').glob('asset_*.wav')) or len(list((core.workdir(pid)/'assets').glob('asset_*.wav')))==1
+
+
+def test_existing_project_migrates_audio_without_changing_ids_takes_or_casts(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    l=core.new_line(sid,'愛理','確認です')
+    s['lines'].append(l)
+    s['voices']=[{'name':'愛理','engine':'irodori','model':'demo',
+                  'mode':'clone','language':'Japanese','refs':[]}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    ref=upload(client,pid,180,'reference')
+    dialogue=upload(client,pid,220,'voice')
+    effect=upload(client,pid,330,'sfx')
+    s=client.post(f'/api/projects/{pid}/lines/{l["id"]}/attach/{dialogue["id"]}').json()
+    s['voices'][0]['refs']=[ref['id']]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    revision=s['revision']
+    original={a['id']:core.asset_path(pid,a).read_bytes() for a in (ref,dialogue,effect)}
+    legacy=core.workdir(pid)/'assets'
+    for asset in (ref,dialogue):
+        core.asset_path(pid,asset).rename(legacy/asset['filename'])
+    assert not core.asset_path(pid,ref).exists()
+    assert not core.asset_path(pid,dialogue).exists()
+    # Opening the project triggers migration from the pre-v0.2.5 flat layout.
+    restored=client.get(f'/api/projects/{pid}')
+    assert restored.status_code==200,restored.text
+    newer=restored.json()
+    assert newer['revision']==revision
+    assert newer['voices'][0]['refs']==[ref['id']]
+    assert newer['lines'][0]['selectedTakeId']==s['lines'][0]['selectedTakeId']
+    for asset in (ref,dialogue,effect):
+        assert core.asset_path(pid,asset).read_bytes()==original[asset['id']]
+    assert not (legacy/ref['filename']).exists()
+    assert not (legacy/dialogue['filename']).exists()
+    assert (legacy/effect['filename']).is_file()
+    zip_url=f'/api/projects/{pid}/scenes/{sid}/selected-takes.zip'
+    assert client.get(zip_url).status_code==200
+    assert client.get(f'/api/projects/{pid}/assets/{ref["id"]}').status_code==200
+
+
+def test_reference_audio_trash_and_restore_in_separate_folder(client):
+    s=project(client);pid=s['id']
+    ref=upload(client,pid,200,'reference')
+    location=core.asset_path(pid,ref)
+    assert location.exists()
+    deleted=client.delete(f'/api/projects/{pid}/assets/{ref["id"]}')
+    assert deleted.status_code==200,deleted.text
+    assert not location.exists()
+    assert (core.workdir(pid)/'trash'/ref['filename']).exists()
+    result=client.post(f'/api/projects/{pid}/trash/assets/{ref["id"]}/restore')
+    assert result.status_code==200,result.text
+    assert location.exists()
+    assert client.get(f'/api/projects/{pid}/assets/{ref["id"]}').status_code==200
+
+
+def test_voice_design_generated_reference_has_preview_id_and_correct_location(client,monkeypatch):
+    import app as api
+    import json
+    s=project(client);pid=s['id']
+    s['voices']=[{'name':'愛理','engine':'qwen','model':'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+                'mode':'design','description':'さわやかな声','language':'Japanese','refText':'','refs':[]}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    monkeypatch.setattr(api,'python_for',lambda *_:sys.executable)
+    def fake_run(cmd,**kwargs):
+        job=json.loads(Path(cmd[-2]).read_text(encoding='utf8'))
+        source=Path(job['items'][0]['output'])
+        sf.write(source,np.zeros(4410,dtype='float32'),44100)
+        Path(cmd[-1]).write_text(json.dumps({'ok':True,'items':[{'id':'愛理','ok':True,'output':str(source)}]}))
+        return type('Completed',(),{'returncode':0})()
+    monkeypatch.setattr(api.subprocess,'run',fake_run)
+    jid=core.uid('job');api.JOBS[jid]={'status':'running','total':1,'completed':0,'errors':[],'message':''}
+    api.run_voice_design(jid,pid,'愛理','こんにちは')
+    assert api.JOBS[jid]['status']=='done'
+    aid=api.JOBS[jid]['referenceAssetId']
+    state=client.get(f'/api/projects/{pid}').json()
+    asset=next(a for a in state['assets'] if a['id']==aid)
+    assert aid in state['voices'][0]['refs']
+    assert core.asset_path(pid,asset).parent.name=='reference_audio'
+    assert client.get(f'/api/projects/{pid}/assets/{aid}').status_code==200
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text('utf8')
+    assert 'cast-reference-preview' in js
+    assert 'previewDesignedReferenceBtn' in js
+    assert 'data-preview=' in js

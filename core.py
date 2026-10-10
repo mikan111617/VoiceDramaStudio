@@ -105,6 +105,51 @@ def workdir(project_id):
     return WORKSPACE / project_id
 
 
+def asset_subdir(kind):
+    """Human-readable physical folders; asset IDs/metadata stay unchanged."""
+    return "reference_audio" if kind == "reference" else "dialogue_audio" if kind == "voice" else "assets"
+
+
+def asset_path(project_id, asset):
+    """Canonical location for a registered asset, never a user-provided path."""
+    filename = asset.get("filename", "")
+    if not isinstance(filename, str) or not re.fullmatch(
+        r"asset_[a-f0-9]{16}\.(?:wav|mp3|flac|ogg|m4a|aac|opus)", filename
+    ):
+        raise ValueError("安全でない音声ファイル名です")
+    return workdir(project_id) / asset_subdir(asset.get("kind")) / filename
+
+
+def _migrate_audio_folders(project_id, state):
+    """Move old reference/dialogue files once, without changing project JSON.
+
+    Only actual asset entries are moved. An interrupted migration is restartable:
+    files already moved remain at their destination, missing files remain missing.
+    On an error, completed moves in this pass are rolled back.
+    """
+    root = workdir(project_id)
+    moves = []
+    try:
+        for asset in state.get("assets", []):
+            if asset.get("kind") not in ("reference", "voice"):
+                continue
+            new = asset_path(project_id, asset)
+            legacy = root / "assets" / asset["filename"]
+            if new.is_file() or not legacy.is_file():
+                continue
+            new.parent.mkdir(parents=True, exist_ok=True)
+            if new.exists():
+                raise RuntimeError(f"音声保存先が使用されています: {new.name}")
+            # Both paths are under the same project root, allowing atomic rename.
+            os.replace(legacy, new)
+            moves.append((legacy, new))
+    except Exception:
+        for original, moved in reversed(moves):
+            if moved.is_file() and not original.exists():
+                os.replace(moved, original)
+        raise
+
+
 def state_path(project_id):
     return workdir(project_id) / "project.json"
 
@@ -142,7 +187,8 @@ def create_project(title):
         project_id=uid('p')
         state=default_state(title,project_id)
         workdir(project_id).mkdir(parents=True)
-        (workdir(project_id)/"assets").mkdir()
+        for folder in ("assets", "dialogue_audio", "reference_audio"):
+            (workdir(project_id)/folder).mkdir()
         state=save_project(project_id,state)
         return state
 
@@ -174,10 +220,13 @@ def delete_cast(project_id, name, expected_revision):
 
 
 def load_project(project_id):
-    p=state_path(project_id)
-    if not p.is_file():
-        raise FileNotFoundError("Project not found")
-    return json.loads(p.read_text(encoding="utf-8"))
+    with LOCK:
+        p=state_path(project_id)
+        if not p.is_file():
+            raise FileNotFoundError("Project not found")
+        state=json.loads(p.read_text(encoding="utf-8"))
+        _migrate_audio_folders(project_id, state)
+        return state
 
 
 def save_project(project_id, state, expected_revision=None, *, allow_new_assets=False):
@@ -242,7 +291,7 @@ def export_scene_selected_takes_zip(project_id, scene_id, destination):
             filename = asset.get("filename", "")
             if not isinstance(filename, str) or Path(filename).name != filename:
                 raise ValueError("保存されている音声のパスが不正です")
-            audio_path = workdir(project_id) / "assets" / filename
+            audio_path = asset_path(project_id, asset)
             if not audio_path.is_file():
                 raise FileNotFoundError(f"音声ファイルが見つかりません: {line['id']}")
             extension = audio_path.suffix.lower()
@@ -383,7 +432,7 @@ def trash_asset(project_id, asset_id, *, detach=False):
         filename = str(asset.get("filename", ""))
         if not re.fullmatch(r"asset_[a-f0-9]{16}\.(wav|mp3|flac|ogg|m4a|aac|opus)", filename):
             raise ValueError("安全でない音声ファイル名です")
-        original = workdir(project_id) / "assets" / filename
+        original = asset_path(project_id, asset)
         destination = workdir(project_id) / "trash" / filename
         if destination.exists():
             raise RuntimeError("ゴミ箱内に同名の音声が存在します")
@@ -448,9 +497,10 @@ def restore_asset(project_id, asset_id):
         if not re.fullmatch(r"asset_[a-f0-9]{16}\.(wav|mp3|flac|ogg|m4a|aac|opus)", filename):
             raise ValueError("安全でない音声ファイル名です")
         source = workdir(project_id) / "trash" / filename
-        target = workdir(project_id) / "assets" / filename
+        target = asset_path(project_id, asset)
         if not source.is_file() or target.exists():
             raise RuntimeError("復元する音声が見つからないか、保存先に既に存在します")
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
         state["assets"].append(asset)
         try:
@@ -524,14 +574,13 @@ def copy_casts(source_project_id, target_project_id, cast_names, *, conflict="sk
                     refs_required.append(asset_id)
 
         sources = {}
-        source_assets_dir = (workdir(source_project_id) / "assets").resolve()
         for asset_id in refs_required:
             asset = asset_lookup[asset_id]
             filename = str(asset.get("filename", ""))
             if not filename or Path(filename).name != filename or Path(filename).suffix.lower() not in SUPPORTED_AUDIO_EXTS:
                 raise ValueError(f"参照音声のファイル名が不正です: {asset_id}")
-            source_file = (source_assets_dir / filename).resolve()
-            if source_file.parent != source_assets_dir or not source_file.is_file():
+            source_file = asset_path(source_project_id, asset).resolve()
+            if not source_file.is_file():
                 raise FileNotFoundError(f"参照音声の実体が見つかりません: {asset.get('name', asset_id)}")
             sources[asset_id] = source_file
 
@@ -539,7 +588,7 @@ def copy_casts(source_project_id, target_project_id, cast_names, *, conflict="sk
         copied_paths = []
         ref_map = {}
         try:
-            target_dir = workdir(target_project_id) / "assets"
+            target_dir = workdir(target_project_id) / asset_subdir("reference")
             target_dir.mkdir(parents=True, exist_ok=True)
             for source_aid, source_file in sources.items():
                 source_asset = asset_lookup[source_aid]
@@ -906,7 +955,7 @@ def register_asset(project_id,src_path,name,kind="other"):
         if ext not in (".wav",".mp3",".flac",".ogg",".m4a",".aac",".opus"):
             raise ValueError("WAV / MP3 / FLAC / OGG / M4A / AAC / OPUSのみ対応")
         asset_id=uid("asset")
-        dest=workdir(project_id)/"assets"/(asset_id+ext)
+        dest=workdir(project_id)/asset_subdir(kind)/(asset_id+ext)
         dest.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(src_path,dest)
         from render import duration_of
@@ -975,7 +1024,7 @@ def import_audio_batch(project_id, items, kind="voice", line_ids=None, cast_name
             for (path, name), duration, line_id in zip(items, durations, line_ids):
                 ext = Path(name.replace('\\', '/')).suffix.lower()
                 aid = uid('asset')
-                dest = workdir(project_id) / 'assets' / (aid + ext)
+                dest = workdir(project_id) / asset_subdir(kind) / (aid + ext)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, dest)
                 copied.append(dest)

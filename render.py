@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 import soundfile as sf
+from core import asset_path
 
 SR=44100
 
@@ -74,7 +75,7 @@ def render_project(s,project_root,out_path,format_name='wav',scene_id=None):
             aid=asset['id']
             if aid not in pcm_cache:
                 f=tmp/(aid+'.wav')
-                to_pcm(project_root/'assets'/asset['filename'],f)
+                to_pcm(asset_path(s['id'], asset), f)
                 pcm_cache[aid]=f
             with sf.SoundFile(str(pcm_cache[aid])) as wav:
                 src_length=len(wav)
