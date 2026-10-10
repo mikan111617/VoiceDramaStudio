@@ -299,7 +299,32 @@ async function commitCastCopy(){
     if(created)toast('コピー用プロジェクトが作成されましたが、キャストのコピーは完了していません',true);
   }
 }
-async function openProjects(){try{await saveNow();const list=await req('/api/projects');modal(`<h2>プロジェクトを選択</h2><p>プロジェクトごとに台本・音声素材・編集状態を分けて保存します。</p>${list.map(x=>`<button class="project-choice" data-open="${esc(x.id)}">${esc(x.title)}<small>${esc(x.updatedAt||'')}</small></button>`).join('')}<div class="field" style="margin-top:20px"><label>新規プロジェクト</label><input id="newProjectTitle" placeholder="作品タイトルを入力"></div><div class="modal-actions">${button('キャンセル','data-close="1"')}${button('新規作成','id="createProjectBtn"','primary')}</div>`)}catch(e){toast(e.message,true)}}
+async function openProjects(){
+ try{
+  await saveNow();
+  const list=await req('/api/projects');
+  modal(`<h2>プロジェクトの管理</h2><p>作品名の変更では台本や音声は失われません。</p>
+  <div class="field"><label for="renameProjectTitle">現在のプロジェクト名を変更</label>
+  <div class="project-rename-row"><input id="renameProjectTitle" maxlength="120" value="${esc(state.title)}" placeholder="作品タイトルを入力">
+  ${button('名前を変更','id="renameProjectBtn"','primary')}</div></div>
+  <div class="field" style="margin-top:20px"><label>プロジェクトを切り替える</label>
+  ${list.map(x=>`<button class="project-choice" data-open="${esc(x.id)}">${esc(x.title)}<small>${esc(x.updatedAt||'')}</small></button>`).join('')}</div>
+  <div class="field" style="margin-top:20px"><label>新規プロジェクト</label><input id="newProjectTitle" placeholder="作品タイトルを入力"></div>
+  <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('新規作成','id="createProjectBtn"','primary')}</div>`);
+ }catch(e){toast(e.message,true)}
+}
+async function renameCurrentProject(){
+ const input=$('renameProjectTitle'), title=input?.value?.trim()||'';
+ if(!title){toast('プロジェクト名を入力してください',true);input?.focus();return}
+ if(title.length>120){toast('プロジェクト名は120文字以内で入力してください',true);return}
+ if(title===state.title){toast('現在と同じ名前です');return}
+ const btn=$('renameProjectBtn');if(btn)btn.disabled=true;
+ try{
+  await saveNow();
+  const saved=await req(`/api/projects/${state.id}/title`,json('PATCH',{title,expectedRevision:state.revision}));
+  state=saved;renderSidebar();$('saveState').textContent='保存済み';closeModal();toast('プロジェクト名を変更しました');
+ }catch(e){toast('名前を変更できません: '+e.message,true);if(btn)btn.disabled=false}
+}
 function openSettings(){const c=state.settings||{};modal(`<h2>TTS・実行環境の設定</h2><p>ユーザーごとのPC環境を設定します。音声編集・再生はTTSを導入しなくても利用できます。</p><div class="field"><label>Irodori-TTSのフォルダ（infer.pyが入っている場所）</label><input id="settingIrodori" value="${esc(c.irodori_dir||'D:\\Irodori-TTS')}"></div><div class="field"><label>Irodori用Python実行ファイル（空欄は .venv\\Scripts\\python.exe）</label><input id="settingIrodoriPython" value="${esc(c.irodori_python||'')}"></div><div class="field"><label>Qwen3-TTS用Python実行ファイル（仮想環境）</label><input id="settingQwen" value="${esc(c.qwen_python||'')}"></div><div class="field"><label>台詞の標準の間（秒）</label><input id="settingGap" type="number" min="0" step="0.05" value="${esc(c.defaultGap??0.65)}"></div><p>GPU 12GB環境ではIrodori v4-Largeの通常版は厳しい場合があります。量子化モデルは「その他（直接入力）」で指定できます。</p><div class="modal-actions">${button('閉じる','data-close="1"')}${button('保存','id="saveSettingsBtn"','primary')}</div>`);$('saveSettingsBtn').onclick=()=>{state.settings={irodori_dir:$('settingIrodori').value.trim(),irodori_python:$('settingIrodoriPython').value.trim(),qwen_python:$('settingQwen').value.trim(),defaultGap:Math.max(0,Number($('settingGap').value)||0)};dirtyState();closeModal();toast('実行環境の設定を保存しました')}}
 async function playPreview(aid){try{stop();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
 async function ensureContext(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume()}
@@ -327,7 +352,8 @@ function handleGlobalClick(e){const target=e.target;
  if(target.closest('[data-trash]')){trashAsset(target.closest('[data-trash]').dataset.trash);return}
  if(target.id==='openTrashBtn'){openTrash();return}
  if(target.id==='trashSelectedBtn'){trashSelectedAssets();return}
- if(target.id==='createProjectBtn'){
+ if(target.id==='renameProjectBtn'){renameCurrentProject();return}
+  if(target.id==='createProjectBtn'){
    const title=$('newProjectTitle')?.value?.trim()||'無題の作品';target.disabled=true;
    createProject(title).then(()=>closeModal()).catch(err=>{toast('プロジェクトを作成できません: '+err.message,true);target.disabled=false});
    return;

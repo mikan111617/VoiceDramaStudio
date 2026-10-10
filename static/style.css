@@ -36,3 +36,8 @@
 .cast-copy-item input[type="checkbox"]{width:16px;height:16px;flex:0 0 16px;margin:0;accent-color:var(--accent)}
 .cast-copy-item span{flex:1;overflow-wrap:anywhere}
 .cast-copy-item b{margin:0}
+
+/* Current project display name editor */
+.project-rename-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.project-rename-row input{min-width:180px;flex:1 1 240px}
+.project-rename-row .btn{flex:0 0 auto}

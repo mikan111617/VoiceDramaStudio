@@ -466,3 +466,41 @@ def test_cast_copy_ui_has_bulk_single_and_all_actions():
     assert 'castCopyAllBtn' in js and 'castCopyNoneBtn' in js
     assert 'castCopyConfirmBtn' in js
     assert '/casts/copy' in js
+
+
+def test_project_rename_preserves_assets_casts_and_id(client):
+    initial = project(client)
+    pid = initial['id']
+    ref = upload(client, pid, kind='reference')
+    state = client.get(f'/api/projects/{pid}').json()
+    state['voices'] = [{'name': '真歩流', 'refs': [ref['id']]}]
+    state['lines'] = [core.new_line(state['scenes'][0]['id'], '真歩流', 'おはよう')]
+    state = client.put(f'/api/projects/{pid}', json={'state':state, 'expectedRevision':state['revision']}).json()
+    copy = {k:state[k] for k in ('id','scenes','lines','tracks','clips','assets','voices','settings')}
+    path = core.workdir(pid)/'assets'/ref['filename']
+    r = client.patch(f'/api/projects/{pid}/title', json={'title':'  新しい作品名  ', 'expectedRevision':state['revision']})
+    assert r.status_code == 200, r.text
+    after = r.json()
+    assert after['title'] == '新しい作品名'
+    assert after['revision'] == state['revision'] + 1
+    assert all(after[k] == value for k,value in copy.items())
+    assert path.exists()
+    assert any(p['id'] == pid and p['title'] == '新しい作品名' for p in client.get('/api/projects').json())
+    same = client.patch(f'/api/projects/{pid}/title', json={'title':after['title'], 'expectedRevision':after['revision']})
+    assert same.status_code == 200 and same.json()['revision'] == after['revision']
+
+
+def test_project_rename_rejects_invalid_title_and_conflicts(client):
+    state = project(client)
+    route = f'/api/projects/{state["id"]}/title'
+    for title in ('', '   ', 'x'*121, 'bad\nname'):
+        assert client.patch(route,json={'title':title}).status_code == 400
+    assert client.patch(route,json={'title':'新タイトル','expectedRevision':0}).status_code == 409
+    assert client.get(f'/api/projects/{state["id"]}').json()['title'] == state['title']
+    assert client.patch('/api/projects/p_0000000000000000/title',json={'title':'new'}).status_code == 404
+
+
+def test_project_rename_button_is_connected():
+    js = (Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert 'renameProjectTitle' in js and 'renameProjectBtn' in js
+    assert "json('PATCH'" in js and 'renameCurrentProject()' in js

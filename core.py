@@ -74,6 +74,27 @@ def create_project(title):
         return state
 
 
+def rename_project(project_id, title, expected_revision=None):
+    """Rename a project without changing its stable ID or linked assets."""
+    if not isinstance(title, str):
+        raise ValueError("プロジェクト名は文字列で入力してください")
+    new_title = title.strip()
+    if not new_title:
+        raise ValueError("プロジェクト名を入力してください")
+    if len(new_title) > 120:
+        raise ValueError("プロジェクト名は120文字以内で入力してください")
+    if any(ord(char) < 32 or ord(char) == 127 for char in new_title):
+        raise ValueError("プロジェクト名に制御文字は使用できません")
+    with LOCK:
+        state = load_project(project_id)
+        if expected_revision is not None and state["revision"] != int(expected_revision):
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+        if state["title"] == new_title:
+            return state
+        state["title"] = new_title
+        return save_project(project_id, state, expected_revision=state["revision"])
+
+
 def load_project(project_id):
     p=state_path(project_id)
     if not p.is_file():
