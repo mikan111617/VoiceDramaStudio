@@ -18,6 +18,79 @@ WORKSPACE = Path(os.getenv("VDS_WORKSPACE", str(ROOT / "workspace"))).resolve()
 LOCK = threading.RLock()
 
 
+# TTS installation paths are PC-wide, independent from script/project state.
+GLOBAL_TTS_DEFAULTS = {
+    "irodori_dir": "D:\\Irodori-TTS",
+    "irodori_python": "",
+    "qwen_python": "",
+}
+GLOBAL_TTS_KEYS = tuple(GLOBAL_TTS_DEFAULTS)
+
+
+def global_settings_path():
+    return WORKSPACE / "global_settings.json"
+
+
+def _atomic_save_global(data):
+    path = global_settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+
+
+def load_global_settings():
+    """Load common TTS paths. Import old project-specific settings only once.
+
+    Prefer the newest non-default configured value for each key; the original
+    project files are never mutated by migration. Once global_settings.json
+    exists, project files can no longer overwrite global settings.
+    """
+    with LOCK:
+        path = global_settings_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or any(k not in data for k in GLOBAL_TTS_KEYS):
+                raise ValueError("共通環境設定が破損しています。global_settings.jsonを確認してください")
+            return data
+        data = {**GLOBAL_TTS_DEFAULTS, "revision": 1}
+        chosen = set()
+        for project in list_projects():
+            try:
+                legacy = load_project(project["id"]).get("settings", {})
+                if not isinstance(legacy, dict):
+                    continue
+                for key in GLOBAL_TTS_KEYS:
+                    value = legacy.get(key)
+                    if (key not in chosen and isinstance(value, str) and value.strip()
+                            and value.strip() != GLOBAL_TTS_DEFAULTS[key]):
+                        data[key] = value.strip()
+                        chosen.add(key)
+            except (OSError, ValueError, KeyError):
+                continue
+        _atomic_save_global(data)
+        return data
+
+
+def save_global_settings(settings, expected_revision=None):
+    """Update shared paths with optimistic revision check, without modifying projects."""
+    with LOCK:
+        old = load_global_settings()
+        if expected_revision is not None and int(expected_revision) != old["revision"]:
+            raise RuntimeError("共通環境設定が別の画面で変更されました。再読み込みしてください。")
+        new = {}
+        for key in GLOBAL_TTS_KEYS:
+            value = settings.get(key)
+            if not isinstance(value, str) or len(value) > 2048 or any(ord(ch) < 32 for ch in value):
+                raise ValueError(f"{key} の設定が正しくありません")
+            new[key] = value.strip()
+        if all(old[key] == new[key] for key in GLOBAL_TTS_KEYS):
+            return old
+        result = {**new, "revision": old["revision"] + 1}
+        _atomic_save_global(result)
+        return result
+
+
 def uid(prefix="id"):
     return prefix + "_" + uuid.uuid4().hex[:16]
 
@@ -48,7 +121,7 @@ def default_state(title, project_id):
             {"id":"ambience", "name":"環境音", "kind":"ambience"},
         ],
         "clips": [], "assets": [], "voices": [],
-        "settings": {"irodori_dir": "D:\\Irodori-TTS", "irodori_python": "", "qwen_python": "", "defaultGap":0.65},
+        "settings": {"defaultGap":0.65},
     }
 
 

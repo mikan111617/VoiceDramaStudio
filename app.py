@@ -22,7 +22,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.0")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.1")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -38,6 +38,32 @@ def home():return FileResponse(core.ROOT/'static'/'index.html')
 
 @app.get('/api/status')
 def status():return {'ok':True,'ffmpeg':bool(ffmpeg_bin()),'workspace':str(WORKSPACE),'python':sys.version.split()[0]}
+
+class GlobalSettingsUpdate(BaseModel):
+    irodori_dir: str
+    irodori_python: str
+    qwen_python: str
+    expectedRevision: int | None = None
+
+@app.get('/api/settings/global')
+def global_settings_get():
+    try:
+        return core.load_global_settings()
+    except (ValueError, OSError) as exc:
+        raise HTTPException(500, str(exc))
+
+@app.put('/api/settings/global')
+def global_settings_put(body: GlobalSettingsUpdate):
+    try:
+        return core.save_global_settings({
+            "irodori_dir": body.irodori_dir,
+            "irodori_python": body.irodori_python,
+            "qwen_python": body.qwen_python,
+        }, body.expectedRevision)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc))
 
 @app.get('/api/projects')
 def projects():return core.list_projects()
@@ -305,7 +331,7 @@ class Generation(BaseModel):
 
 
 def python_for(engine,s):
-    settings=s.get('settings',{})
+    settings=core.load_global_settings()
     if engine=='irodori':
         directory=Path(str(settings.get('irodori_dir',''))).expanduser()
         if not (directory/'infer.py').is_file():raise ValueError('設定画面でIrodori-TTSのフォルダを指定してください。infer.pyが見つかりません。')
@@ -350,7 +376,7 @@ def run_generation(job_id,pid,line_ids,steps):
             with tempfile.TemporaryDirectory(prefix='vds_tts_') as fdir:
                 folder=Path(fdir)
                 for it in items:it['output']=str(folder/(it['id']+'.wav'))
-                payload={'engine':engine,'model':model,'irodori_dir':latest.get('settings',{}).get('irodori_dir',''),'items':items}
+                payload={'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],'items':items}
                 jobfile=folder/'request.json';resfile=folder/'response.json'
                 jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
                 job['message']=f'{engine}: {model} を実行中 ({len(items)} 件)'
@@ -432,7 +458,7 @@ def run_voice_design(job_id,pid,speaker,text):
         job['message']=f'{speaker}の新しい声をデザイン中...'
         with tempfile.TemporaryDirectory(prefix='vds_design_') as folder:
             folder=Path(folder);output=folder/'sample.wav'
-            payload={'engine':engine,'model':model,'irodori_dir':s.get('settings',{}).get('irodori_dir',''),
+            payload={'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],
                 'items':[{'id':speaker,'text':text,'caption':voice.get('description','') or '自然で聞き取りやすい話し方',
                     'description':voice.get('description',''),'output':str(output),
                     'mode':'design','refs':[],'language':voice.get('language','Japanese'),'num_steps':40}]}

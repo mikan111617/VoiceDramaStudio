@@ -378,7 +378,40 @@ async function commitCastCopy(){
   }
 }
 async function openProjects(){try{await saveNow();const list=await req('/api/projects');modal(`<h2>プロジェクトを選択</h2><p>プロジェクトごとに台本・音声素材・編集状態を分けて保存します。</p>${list.map(x=>`<button class="project-choice" data-open="${esc(x.id)}">${esc(x.title)}<small>${esc(x.updatedAt||'')}</small></button>`).join('')}<div class="field" style="margin-top:20px"><label>新規プロジェクト</label><input id="newProjectTitle" placeholder="作品タイトルを入力"></div><div class="modal-actions">${button('キャンセル','data-close="1"')}${button('新規作成','id="createProjectBtn"','primary')}</div>`)}catch(e){toast(e.message,true)}}
-function openSettings(){const c=state.settings||{};modal(`<h2>TTS・実行環境の設定</h2><p>ユーザーごとのPC環境を設定します。音声編集・再生はTTSを導入しなくても利用できます。</p><div class="field"><label>Irodori-TTSのフォルダ（infer.pyが入っている場所）</label><input id="settingIrodori" value="${esc(c.irodori_dir||'D:\\Irodori-TTS')}"></div><div class="field"><label>Irodori用Python実行ファイル（空欄は .venv\\Scripts\\python.exe）</label><input id="settingIrodoriPython" value="${esc(c.irodori_python||'')}"></div><div class="field"><label>Qwen3-TTS用Python実行ファイル（仮想環境）</label><input id="settingQwen" value="${esc(c.qwen_python||'')}"></div><div class="field"><label>台詞の標準の間（秒）</label><input id="settingGap" type="number" min="0" step="0.05" value="${esc(c.defaultGap??0.65)}"></div><p>GPU 12GB環境ではIrodori v4-Largeの通常版は厳しい場合があります。量子化モデルは「その他（直接入力）」で指定できます。</p><div class="modal-actions">${button('閉じる','data-close="1"')}${button('保存','id="saveSettingsBtn"','primary')}</div>`);$('saveSettingsBtn').onclick=()=>{state.settings={irodori_dir:$('settingIrodori').value.trim(),irodori_python:$('settingIrodoriPython').value.trim(),qwen_python:$('settingQwen').value.trim(),defaultGap:Math.max(0,Number($('settingGap').value)||0)};dirtyState();closeModal();toast('実行環境の設定を保存しました')}}
+async function openSettings(){
+ try{
+  const common=await req('/api/settings/global');
+  const project=state.settings||{};
+  modal(`<h2>TTS・実行環境の設定</h2>
+    <p>PC共通の設定です。すべてのプロジェクトで同じIrodori・Qwen環境を使用します。</p>
+    <div class="field"><label>Irodori-TTSのフォルダ（infer.pyが入っている場所）</label>
+      <input id="settingIrodori" value="${esc(common.irodori_dir||'')}"></div>
+    <div class="field"><label>Irodori用Python実行ファイル（空欄ならIrodoriフォルダ内の.venv）</label>
+      <input id="settingIrodoriPython" value="${esc(common.irodori_python||'')}"></div>
+    <div class="field"><label>Qwen3-TTS用Python実行ファイル（仮想環境）</label>
+      <input id="settingQwen" value="${esc(common.qwen_python||'')}"></div>
+    <div class="field"><label>このプロジェクトだけ：台詞の標準の間（秒）</label>
+      <input id="settingGap" type="number" min="0" step="0.05" value="${esc(project.defaultGap??0.65)}"></div>
+    <p class="small muted">共通設定はworkspace/global_settings.jsonに保存します。既存作品の設定は初回だけ自動で引き継ぎます。</p>
+    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('設定を保存','id="saveSettingsBtn"','primary')}</div>`);
+  $('saveSettingsBtn').onclick=async()=>{
+    const btn=$('saveSettingsBtn');btn.disabled=true;
+    const settings={irodori_dir:$('settingIrodori').value.trim(),
+      irodori_python:$('settingIrodoriPython').value.trim(),
+      qwen_python:$('settingQwen').value.trim(),expectedRevision:common.revision};
+    const gap=Number($('settingGap').value);
+    if(!Number.isFinite(gap)||gap<0){toast('台詞の間は0以上の秒数で指定してください',true);btn.disabled=false;return}
+    try{
+      await saveNow();
+      await req('/api/settings/global',json('PUT',settings));
+      if((state.settings?.defaultGap??0.65)!==gap){
+        state.settings={...state.settings,defaultGap:gap};dirtyState();await saveNow();
+      }
+      closeModal();toast('共通TTS設定を保存しました（全プロジェクトに適用）');
+    }catch(e){toast('設定の保存に失敗: '+e.message,true);btn.disabled=false}
+  };
+ }catch(e){toast('共通TTS設定を開けません: '+e.message,true)}
+}
 async function playPreview(aid){try{stop();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
 async function ensureContext(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume()}
 async function decodeAsset(id){if(audioCache.has(id))return audioCache.get(id);const promise=(async()=>{const r=await fetch(`/api/projects/${state.id}/assets/${id}`);if(!r.ok)throw new Error('音声を読み込めません');return ctx.decodeAudioData(await r.arrayBuffer())})();audioCache.set(id,promise);try{return await promise}catch(e){audioCache.delete(id);throw e}}

@@ -819,3 +819,110 @@ def test_script_clear_and_filename_ui_have_controls():
     assert 'data-line-field="outputFilename"' in js
     assert 'id="downloadTakeBtn"' in js
     assert 'confirmClearScriptBtn' in js
+
+
+def test_global_tts_settings_shared_across_projects(client, tmp_path):
+    """PC-wide TTS paths survive project switches, while gap remains project scoped."""
+    p1 = project(client)
+    p2 = client.post('/api/projects', json={'title': '別の作品'}).json()
+    initial = client.get('/api/settings/global').json()
+    expected = {
+        'irodori_dir': str(tmp_path / 'shared-irodori'),
+        'irodori_python': str(tmp_path / 'python-irodori.exe'),
+        'qwen_python': str(tmp_path / 'python-qwen.exe'),
+    }
+    updated = client.put('/api/settings/global', json={
+        **expected, 'expectedRevision':initial['revision'],
+    })
+    assert updated.status_code == 200, updated.text
+    saved = updated.json()
+    assert saved['revision'] == initial['revision'] + 1
+    assert all(saved[k] == expected[k] for k in expected)
+    assert (tmp_path / 'global_settings.json').exists()
+
+    # Both projects remain structurally intact; project-specific timing survives.
+    one = client.get(f'/api/projects/{p1["id"]}').json()
+    two = client.get(f'/api/projects/{p2["id"]}').json()
+    one['settings']['defaultGap'] = 1.3
+    one = client.put(f'/api/projects/{p1["id"]}', json={'state':one, 'expectedRevision':one['revision']}).json()
+    assert client.get(f'/api/projects/{p2["id"]}').json()['settings']['defaultGap'] == .65
+    assert client.get(f'/api/projects/{p1["id"]}').json()['settings']['defaultGap'] == 1.3
+    assert client.get('/api/settings/global').json() == saved
+
+    # New projects also use the same global settings.
+    fresh = client.post('/api/projects', json={'title':'三本目'}).json()
+    assert fresh['settings'] == {'defaultGap': .65}
+    assert client.get('/api/settings/global').json() == saved
+
+
+def test_global_settings_legacy_migration_once_without_mutating_projects(client, tmp_path):
+    """Migrate project-specific TTS directories, then never re-import stale paths."""
+    old = project(client)
+    old['settings']['irodori_dir'] = 'E:\\Irodori-Custom'
+    old['settings']['irodori_python'] = 'E:\\Irodori-Custom\\venv\\python.exe'
+    old = client.put(f'/api/projects/{old["id"]}', json={
+        'state':old, 'expectedRevision':old['revision'],
+    }).json()
+    newer = client.post('/api/projects', json={'title':'次の作品'}).json()
+    newer['settings']['irodori_dir'] = 'D:\\Irodori-TTS' # legacy default, not user choice
+    newer['settings']['qwen_python'] = 'F:\\qwen\\python.exe'
+    newer = client.put(f'/api/projects/{newer["id"]}', json={
+        'state':newer, 'expectedRevision':newer['revision'],
+    }).json()
+
+    settings = client.get('/api/settings/global').json()
+    assert settings['irodori_dir'] == 'E:\\Irodori-Custom'
+    assert settings['irodori_python'] == 'E:\\Irodori-Custom\\venv\\python.exe'
+    assert settings['qwen_python'] == 'F:\\qwen\\python.exe'
+    # The original stored projects stay unmodified.
+    assert client.get(f'/api/projects/{old["id"]}').json()['revision'] == old['revision']
+    assert client.get(f'/api/projects/{newer["id"]}').json()['revision'] == newer['revision']
+    newer['settings']['irodori_dir'] = 'G:\\wrong-old-project-path'
+    client.put(f'/api/projects/{newer["id"]}', json={
+        'state':newer, 'expectedRevision':newer['revision'],
+    })
+    assert client.get('/api/settings/global').json() == settings
+
+
+def test_global_settings_validate_and_reject_stale(client):
+    initial = client.get('/api/settings/global').json()
+    old = initial['revision']
+    replacement = {'irodori_dir':'C:\\Irodori', 'irodori_python':'',
+                   'qwen_python':'', 'expectedRevision':old}
+    assert client.put('/api/settings/global', json=replacement).status_code == 200
+    assert client.put('/api/settings/global', json=replacement).status_code == 409
+    payload = {**replacement,'expectedRevision':old+1,'irodori_dir':'broken\npath'}
+    assert client.put('/api/settings/global', json=payload).status_code == 400
+    assert client.get('/api/settings/global').json()['irodori_dir'] == 'C:\\Irodori'
+
+
+def test_irodori_generation_uses_global_settings_not_old_project_paths(client, tmp_path, monkeypatch):
+    import app as api
+    s = project(client)
+    pid = s['id']
+    s['settings']['irodori_dir'] = 'C:\\OLD-PROJECT-ONLY'
+    s = client.put(f'/api/projects/{pid}', json={'state':s,'expectedRevision':s['revision']}).json()
+    global_path = tmp_path / 'shared-irodori'
+    global_path.mkdir()
+    (global_path / 'infer.py').write_text('# test',encoding='utf-8')
+    (global_path / '.venv' / 'Scripts').mkdir(parents=True)
+    exe = global_path / '.venv' / 'Scripts' / 'python.exe'
+    exe.write_text('mock', encoding='utf-8')
+    before = client.get('/api/settings/global').json()
+    saved = client.put('/api/settings/global', json={
+        'irodori_dir':str(global_path), 'irodori_python':'', 'qwen_python':'',
+        'expectedRevision':before['revision'],
+    })
+    assert saved.status_code == 200
+    assert api.python_for('irodori',core.load_project(pid)) == str(exe)
+    # Voice generation payload and Voice Design both read the shared path.
+    assert core.load_project(pid)['settings']['irodori_dir'] == 'C:\\OLD-PROJECT-ONLY'
+
+
+def test_global_settings_ui_load_and_save_api_wiring():
+    js = (Path(__file__).resolve().parents[1] / 'static' / 'app.js').read_text(encoding='utf-8')
+    modal_js = js[js.index('async function openSettings()'):js.index('async function playPreview(')]
+    assert "req('/api/settings/global')" in modal_js
+    assert "req('/api/settings/global',json('PUT',settings))" in modal_js
+    assert 'state.settings={...state.settings,defaultGap:gap}' in modal_js
+    assert 'state.settings||{}' in modal_js
