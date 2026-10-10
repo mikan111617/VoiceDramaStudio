@@ -147,6 +147,32 @@ def create_project(title):
         return state
 
 
+def delete_cast(project_id, name, expected_revision):
+    """Remove an unused cast profile; never delete media or rewrite dialogue."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("削除するキャスト名を指定してください")
+    if expected_revision is None:
+        raise ValueError("保存リビジョンを指定してください")
+    with LOCK:
+        state = load_project(project_id)
+        if int(state["revision"]) != int(expected_revision):
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+        matches = [voice for voice in state["voices"] if voice.get("name") == name]
+        if not matches:
+            raise FileNotFoundError("指定したキャストが見つかりません")
+        if len(matches) != 1:
+            raise ValueError("同名のキャストが複数あるため削除できません")
+        used_count = sum(line.get("speaker") == name for line in state["lines"])
+        if used_count:
+            raise RuntimeError(
+                f"「{name}」は{used_count}件の台詞で使用中です。"
+                "台詞の話者を変更してから削除してください。")
+        # Do not modify assets, takes, clips, or other projects. Reference audio
+        # remains in the library, even if this was its last cast reference.
+        state["voices"] = [v for v in state["voices"] if v.get("name") != name]
+        return save_project(project_id, state, expected_revision=expected_revision)
+
+
 def load_project(project_id):
     p=state_path(project_id)
     if not p.is_file():

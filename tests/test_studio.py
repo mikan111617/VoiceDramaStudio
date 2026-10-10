@@ -1027,7 +1027,7 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=023' in html
+    assert '/static/app.js?v=024' in html
     assert '/static/style.css?v=023' in html
 
 
@@ -1048,3 +1048,70 @@ def test_resizable_layout_saves_and_restores_without_mutating_project():
     assert "--vds-inspector-height" in css
     assert '@media(max-width:950px)' in css
     assert '.panel-resizer-vertical{display:none}' in css
+
+
+def test_delete_unused_cast_preserves_audio_and_other_casts(client):
+    s=project(client);pid=s['id']
+    reference=upload(client,pid,330,'reference')
+    spoken=upload(client,pid,440,'voice')
+    s=client.get(f'/api/projects/{pid}').json()
+    s['voices']=[
+        {'name':'間違えて作ったキャスト','engine':'irodori','model':'phasefield-audio/Irodori-TTS-v4.1-Anime',
+         'mode':'clone','description':'','language':'Japanese','refText':'','refs':[reference['id']]},
+        {'name':'正しいキャスト','engine':'irodori','model':'Aratako/Irodori-TTS-v4.1-Small',
+         'mode':'clone','description':'','language':'Japanese','refText':'','refs':[]},
+    ]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    original_revision=s['revision']
+    r=client.post(f'/api/projects/{pid}/casts/delete',json={
+        'name':'間違えて作ったキャスト','expectedRevision':s['revision']})
+    assert r.status_code==200,r.text
+    after=r.json()
+    assert [v['name'] for v in after['voices']]==['正しいキャスト']
+    assert after['revision']==original_revision+1
+    assert after['assets']==s['assets']
+    assert after['lines']==s['lines'] and after['clips']==s['clips']
+    assert (core.workdir(pid)/'assets'/reference['filename']).exists()
+    assert (core.workdir(pid)/'assets'/spoken['filename']).exists()
+    assert client.get(f'/api/projects/{pid}').json()['voices']==after['voices']
+
+
+def test_delete_cast_in_use_rejected_without_mutation(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    s['voices']=[{'name':'愛理','refs':[],'engine':'irodori','model':'Aratako/Irodori-TTS-v4.1-Small'}]
+    s['lines'].append(core.new_line(sid,'愛理','まだ使用中です'))
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    r=client.post(f'/api/projects/{pid}/casts/delete',json={'name':'愛理','expectedRevision':s['revision']})
+    assert r.status_code==409
+    assert '1件の台詞' in r.json()['detail']
+    assert client.get(f'/api/projects/{pid}').json()==s
+    # Once the speaker is corrected, deletion becomes possible.
+    s['lines'][0]['speaker']='真歩流'
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    r=client.post(f'/api/projects/{pid}/casts/delete',json={'name':'愛理','expectedRevision':s['revision']})
+    assert r.status_code==200,r.text
+    assert r.json()['lines'][0]['speaker']=='真歩流'
+
+
+def test_delete_cast_rejects_stale_missing_and_invalid(client):
+    s=project(client);pid=s['id']
+    s['voices']=[{'name':'試験','refs':[]}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    endpoint=f'/api/projects/{pid}/casts/delete'
+    assert client.post(endpoint,json={'name':'試験','expectedRevision':s['revision']-1}).status_code==409
+    assert client.post(endpoint,json={'name':'未登録','expectedRevision':s['revision']}).status_code==404
+    assert client.post(endpoint,json={'name':'','expectedRevision':s['revision']}).status_code==400
+    assert client.post(endpoint,json={'name':'試験'}).status_code==422
+    assert len(client.get(f'/api/projects/{pid}').json()['voices'])==1
+
+
+def test_cast_delete_ui_wired_and_cache_busted():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static/app.js').read_text(encoding='utf-8')
+    html=(root/'static/index.html').read_text(encoding='utf-8')
+    assert 'data-cast-delete' in js
+    assert 'openCastDelete(Number(castDelete.dataset.castDelete))' in js
+    assert 'confirmCastDeleteBtn' in js
+    assert '/casts/delete' in js
+    assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
+    assert '/static/app.js?v=024' in html

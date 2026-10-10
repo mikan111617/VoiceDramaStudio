@@ -23,7 +23,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.3")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.4")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -71,6 +71,23 @@ def projects():return core.list_projects()
 
 @app.post('/api/projects')
 def project_create(v:ProjectCreate):return core.create_project(v.title)
+
+class CastDeleteRequest(BaseModel):
+    name: str
+    expectedRevision: int
+
+
+@app.post('/api/projects/{pid}/casts/delete')
+def cast_delete(pid: str, body: CastDeleteRequest):
+    try:
+        return core.delete_cast(pid, body.name, body.expectedRevision)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
 
 class CastCopyRequest(BaseModel):
     targetProjectId: str
