@@ -1027,8 +1027,8 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=025' in html
-    assert '/static/style.css?v=025' in html
+    assert '/static/app.js?v=026' in html
+    assert '/static/style.css?v=026' in html
 
 
 def test_resizable_layout_saves_and_restores_without_mutating_project():
@@ -1114,7 +1114,7 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert 'confirmCastDeleteBtn' in js
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
-    assert '/static/app.js?v=025' in html
+    assert '/static/app.js?v=026' in html
 
 
 def test_asset_files_are_separated_and_servable(client):
@@ -1216,3 +1216,19 @@ def test_voice_design_generated_reference_has_preview_id_and_correct_location(cl
     assert 'cast-reference-preview' in js
     assert 'previewDesignedReferenceBtn' in js
     assert 'data-preview=' in js
+
+
+def test_cast_audio_preview_and_controls_stay_within_one_card():
+    root = Path(__file__).resolve().parents[1]
+    js = (root / 'static' / 'app.js').read_text(encoding='utf-8')
+    css = (root / 'static' / 'style.css').read_text(encoding='utf-8')
+    assert '<article class="cast-card" data-voice="${i}"' in js
+    assert '<header class="cast-card-heading">' in js
+    assert '<section class="cast-reference-section">' in js
+    assert '${esc(v.name)} の参照音声' in js
+    assert '<div class="asset-actions cast-card-actions">' in js
+    assert 'data-preview="${esc(a.id)}"' in js
+    assert 'data-cast-delete="${i}"' in js
+    assert '</div></article>`).join' in js
+    assert '.cast-card-actions' in css
+    assert '.cast-reference-section' in css

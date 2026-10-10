@@ -90,3 +90,22 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
  .editor-panel{grid-column:1;grid-row:1;min-height:400px}
  .workbench{grid-column:1;grid-row:2;min-height:650px}
 }
+
+
+/* Cast profiles: each voice sample and its actions belong to one clearly
+   outlined cast card (and no longer visually float into the next cast). */
+.cast-card{margin-bottom:30px;padding:22px 20px 19px;border:1px solid #455267;border-radius:13px;background:#191f2b;box-shadow:0 9px 22px #05081222}
+.cast-card-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 0 16px;border-bottom:1px solid #414c5d;margin-bottom:13px}
+.cast-identity{min-width:0}
+.cast-number,.cast-reference-kicker{display:block;font-size:10px;letter-spacing:1.8px;font-weight:700;color:var(--accent);margin-bottom:6px}
+.cast-card-heading h3{font-size:20px;letter-spacing:.1px;overflow-wrap:anywhere}
+.cast-reference-count{flex:none;padding:7px 10px;border-radius:7px;background:#283143;color:#b8c7d8;font-size:11px}
+.cast-fields{min-width:0}
+.cast-reference-section{margin-top:20px;border:1px solid #3c4d63;border-radius:10px;padding:15px 16px;background:#111925}
+.cast-reference-heading{padding-bottom:12px;border-bottom:1px solid #333f51;margin-bottom:10px}
+.cast-reference-heading h4{font-size:13px;margin:0;color:#e9edf5}
+.cast-reference-preview{display:grid;gap:8px;min-width:0}
+.cast-reference-preview .ref-row{margin:0;min-width:0}
+.cast-reference-preview .ref-row span{min-width:0;overflow-wrap:anywhere}
+.cast-card-actions{margin-top:18px;padding-top:16px;border-top:1px solid #414c5d;display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:600px){.cast-card{padding:15px 12px;margin-bottom:22px}.cast-card-heading{align-items:flex-start}.cast-reference-count{white-space:nowrap}.cast-reference-section{padding:12px}}
