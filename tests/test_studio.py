@@ -1027,8 +1027,8 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=024' in html
-    assert '/static/style.css?v=023' in html
+    assert '/static/app.js?v=025' in html
+    assert '/static/style.css?v=025' in html
 
 
 def test_resizable_layout_saves_and_restores_without_mutating_project():
@@ -1114,7 +1114,7 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert 'confirmCastDeleteBtn' in js
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
-    assert '/static/app.js?v=024' in html
+    assert '/static/app.js?v=025' in html
 
 
 def test_asset_files_are_separated_and_servable(client):
