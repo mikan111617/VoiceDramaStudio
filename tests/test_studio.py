@@ -1027,8 +1027,8 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=026' in html
-    assert '/static/style.css?v=026' in html
+    assert '/static/app.js?v=027' in html
+    assert '/static/style.css?v=027' in html
 
 
 def test_resizable_layout_saves_and_restores_without_mutating_project():
@@ -1114,7 +1114,7 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert 'confirmCastDeleteBtn' in js
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
-    assert '/static/app.js?v=026' in html
+    assert '/static/app.js?v=027' in html
 
 
 def test_asset_files_are_separated_and_servable(client):
@@ -1232,3 +1232,110 @@ def test_cast_audio_preview_and_controls_stay_within_one_card():
     assert '</div></article>`).join' in js
     assert '.cast-card-actions' in css
     assert '.cast-reference-section' in css
+
+
+def test_delete_scene_preserves_audio_casts_and_other_scenes(client):
+    import json
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    extra=core.uid('scene');s['scenes'].append({'id':extra,'name':'食堂'})
+    s['voices']=[{'name':'真歩流','engine':'irodori','model':core.DEFAULT_IRODORI_MODEL,'mode':'clone','refs':[]}]
+    bad=core.new_line(sid,'真歩流','消えるシーン')
+    good=core.new_line(extra,'真歩流','残るシーン')
+    s['lines']=[bad,good]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    sound=upload(client,pid,kind='voice')
+    s=client.get(f'/api/projects/{pid}').json()
+    core.attach_take(s,s['lines'][0],sound)
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    aid=sound['id'];location=core.asset_path(pid,sound)
+    assert location.exists()
+    bad_line_id=bad['id']
+    r=client.post(f'/api/projects/{pid}/scenes/{sid}/delete',json={'expectedRevision':s['revision']})
+    assert r.status_code==200,r.text
+    body=r.json();updated=body['project']
+    assert [x['id'] for x in updated['scenes']]==[extra]
+    assert [x['id'] for x in updated['lines']]==[good['id']]
+    assert all(c.get('sceneId')!=sid and c.get('lineId')!=bad_line_id for c in updated['clips'])
+    assert updated['voices']==s['voices']
+    assert [a['id'] for a in updated['assets']]==[aid]
+    assert location.exists()
+    backup=core.workdir(pid)/'backups'/body['summary']['backup']
+    assert backup.is_file()
+    assert json.loads(backup.read_text(encoding='utf-8'))['revision']==s['revision']
+    assert body['summary']['removedLines']==1
+    assert body['summary']['removedClips']==1
+
+
+def test_delete_last_scene_creates_blank_scene(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    s['lines'].append(core.new_line(sid,'愛理','削除'))
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    result=client.post(f'/api/projects/{pid}/scenes/{sid}/delete',json={'expectedRevision':s['revision']})
+    assert result.status_code==200,result.text
+    after=result.json()['project']
+    assert after['scenes']==[{'id':after['scenes'][0]['id'],'name':'シーン1'}]
+    assert after['scenes'][0]['id']!=sid
+    assert after['lines']==[] and after['clips']==[]
+
+
+def test_scene_delete_revision_conflict_and_missing_are_atomic(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    original=(core.workdir(pid)/'project.json').read_bytes()
+    assert client.post(f'/api/projects/{pid}/scenes/{sid}/delete',json={'expectedRevision':s['revision']-1}).status_code==409
+    assert client.post(f'/api/projects/{pid}/scenes/no-such-scene/delete',json={'expectedRevision':s['revision']}).status_code==404
+    assert (core.workdir(pid)/'project.json').read_bytes()==original
+    assert not (core.workdir(pid)/'backups').exists()
+
+
+def test_delete_selected_take_moves_media_to_trash_and_falls_back(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    line=core.new_line(sid,'真歩流','サブレ');s['lines']=[line]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    old=upload(client,pid,freq=440,kind='voice');new=upload(client,pid,freq=550,kind='voice')
+    s=client.get(f'/api/projects/{pid}').json()
+    core.attach_take(s,s['lines'][0],old)
+    core.attach_take(s,s['lines'][0],new)
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    line=s['lines'][0];selected=line['selectedTakeId'];previous=line['takes'][0]['id']
+    r=client.post(f'/api/projects/{pid}/lines/{line["id"]}/takes/{selected}/delete',json={'expectedRevision':s['revision']})
+    assert r.status_code==200,r.text
+    after=r.json()['project'];l=after['lines'][0]
+    assert len(l['takes'])==1 and l['selectedTakeId']==previous
+    assert l['takes'][0]['assetId']==old['id']
+    assert new['id'] not in {a['id'] for a in after['assets']}
+    assert not core.asset_path(pid,new).exists()
+    assert (core.workdir(pid)/'trash'/new['filename']).is_file()
+    assert any(c['assetId']==old['id'] for c in after['clips'] if c.get('lineId')==l['id'])
+    restored=client.post(f'/api/projects/{pid}/trash/assets/{new["id"]}/restore')
+    assert restored.status_code==200,restored.text
+    assert core.asset_path(pid,new).is_file()
+    assert len(restored.json()['project']['lines'][0]['takes'])==1  # no implicit relink
+
+
+def test_delete_take_protects_shared_media_and_revision(client):
+    s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
+    a=core.new_line(sid,'愛理','その1');b=core.new_line(sid,'愛理','その2')
+    s['lines']=[a,b];s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    audio=upload(client,pid,kind='voice');s=client.get(f'/api/projects/{pid}').json()
+    core.attach_take(s,s['lines'][0],audio)
+    core.attach_take(s,s['lines'][1],audio)
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    line=s['lines'][0];url=f'/api/projects/{pid}/lines/{line["id"]}/takes/{line["selectedTakeId"]}/delete'
+    assert client.post(url,json={'expectedRevision':s['revision']-1}).status_code==409
+    assert client.post(url,json={'expectedRevision':s['revision']}).status_code==409
+    assert core.asset_path(pid,audio).exists()
+    assert len(core.load_project(pid)['lines'][0]['takes'])==1
+    assert client.post(f'/api/projects/{pid}/lines/{line["id"]}/takes/missing/delete',json={'expectedRevision':s['revision']}).status_code==404
+
+
+def test_scene_and_take_delete_ui_wiring():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static/app.js').read_text(encoding='utf-8')
+    html=(root/'static/index.html').read_text(encoding='utf-8')
+    assert 'data-delete-scene=' in js
+    assert 'data-confirm-scene=' in js
+    assert 'confirmSceneDelete(' in js
+    assert '/scenes/${sid}/delete' in js
+    assert 'id="deleteSelectedTakeBtn"' in js
+    assert '/lines/${line.id}/takes/${take.id}/delete' in js
+    assert '/static/app.js?v=027' in html

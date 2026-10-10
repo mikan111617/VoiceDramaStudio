@@ -109,3 +109,11 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .cast-reference-preview .ref-row span{min-width:0;overflow-wrap:anywhere}
 .cast-card-actions{margin-top:18px;padding-top:16px;border-top:1px solid #414c5d;display:flex;gap:8px;flex-wrap:wrap}
 @media(max-width:600px){.cast-card{padding:15px 12px;margin-bottom:22px}.cast-card-heading{align-items:flex-start}.cast-reference-count{white-space:nowrap}.cast-reference-section{padding:12px}}
+
+/* Scene actions remain separate buttons; never nest controls inside buttons. */
+.scene-row{display:flex;align-items:center;min-width:0;gap:2px;border-radius:8px}
+.scene-row .scene-item{flex:1;min-width:0;width:auto}
+.scene-row .scene-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.scene-delete-btn{flex:none;width:28px;height:30px;border:1px solid transparent;border-radius:6px;background:transparent;color:#8b93a3;font-size:18px;cursor:pointer}
+.scene-row:hover .scene-delete-btn,.scene-delete-btn:focus-visible{color:#ef9b9d;border-color:#775052;background:#432629}
+.scene-delete-btn:hover{color:#fff;background:#773941}

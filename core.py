@@ -415,7 +415,7 @@ def _write_trash(project_id, entries):
     os.replace(tmp, path)
 
 
-def trash_asset(project_id, asset_id, *, detach=False):
+def trash_asset(project_id, asset_id, *, detach=False, expected_revision=None):
     """Move an asset to recoverable trash, optionally detaching every project reference.
 
     Linked assets are rejected by default. The audio file is moved rather than
@@ -423,6 +423,8 @@ def trash_asset(project_id, asset_id, *, detach=False):
     """
     with LOCK:
         state = load_project(project_id)
+        if expected_revision is not None and state["revision"] != int(expected_revision):
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
         asset = next((a for a in state["assets"] if a["id"] == asset_id), None)
         if asset is None:
             raise FileNotFoundError("音声素材が見つかりません")
@@ -469,7 +471,7 @@ def trash_asset(project_id, asset_id, *, detach=False):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(original), str(destination))
         try:
-            result = save_project(project_id, state)
+            result = save_project(project_id, state, expected_revision=expected_revision)
             entries.append({"asset": asset, "trashedAt": now(), "hadReferences": any(usage.values())})
             _write_trash(project_id, entries)
         except Exception:
@@ -733,6 +735,75 @@ HEADERS={
 
 def norm(s):
     return re.sub(r"\s+","",str(s or "").strip()).lower()
+
+
+def delete_scene(project_id, scene_id, expected_revision):
+    """Delete a single scene and its placements, leaving reusable audio untouched.
+
+    A last-scene deletion creates a fresh blank scene for the editor. The old
+    project JSON is backed up before saving; asset files and cast profiles are
+    not moved or removed.
+    """
+    with LOCK:
+        state = load_project(project_id)
+        original_revision = state["revision"]
+        if expected_revision is None or int(expected_revision) != original_revision:
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+        if not any(scene["id"] == scene_id for scene in state["scenes"]):
+            raise FileNotFoundError("削除するシーンが見つかりません")
+        old_lines = {line["id"] for line in state["lines"] if line["sceneId"] == scene_id}
+        old_clips_count = len(state["clips"])
+        state["scenes"] = [scene for scene in state["scenes"] if scene["id"] != scene_id]
+        state["lines"] = [line for line in state["lines"] if line["sceneId"] != scene_id]
+        state["clips"] = [clip for clip in state["clips"]
+                          if clip.get("sceneId") != scene_id
+                          and clip.get("lineId") not in old_lines
+                          and clip.get("anchorLineId") not in old_lines]
+        if not state["scenes"]:
+            state["scenes"] = [{"id": uid("scene"), "name": "シーン1"}]
+        validate_state(state, load_project(project_id))
+        backups = workdir(project_id) / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        backup_name = ("before_scene_delete_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+                       + "_" + uuid.uuid4().hex[:8] + ".json")
+        shutil.copy2(state_path(project_id), backups / backup_name)
+        saved = save_project(project_id, state, expected_revision=original_revision)
+        return {"project": saved, "summary": {"removedLines": len(old_lines),
+                "removedClips": old_clips_count - len(state["clips"]),
+                "backup": backup_name}}
+
+
+def delete_take_to_trash(project_id, line_id, take_id, expected_revision):
+    """Trash one take's sound file only when it has no other consumers.
+
+    Reuse the existing recoverable asset-trash semantics: any fallback take is
+    selected and the scene is reflowed. Shared audio is not silently removed.
+    """
+    with LOCK:
+        state = load_project(project_id)
+        if expected_revision is None or int(expected_revision) != state["revision"]:
+            raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
+        line = next((item for item in state["lines"] if item["id"] == line_id), None)
+        if line is None:
+            raise FileNotFoundError("台詞が見つかりません")
+        take = next((item for item in line.get("takes", []) if item["id"] == take_id), None)
+        if take is None:
+            raise FileNotFoundError("指定したテイクが見つかりません")
+        aid = take["assetId"]
+        uses = asset_usage(state, aid)
+        # Another take (even on the same line), another line, or a cast may
+        # depend on the very same file. Never detach them implicitly.
+        appearances = sum(t.get("assetId") == aid for l in state["lines"]
+                          for t in l.get("takes", []))
+        if appearances != 1 or uses["casts"]:
+            raise RuntimeError("この音声は他のテイクやキャストでも使用中です。音声ライブラリから管理してください。")
+        if any(c.get("lineId") != line_id or c.get("trackId") != "dialogue"
+               for c in state["clips"] if c.get("assetId") == aid):
+            raise RuntimeError("この音声は別のタイムライン配置でも使用中です。音声ライブラリから管理してください。")
+        result = trash_asset(project_id, aid, detach=True,
+                             expected_revision=expected_revision)
+        result["removedTakeId"] = take_id
+        return result
 
 
 def clear_script(project_id, expected_revision):

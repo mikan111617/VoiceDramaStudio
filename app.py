@@ -23,7 +23,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.6")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.7")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -133,6 +133,34 @@ class ScriptClearRequest(BaseModel):
 def clear_script(pid: str, body: ScriptClearRequest):
     try:
         return core.clear_script(pid, body.expectedRevision)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class DestructiveRevisionRequest(BaseModel):
+    expectedRevision: int
+
+
+@app.post('/api/projects/{pid}/scenes/{sid}/delete')
+def delete_scene(pid: str, sid: str, body: DestructiveRevisionRequest):
+    try:
+        return core.delete_scene(pid, sid, body.expectedRevision)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post('/api/projects/{pid}/lines/{lineid}/takes/{takeid}/delete')
+def delete_take(pid: str, lineid: str, takeid: str, body: DestructiveRevisionRequest):
+    try:
+        return core.delete_take_to_trash(pid, lineid, takeid, body.expectedRevision)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     except FileNotFoundError as exc:
