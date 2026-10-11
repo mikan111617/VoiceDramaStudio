@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=035' in html
+    assert 'game.js?v=036' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=035' in html
+    assert 'game.js?v=036' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -629,7 +629,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=035' in html
+    assert 'game.js?v=036' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -694,7 +694,7 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=035' in html and 'game.css?v=035' in html
+    assert 'game.js?v=036' in html and 'game.css?v=036' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -779,3 +779,160 @@ def test_sheet_update_keeps_filtered_voice_list_and_recalculates_tips(client):
     result=res.json()
     assert len(result['voices'])==1 and result['voices'][0]['voiceId']==old
     assert result['scenarios'][0]['ignoredSpeakers']=={'TIPS':1}
+
+
+
+def _stage_script(client,state,name,content):
+    response=client.post(f'/api/game/projects/{state["id"]}/stage-ks?expectedRevision={state["revision"]}',
+        files=[('files',(name,content.encode('utf-8'),'text/plain'))])
+    assert response.status_code==200,response.text
+    return response.json()
+
+
+def _finish_scripts(client,state):
+    return client.post(f'/api/game/projects/{state["id"]}/finalize-ks',
+        json={'expectedRevision':state['revision']})
+
+
+def test_stage_two_scenes_then_assign_all_ids_in_one_global_pass(client):
+    state=new_game(client)
+    state=_stage_script(client,state,'scene6.ks',
+        '#reido\n新しい台詞A。[p]\n#reido\n新しい台詞B。[p]\n')
+    assert not state['voices']
+    assert [x['key'] for x in state['pendingKS']]==['scene6']
+    assert state['lastIssued']==0
+    state=_stage_script(client,state,'scene7.ks',
+        '#mahoru\n[voice id="v00001"]\n以前から存在。[p]\n'
+        '#mahoru\n[voice id="v00002"]\nこちらも既存。[p]\n')
+    assert not state['voices']
+    assert len(state['pendingKS'])==2
+    response=_finish_scripts(client,state)
+    assert response.status_code==200,response.text
+    state=response.json()
+    assert not state['pendingKS']
+    voices={(v['scenario'],v['text']):v['voiceId'] for v in state['voices']}
+    assert voices[('scene7','以前から存在。')]=='v00001'
+    assert voices[('scene7','こちらも既存。')]=='v00002'
+    assert voices[('scene6','新しい台詞A。')]=='v00003'
+    assert voices[('scene6','新しい台詞B。')]=='v00004'
+    assert len(set(voices.values()))==4
+    assert state['lastIssued']==4
+    # Reload sheet must not allocate new identities.
+    source=client.get(f'/api/game/projects/{state["id"]}').json()
+    assert source['voices']==state['voices']
+    assert _finish_scripts(client,state).status_code==400
+
+
+def test_late_explicit_scene7_claims_scene6_generated_id_preserves_audio(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#reido\n後から追加した台詞。[p]\n',name='scene6.ks').json()
+    oldid=s['voices'][0]['voiceId']
+    assert oldid=='v00001'
+    v=s['voices'][0]
+    v['caption']='緊迫して話す'
+    v['audio']='reido/scene6/v00001.wav'
+    path=core.WORKSPACE/'game_voice'/s['id']/'audio'/v['audio']
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(short_wav())
+    game._write(s['id'],s)
+    s=_stage_script(client,s,'scene7.ks','#mahoru\n[voice id="v00001"]\n元の台詞。[p]\n')
+    assert next(v for v in s['voices'] if v['scenario']=='scene6')['voiceId']=='v00001'
+    r=_finish_scripts(client,s)
+    assert r.status_code==200,r.text
+    s=r.json()
+    by_scene={v['scenario']:v for v in s['voices']}
+    assert by_scene['scene7']['voiceId']=='v00001'
+    assert by_scene['scene6']['voiceId']=='v00002'
+    assert by_scene['scene6']['caption']=='緊迫して話す'
+    assert by_scene['scene6']['audio']=='reido/scene6/v00001.wav'
+    assert path.exists()  # no irreversible moves of original audio files
+    assert s['lastIdRemaps']==[{'scenario':'scene6','speaker':'reido',
+                               'oldId':'v00001','newId':'v00002'}]
+    z=client.get(f'/api/game/projects/{s["id"]}/export.zip')
+    assert z.status_code==200,z.text[:250]
+    with ZipFile(io.BytesIO(z.content)) as bundle:
+        names=bundle.namelist()
+        assert 'audio/reido/scene6/v00002.wav' in names
+        assert bundle.read('audio/reido/scene6/v00002.wav')==short_wav()
+        assert '[voice id="v00002"]' in bundle.read('voiced_scenarios/scene6.ks').decode('utf-8')
+        assert '[voice id="v00001"]' in bundle.read('voiced_scenarios/scene7.ks').decode('utf-8')
+
+
+def test_batch_old_and_new_scripts_prioritizes_existing_tags(client):
+    s=new_game(client)
+    files=[('files',('scene6.ks',b'#reido\nNew line.[p]\n','text/plain')),
+           ('files',('scene7.ks',b'#mahoru\n[voice id="v00001"]\nExisting line.[p]\n','text/plain'))]
+    r=client.post(f'/api/game/projects/{s["id"]}/import-ks?expectedRevision={s["revision"]}',files=files)
+    assert r.status_code==200,r.text
+    state=r.json()
+    assert next(x for x in state['voices'] if x['scenario']=='scene7')['voiceId']=='v00001'
+    assert next(x for x in state['voices'] if x['scenario']=='scene6')['voiceId']=='v00002'
+
+
+def test_true_duplicate_explicit_scene6_scene7_refused_atomically(client):
+    s=new_game(client)
+    s=_stage_script(client,s,'scene6.ks','#reido\n[voice id="v00352"]\n元の台詞A。[p]\n')
+    s=_stage_script(client,s,'scene7.ks','#mahoru\n[voice id="v00352"]\n元の台詞B。[p]\n')
+    r=_finish_scripts(client,s)
+    assert r.status_code==400,r.text
+    detail=r.json()['detail']
+    assert 'scene6.ks' in detail and 'scene7.ks' in detail
+    assert 'v00352' in detail
+    after=client.get(f'/api/game/projects/{s["id"]}').json()
+    assert after['revision']==s['revision']
+    assert not after['voices']
+    assert len(after['pendingKS'])==2
+    # Replace offending staged script before finalizing.
+    s=_stage_script(client,after,'scene7.ks','#mahoru\n[voice id="v00353"]\n元の台詞B。[p]\n')
+    r=_finish_scripts(client,s)
+    assert r.status_code==200,r.text
+    assert len({x['voiceId'] for x in r.json()['voices']})==2
+
+
+def test_tips_explicit_ids_still_reserved_across_scenarios(client):
+    s=new_game(client)
+    s=_stage_script(client,s,'scene6.ks','#TIPS\n[voice id="v00045"]\n説明です。[p]\n#reido\n新規。[p]\n')
+    s=_stage_script(client,s,'scene7.ks','#mahoru\n[voice id="v00046"]\n旧台詞。[p]\n')
+    r=_finish_scripts(client,s)
+    assert r.status_code==200,r.text
+    result=r.json()
+    assert result['scenarios'][0]['ignoredSpeakers']=={'TIPS':1}
+    assert len(result['voices'])==2
+    assert sorted(x['voiceId'] for x in result['voices'])==['v00046','v00047']
+
+
+def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client):
+    html=client.get('/game').text
+    assert 'id="finalizeKs"' in html
+    assert '全KSのボイスIDを一括確定' in html
+    js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
+    assert 'stage-ks?expectedRevision=' in js
+    assert '/finalize-ks' in js
+    assert 'game.js?v=036' in html
+
+
+def test_stage_blocks_early_generation_and_export(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\nもう保存済み。[p]\n',name='scene5.ks').json()
+    s=_stage_script(client,s,'scene6.ks','#reido\n新しい台詞。[p]\n')
+    output=client.get(f'/api/game/projects/{s["id"]}/export.zip')
+    assert output.status_code==400
+    assert '一括確定' in output.json()['detail']
+    generate=client.post(f'/api/game/projects/{s["id"]}/generate',json={
+         'voiceIds':[s['voices'][0]['voiceId']],'numSteps':40})
+    assert generate.status_code==400
+    assert '一括確定' in generate.json()['detail']
+
+
+def test_remapped_ids_manifest_included_in_game_export(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\n自動採番。[p]\n',name='scene6.ks').json()
+    s=_stage_script(client,s,'scene7.ks','#reido\n[voice id="v00001"]\n明示ID。[p]\n')
+    s=_finish_scripts(client,s).json()
+    raw=client.get(f'/api/game/projects/{s["id"]}/export.zip')
+    assert raw.status_code==200,raw.text[:200]
+    with ZipFile(io.BytesIO(raw.content)) as archive:
+        remaps=json.loads(archive.read('id_remaps.json'))
+        assert remaps==s['lastIdRemaps']
+        assert remaps[0]['oldId']=='v00001'
+        assert remaps[0]['newId']=='v00002'

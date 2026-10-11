@@ -13,3 +13,10 @@
 .binding-status{display:block;font-size:10px;color:#8fb6a5;font-weight:500;margin:3px 0 7px}
 .binding-status.sheet-only{color:#a9b3c7}
 .binding-unused{padding-left:10px;border-left:2px solid #48536a}
+
+/* Two-phase project-wide KS identity registration. */
+.id-import-help{margin:10px 0}
+.pending-ks-info{margin:10px 0;font-size:11px;line-height:1.6;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.pending-ks-info:not(:empty){padding:10px 12px;border-radius:8px;background:#253044;border:1px solid #49586e}
+.remap-info{margin:12px 0;font-size:11px;line-height:1.5;color:#f1cd91;white-space:pre-wrap;overflow-wrap:anywhere}
+.remap-info:not(:empty){padding:10px;border-radius:8px;background:#332c27;border:1px solid #73583b}

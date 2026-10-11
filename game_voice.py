@@ -84,7 +84,8 @@ def create_game(title='新しいゲーム音声'):
         s = {'id':pid, 'title':str(title).strip()[:120] or 'ゲーム音声', 'revision':1,
              'lastIssued':0, 'scenarios':[], 'voices':[], 'bindings':{},
              'characterSheet':{}, 'referenceCharacters':{}, 'nonCharacterSpeakers':[],
-             'speakerFilterEnabled':False, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice'}
+             'speakerFilterEnabled':False, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice',
+             'pendingKS':[], 'lastIdRemaps':[]}
         return _write(pid,s)
 
 
@@ -326,41 +327,189 @@ def _assign(s,scenario_key,rows,old_rows):
     return assigned
 
 
-def import_ks(pid,uploads,revision):
-    """Batch .ks import is atomic (invalid file causes no mutation)."""
+def _read_ks_uploads(uploads):
+    """Decode/validate uploads without touching the persistent project state."""
+    if not uploads or len(uploads)>30:
+        raise ValueError('一度に読み込めるKSは1〜30件です')
+    staged=[]; keys=set(); total=0
+    for raw_name,body in uploads:
+        name=Path(str(raw_name).replace('\\','/')).name
+        if not name.lower().endswith('.ks'):
+            raise ValueError('KSファイルのみ選択してください')
+        key=_clean_name(name[:-3])
+        if key in keys:
+            raise ValueError(f'同じ名前のKSが複数選択されています: {name}')
+        keys.add(key)
+        total+=len(body)
+        if len(body)>KS_MAX_BYTES or total>KS_TOTAL_MAX_BYTES:
+            raise ValueError(f'{name}: KSのサイズ上限を超えています')
+        try:
+            content,encoding=_decode_ks(body)
+            parse_ks(content)
+        except ValueError as exc:
+            raise ValueError(f'{name}: {exc}') from exc
+        staged.append({'key':key,'filename':name,'format':'ks','content':content,
+                       'encoding':encoding,'newline':'\r\n' if '\r\n' in content else '\n'})
+    return staged
+
+
+def _rebuild_all_ks(s, incoming=()):
+    """Two-pass project-wide allocator: reserve EVERY tagged KS ID first.
+
+    Explicit tags are authoritative, even if a previous import mistakenly
+    issued that number to an untagged line from another scenario. Only the
+    latter is renumbered; its caption and audio path are preserved. New IDs
+    are always above the historical issued number and all observed IDs.
+    """
+    original_voices=list(s['voices'])
+    old_by_scene=defaultdict(list)
+    for voice in original_voices:
+        old_by_scene[voice['scenario']].append(voice)
+    scenarios=list(s['scenarios'])
+    for sc in incoming:
+        scenarios=[old for old in scenarios if old['key']!=sc['key']]+[dict(sc)]
+    staged=[];explicit={};all_tags=set()
+    for sc in scenarios:
+        if sc.get('format')!='ks':
+            continue
+        try:
+            parsed=parse_ks(sc['content'])
+            rows,ignored=_filter_ks_rows(s,parsed)
+        except ValueError as exc:
+            raise ValueError(f'{sc.get("filename",sc["key"])}: {exc}') from exc
+        for row in parsed:
+            if row.get('existingId'):
+                all_tags.add(row['existingId'])
+        for row in rows:
+            vid=row.get('existingId')
+            if not vid:
+                continue
+            location=f'{sc.get("filename",sc["key"])} の {row.get("voiceTagLine") or row.get("sourceLine")}行目'
+            if vid in explicit:
+                raise ValueError(f'ボイスID {vid} がKS内で重複しています: {explicit[vid]} と {location}。'
+                                 '元シナリオに同じボイスIDが2つあります')
+            explicit[vid]=location
+        staged.append((sc,rows,ignored))
+    reserved=set(explicit)|all_tags
+    high=max([s.get('lastIssued',0),_issued(original_voices),
+              _issued([{'voiceId':v} for v in reserved])])
+    used=set(reserved)
+    changes=[]
+    def allocate():
+        nonlocal high
+        while True:
+            high+=1
+            vid=f'v{high:05d}'
+            if vid not in used:
+                used.add(vid)
+                return vid
+    rebuilt=[]
+    # JSON voice-list IDs are internally assigned (not embedded KS tags).
+    # Keep them unless an incoming KS asserts the same ID.
+    for voice in original_voices:
+        if any(sc['key']==voice['scenario'] for sc,_,_ in staged):
+            continue
+        v=dict(voice)
+        if v['voiceId'] in used:
+            old=v['voiceId'];v['voiceId']=allocate()
+            changes.append({'scenario':v['scenario'],'speaker':v['speaker'],
+                            'oldId':old,'newId':v['voiceId']})
+        else:
+            used.add(v['voiceId'])
+        rebuilt.append(v)
+    for sc,rows,ignored in staged:
+        previous=old_by_scene[sc['key']]
+        old_by_id={v['voiceId']:v for v in previous}
+        old_sig=[(v['speaker'],v.get('label',''),v.get('text','')) for v in previous]
+        new_sig=[(v['speaker'],v.get('label',''),v.get('text','')) for v in rows]
+        reused={}
+        for op,i1,i2,j1,j2 in difflib.SequenceMatcher(
+                a=old_sig,b=new_sig,autojunk=False).get_opcodes():
+            if op=='equal':
+                for i,j in zip(range(i1,i2),range(j1,j2)):
+                    reused[j]=previous[i]
+            elif op=='replace' and i2-i1==j2-j1:
+                for i,j in zip(range(i1,i2),range(j1,j2)):
+                    if previous[i]['speaker']==rows[j]['speaker']:
+                        reused[j]=previous[i]
+        # Already-claimed IDs in used include every explicit KS tag. For an
+        # explicit line that is its rightful owner, it is allowed by design.
+        for i,row in enumerate(rows):
+            explicit_id=row.get('existingId')
+            candidate=old_by_id.get(explicit_id) if explicit_id else reused.get(i)
+            if candidate and candidate.get('speaker')!=row['speaker']:
+                candidate=None
+            if explicit_id:
+                vid=explicit_id
+            elif candidate and candidate['voiceId'] not in used:
+                vid=candidate['voiceId']
+                used.add(vid)
+            else:
+                vid=allocate()
+                if candidate:
+                    changes.append({'scenario':sc['key'],'speaker':row['speaker'],
+                                    'oldId':candidate['voiceId'],'newId':vid})
+            # Source tags, speaker, script and stable previous metadata all
+            # survive; an ID remap only changes the game's identity field.
+            unchanged=bool(candidate and candidate.get('text')==row['text'])
+            item={'voiceId':vid,'speaker':row['speaker'],'scenario':sc['key'],'text':row['text'],
+                  'ttsText':candidate.get('ttsText',row['text']) if unchanged else row['text'],
+                  'caption':candidate.get('caption','') if candidate else '',
+                  'label':row.get('label',''),'sourceLine':row.get('sourceLine',0),
+                  'sourceEnd':row.get('sourceEnd',0),'voiceTagLine':row.get('voiceTagLine',0),
+                  'sourceId':candidate.get('sourceId','') if candidate else '',
+                  'audio':candidate.get('audio','') if candidate else '',
+                  'stale':bool(candidate and (candidate.get('stale') or
+                          (not unchanged and candidate.get('audio'))))}
+            rebuilt.append(item)
+        sc['count']=len(rows)
+        sc['ignoredSpeakers']=ignored
+    if len({v['voiceId'] for v in rebuilt})!=len(rebuilt):
+        raise ValueError('割り当て後のボイスIDが重複しています。データを変更せず中止しました')
+    s['voices']=rebuilt
+    s['scenarios']=scenarios
+    s['lastIssued']=high
+    s['lastIdRemaps']=changes[:1000]
+    return s
+
+
+def stage_ks(pid,uploads,revision):
+    """Store all source scripts first; do not generate any new voice IDs."""
+    incoming=_read_ks_uploads(uploads)
     with GAME_LOCK:
         s=_load(pid)
         if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
-        if not uploads or len(uploads)>30:raise ValueError('一度に読み込めるKSは1〜30件です')
-        target_keys=set()
-        staged=[]
-        for raw_name,body in uploads:
-            name=Path(str(raw_name).replace('\\','/')).name
-            if not name.lower().endswith('.ks'):raise ValueError('KSファイルのみ選択してください')
-            key=_clean_name(name[:-3]);
-            if key in target_keys:raise ValueError('同じ名前のシナリオが選択されています')
-            target_keys.add(key)
-            try:
-                decoded,encoding=_decode_ks(body)
-                parsed_rows=parse_ks(decoded)
-                new_rows, ignored=_filter_ks_rows(s,parsed_rows)
-                # Reserve IDs that were already tagged in the source even if
-                # they belong to a non-voice UI speaker; never issue them again.
-                s['lastIssued']=max(s['lastIssued'], _issued([{'voiceId':r['existingId']} for r in parsed_rows]))
-            except ValueError as exc:
-                raise ValueError(f'{name}: {exc}') from exc
-            staged.append((key,name,decoded,encoding,new_rows,ignored,'\r\n' if '\r\n' in decoded else '\n'))
-        for key,name,decoded,encoding,new_rows,ignored,newline in staged:
-            previous=[x for x in s['voices'] if x['scenario']==key]
-            try:
-                new_voices=_assign(s,key,new_rows,previous)
-            except ValueError as exc:
-                raise ValueError(f'{name}: {exc}') from exc
-            s['voices']=[v for v in s['voices'] if v['scenario']!=key]+new_voices
-            s['scenarios']=[sc for sc in s['scenarios'] if sc['key']!=key]+[{
-                'key':key,'filename':name,'format':'ks','content':decoded,
-                'encoding':encoding,'newline':newline,'count':len(new_voices),
-                'ignoredSpeakers':ignored}]
+        pending=list(s.get('pendingKS',[]))
+        for entry in incoming:
+            pending=[old for old in pending if old['key']!=entry['key']]
+            pending.append(entry)
+        if len(pending)>30:
+            raise ValueError('仮登録できるKSは最大30件です')
+        if sum(len(x['content'].encode(x.get('encoding','utf-8'))) for x in pending)>KS_TOTAL_MAX_BYTES:
+            raise ValueError('仮登録中のKSの合計が60MBを超えています')
+        s['pendingKS']=pending
+        return _save(pid,s,revision)
+
+
+def finalize_ks(pid,revision):
+    """Issue global IDs only after the user has finished registering scripts."""
+    with GAME_LOCK:
+        s=_load(pid)
+        if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
+        pending=s.get('pendingKS',[])
+        if not pending:raise ValueError('先にKSを仮登録してください')
+        _rebuild_all_ks(s,pending)
+        s['pendingKS']=[]
+        return _save(pid,s,revision)
+
+
+def import_ks(pid,uploads,revision):
+    """Backward-compatible immediate batch import, with global ID arbitration."""
+    incoming=_read_ks_uploads(uploads)
+    with GAME_LOCK:
+        s=_load(pid)
+        if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
+        _rebuild_all_ks(s,incoming)
         return _save(pid,s,revision)
 
 
@@ -544,27 +693,9 @@ def import_character_sheet(pid,body,revision):
         blocked=body.get('non_character_speakers',{})
         s['nonCharacterSpeakers']=list(blocked)[:1000]
         s['speakerFilterEnabled']=True
-        # Rebuild work rows from each *stored* KS, not just filter the current
-        # voice list. A previously unknown speaker (e.g. #arther / #maicro)
-        # was omitted on first import; adding aliases to the character sheet
-        # must make its original dialogue available without re-uploading KS.
-        # _assign prioritizes explicit [voice id] tags and retains existing
-        # captions/takes for the matching lines. A failed remap stays atomic.
-        for sc in s['scenarios']:
-            if sc.get('format')!='ks':
-                continue
-            try:
-                parsed=parse_ks(sc['content'])
-                rows,ignored=_filter_ks_rows(s,parsed)
-                s['lastIssued']=max(s['lastIssued'],_issued([
-                    {'voiceId':row.get('existingId','')} for row in parsed]))
-                previous=[v for v in s['voices'] if v['scenario']==sc['key']]
-                restored=_assign(s,sc['key'],rows,previous)
-            except ValueError as exc:
-                raise ValueError(f'{sc.get("filename",sc["key"])}: {exc}') from exc
-            s['voices']=[v for v in s['voices'] if v['scenario']!=sc['key']]+restored
-            sc['count']=len(restored)
-            sc['ignoredSpeakers']=ignored
+        # A changed sheet can uncover characters in previously stored KS.
+        # Revalidate and rebuild all scenes with one global ID reservation.
+        _rebuild_all_ks(s)
         return _save(pid,s,revision)
 
 
@@ -754,6 +885,8 @@ def _quoted_script(s,scenario):
 def make_export_zip(pid,destination):
     with GAME_LOCK:
         s=_load(pid)
+        if s.get('pendingKS'):
+            raise ValueError('仮登録中のKSがあります。先にボイスIDを一括確定してください')
         if not s['scenarios']:raise ValueError('シナリオを取り込んでください')
         fmt=s.get('format','wav').lstrip('.')
         if fmt not in ('wav','mp3'):raise ValueError('不正な音声形式です')
@@ -784,6 +917,7 @@ def make_export_zip(pid,destination):
                 z.writestr('voice_maps/'+sc['key']+'.json',json.dumps(scene_maps.get(sc['key'],{}),ensure_ascii=False,indent=2))
             z.writestr('voice_id_registry.json',json.dumps({'version':1,'last_issued':s['lastIssued'],
                 'voices':[{k:v.get(k) for k in ('voiceId','scenario','speaker','sourceLine','text','sourceId')} for v in s['voices']]},ensure_ascii=False,indent=2))
+            z.writestr('id_remaps.json',json.dumps(s.get('lastIdRemaps',[]),ensure_ascii=False,indent=2))
             z.writestr('.voice_id_state.json',json.dumps({'last_issued':s['lastIssued']},indent=2))
             z.writestr('voice_map.json',json.dumps(maps,ensure_ascii=False,indent=2))
             z.writestr('missing_voices.json',json.dumps(missing,ensure_ascii=False,indent=2))
@@ -802,6 +936,8 @@ def make_export_zip(pid,destination):
 
 def generation_groups(pid,ids):
     s=_load(pid)
+    if s.get('pendingKS'):
+        raise ValueError('仮登録中のKSがあります。先にボイスIDを一括確定してください')
     targets=[v for v in s['voices'] if v['voiceId'] in ids]
     plans=[]
     for v in targets:

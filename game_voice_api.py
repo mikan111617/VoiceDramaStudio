@@ -49,6 +49,30 @@ def get_game(gid:str):return _errors(game.get_game,gid)
 @router.put('/api/game/projects/{gid}')
 def update_game(gid:str,body:ChangeGame):return _errors(game.update_game,gid,body.changes,body.expectedRevision)
 
+@router.post('/api/game/projects/{gid}/stage-ks')
+async def stage_ks(gid:str,expectedRevision:int,files:list[UploadFile]=File(...)):
+    if not files or len(files)>30:raise HTTPException(400,'1〜30件のKSを選択してください')
+    data=[];total=0
+    for f in files:
+        raw=await f.read(game.KS_MAX_BYTES+1)
+        if len(raw)>game.KS_MAX_BYTES:
+            raise HTTPException(400,f'{f.filename or "KSファイル"}: 20MBの上限を超えています')
+        total+=len(raw)
+        if total>game.KS_TOTAL_MAX_BYTES:
+            raise HTTPException(400,'KSの合計サイズは60MB以内です')
+        data.append((f.filename or '',raw))
+    return _errors(game.stage_ks,gid,data,expectedRevision)
+
+
+class KSFinalize(BaseModel):
+    expectedRevision: int
+
+
+@router.post('/api/game/projects/{gid}/finalize-ks')
+def finalize_ks(gid:str,body:KSFinalize):
+    return _errors(game.finalize_ks,gid,body.expectedRevision)
+
+
 @router.post('/api/game/projects/{gid}/import-ks')
 async def import_ks(gid:str,expectedRevision:int,files:list[UploadFile]=File(...)):
     if not files or len(files)>30:raise HTTPException(400,'1〜30件のKSを選択してください')
