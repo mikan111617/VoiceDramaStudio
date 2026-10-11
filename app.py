@@ -23,7 +23,7 @@ import core
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.2.8")
+app=FastAPI(title="VoiceDrama Studio",version="0.2.9")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -604,7 +604,12 @@ def suggest_caption(pid:str,request:CaptionRequest):
         return {'caption':str(data.get('response','')).strip()[:360]}
     except Exception as e:raise HTTPException(503,'Ollama接続/生成エラー: '+str(e))
 
+# Game voice production is isolated from the VoiceDrama timelines and assets.
+from game_voice_api import router as game_router
+app.include_router(game_router)
+
 if __name__=='__main__':
     import uvicorn, webbrowser
     threading.Timer(1.3,lambda:webbrowser.open('http://127.0.0.1:'+os.getenv('VDS_PORT','8765'))).start()
     uvicorn.run(app,host='127.0.0.1',port=int(os.getenv('VDS_PORT','8765')))
+
