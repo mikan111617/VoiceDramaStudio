@@ -23,17 +23,59 @@ const rows=voicesOf();if(scen.format==='voice-list'){viewer.innerHTML=rows.map((
 const map=new Map(rows.map(v=>[v.sourceLine,v]));viewer.innerHTML=scen.content.split(/\r?\n/).map((line,index)=>{const n=index+1,v=map.get(n);return `<div class="source-line ${v?'voiced':''} ${v?.voiceId===focusedVoice?'selected':''}" ${v?`data-from-voice="${esc(v.voiceId)}"`:''}><span class="number">${n}</span><span>${v?'<b class="voice-id">'+esc(v.voiceId)+'</b>  ':''}${esc(line)||'&nbsp;'}</span></div>`}).join('');}
 function renderVoiceRows(){const query=$('voiceSearch').value.toLowerCase().trim();const rows=voicesOf().filter(v=>!query||[v.voiceId,v.sourceId,v.speaker,v.text,v.ttsText].join(' ').toLowerCase().includes(query));const wrap=$('voiceList');$('voiceCount').textContent=`${rows.length}/${voicesOf().length}`;wrap.innerHTML=rows.map(v=>`<div class="voice-row ${focusedVoice===v.voiceId?'selected':''}" data-voice="${esc(v.voiceId)}"><input type="checkbox" data-mark="${esc(v.voiceId)}" ${marked.has(v.voiceId)?'checked':''} aria-label="${esc(v.voiceId)}を生成対象に選ぶ"><span class="voice-id">${esc(v.voiceId)}</span><span class="voice-speaker" title="${esc(v.speaker)}">${esc(v.speaker)}</span><span class="voice-text" title="${esc(v.text)}">${esc(v.text)}</span><span class="voice-status ${v.stale?'stale':v.audio?'ready':''}">${displayStatus(v)}</span></div>`).join('')||'<div class="empty">該当する台詞がありません。</div>';$('selectAll').checked=rows.length>0&&rows.every(v=>marked.has(v.voiceId))}
 function focusVoice(id,scrollSource=false){focusedVoice=id;renderVoiceRows();renderSource();renderInspector();if(scrollSource)$('sourceViewer').querySelector(`[data-from-voice="${CSS.escape(id)}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}
-function renderInspector(){const wrap=$('inspector');const v=selectedVoice();if(!v){wrap.innerHTML='<div class="empty">台詞をクリックすると、演技指示を編集したり生成音声を試聴できます。</div>';return}const profile=game.characterSheet[v.speaker]||game.referenceCharacters?.[v.speaker];wrap.innerHTML=`<h2 class="voice-inspector-title">${esc(v.speaker)}</h2><div class="keypair"><span class="tag">${esc(v.voiceId)}</span><span class="muted">${esc(v.scenario)} ${v.sourceLine?'· line '+v.sourceLine:''}</span></div>${v.sourceId?`<div class="note">ゲーム内ID: <b>${esc(v.sourceId)}</b></div>`:''}<div class="field"><label>元の台詞（シナリオ上の文章）</label><div class="note">${esc(v.text)}</div></div><div class="field"><label>読み上げテキスト（ゲーム原文は変更しません）</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div><div class="field"><label>演技指示・キャプション（任意）</label><textarea id="caption">${esc(v.caption||'')}</textarea></div><button class="primary" id="saveLine">この台詞の設定を保存</button>${v.audio?`<div class="field"><label>生成済み音声 ${v.stale?'（編集後・旧テイク）':''}</label><audio class="audio" controls preload="none" src="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}"></audio></div>`:''}${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>（${esc(profile.reading||'')}）<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;}
-function renderBindings(){const names=[...new Set(game.voices.map(v=>v.speaker))].sort();const options=[{value:'',label:'キャストを選択'}];for(const p of castProjects)for(const cast of p.casts)options.push({value:p.id+'|'+encodeURIComponent(cast.name),label:p.title+' / '+cast.name+' ('+(cast.model?.split('/').at(-1)||cast.engine)+')'});$('castBindings').innerHTML=names.map(speaker=>{const binding=game.bindings?.[speaker],selected=binding?binding.projectId+'|'+encodeURIComponent(binding.castName):'';return `<div class="binding"><label>${esc(speaker)} <span class="muted">${esc((game.characterSheet?.[speaker]||game.referenceCharacters?.[speaker])?.display_name||'')}</span></label><select data-bind="${esc(speaker)}">${options.map(o=>`<option value="${esc(o.value)}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('')}</select></div>`}).join('')||'<div class="helper">シナリオを取り込むとキャラクター一覧が表示されます。</div>'}
+function sheetEntries(){
+ const result=[];
+ for(const [id,profile] of Object.entries(game?.characterSheet||{}))result.push({id,profile,group:'characters'});
+ for(const [id,profile] of Object.entries(game?.referenceCharacters||{}))result.push({id,profile,group:'reference'});
+ return result;
+}
+function resolveSheetProfile(speaker){
+ const value=String(speaker||'').trim().toLowerCase();
+ return sheetEntries().find(entry=>[entry.id,entry.profile.display_name,...(entry.profile.aliases||[])]
+     .some(name=>String(name||'').trim().toLowerCase()===value))||null;
+}
+function castRoster(){
+ const counts=new Map();
+ for(const v of game?.voices||[])counts.set(v.speaker,(counts.get(v.speaker)||0)+1);
+ const active=[...counts].map(([speaker,count])=>({speaker,count,profile:resolveSheetProfile(speaker)?.profile||{},active:true}));
+ const displayed=new Set(active.map(item=>resolveSheetProfile(item.speaker)?.id).filter(Boolean));
+ const sheetOnly=sheetEntries().filter(entry=>!displayed.has(entry.id)).map(entry=>({
+     speaker:entry.id,count:0,profile:entry.profile,active:false,reference:entry.group==='reference'}));
+ return [...active.sort((a,b)=>a.speaker.localeCompare(b.speaker)),
+         ...sheetOnly.sort((a,b)=>a.speaker.localeCompare(b.speaker))];
+}
+function renderInspector(){const wrap=$('inspector');const v=selectedVoice();if(!v){wrap.innerHTML='<div class="empty">台詞をクリックすると、演技指示を編集したり生成音声を試聴できます。</div>';return}const profile=resolveSheetProfile(v.speaker)?.profile;wrap.innerHTML=`<h2 class="voice-inspector-title">${esc(v.speaker)}</h2><div class="keypair"><span class="tag">${esc(v.voiceId)}</span><span class="muted">${esc(v.scenario)} ${v.sourceLine?'· line '+v.sourceLine:''}</span></div>${v.sourceId?`<div class="note">ゲーム内ID: <b>${esc(v.sourceId)}</b></div>`:''}<div class="field"><label>元の台詞（シナリオ上の文章）</label><div class="note">${esc(v.text)}</div></div><div class="field"><label>読み上げテキスト（ゲーム原文は変更しません）</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div><div class="field"><label>演技指示・キャプション（任意）</label><textarea id="caption">${esc(v.caption||'')}</textarea></div><button class="primary" id="saveLine">この台詞の設定を保存</button>${v.audio?`<div class="field"><label>生成済み音声 ${v.stale?'（編集後・旧テイク）':''}</label><audio class="audio" controls preload="none" src="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}"></audio></div>`:''}${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>（${esc(profile.reading||'')}）<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;}
+function renderBindings(){
+ const roster=castRoster();
+ const options=[{value:'',label:'キャストを選択'}];
+ for(const p of castProjects)for(const cast of p.casts)
+  options.push({value:p.id+'|'+encodeURIComponent(cast.name),
+    label:p.title+' / '+cast.name+' ('+(cast.model?.split('/').at(-1)||cast.engine)+')'});
+ const draw=item=>{
+  const binding=game.bindings?.[item.speaker];
+  const selected=binding?binding.projectId+'|'+encodeURIComponent(binding.castName):'';
+  const info=item.active?`<span class="binding-status">台詞 ${item.count}件</span>`
+    :'<span class="binding-status sheet-only">シート登録済み · 台詞未検出</span>';
+  return `<div class="binding ${item.active?'':'binding-unused'}"><label>${esc(item.speaker)} <span class="muted">${esc(item.profile.display_name||'')}</span>${info}</label><select data-bind="${esc(item.speaker)}">${options.map(o=>`<option value="${esc(o.value)}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('')}</select></div>`;
+ };
+ const used=roster.filter(item=>item.active);
+ const unused=roster.filter(item=>!item.active);
+ $('castBindings').innerHTML=(used.length?'<div class="binding-heading">シナリオ内の話者</div>'+used.map(draw).join(''):'')+
+  (unused.length?`<div class="binding-heading">キャラクターシート登録者（台詞未検出：${unused.length}人）</div>`+
+    '<p class="binding-help">ここに表示されても音声は自動生成されません。登場するKSを取り込むと台詞一覧に追加されます。</p>'+unused.map(draw).join(''):'')+
+  (roster.length?'':'<div class="helper">キャラクターシートまたはシナリオを取り込むと一覧が表示されます。</div>');
+}
 async function autoBindCasts(){
  const bindings={...game.bindings};let found=0;
- for(const speaker of [...new Set(game.voices.map(v=>v.speaker))]){
+ for(const item of castRoster()){
+  const speaker=item.speaker;
   if(bindings[speaker]?.castName)continue;
-  const profile=game.characterSheet?.[speaker]||game.referenceCharacters?.[speaker]||{};
-  const targets=[speaker,profile.display_name,...(profile.aliases||[])].filter(Boolean).map(v=>v.toLowerCase());
+  const profile=item.profile||{};
+  const names=[speaker,profile.display_name,...(profile.aliases||[])].filter(Boolean)
+       .map(v=>String(v).toLowerCase());
   const matches=[];
   for(const p of castProjects)for(const c of p.casts){
-   if(targets.includes(c.name.toLowerCase()))matches.push({projectId:p.id,castName:c.name});
+   if(names.includes(c.name.toLowerCase()))matches.push({projectId:p.id,castName:c.name});
   }
   if(matches.length===1){bindings[speaker]=matches[0];found++}
  }

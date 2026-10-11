@@ -198,6 +198,17 @@ def _sheet_active(state):
     return bool(state.get('speakerFilterEnabled') or state.get('characterSheet'))
 
 
+def _speaker_profile(state, speaker):
+    """Return (canonical sheet ID, profile) for a KS speaker or sheet alias."""
+    normalized=str(speaker).strip().casefold()
+    for ident, profile in [*state.get('characterSheet',{}).items(),
+                           *state.get('referenceCharacters',{}).items()]:
+        names=[ident,profile.get('display_name',''),*(profile.get('aliases',[]) or [])]
+        if normalized in {str(value).strip().casefold() for value in names if value}:
+            return ident, profile
+    return None, None
+
+
 def _speaker_allowed(state, speaker):
     normalized=str(speaker).strip().casefold()
     if not normalized or normalized in DEFAULT_NON_VOICE_SPEAKERS:
@@ -207,13 +218,8 @@ def _speaker_allowed(state, speaker):
         return False
     if not _sheet_active(state):
         return True
-    profiles=[*state.get('characterSheet',{}).items(),
-              *state.get('referenceCharacters',{}).items()]
-    for ident, profile in profiles:
-        names=[ident,profile.get('display_name',''),*(profile.get('aliases',[]) or [])]
-        if normalized in {str(value).strip().casefold() for value in names if value}:
-            return True
-    return False
+    _, profile=_speaker_profile(state,speaker)
+    return profile is not None
 
 
 def _filter_ks_rows(state, rows):
@@ -590,7 +596,7 @@ def analyze_captions(pid,voice_ids,model,job):
                 scene=voices_by_scene.get(v['scenario'],[])
                 offset=next((i for i,x in enumerate(scene) if x['voiceId']==v['voiceId']),0)
                 context.extend({'speaker':x['speaker'],'text':x['text']} for x in scene[max(0,offset-4):offset])
-            profiles={v['speaker']:s['characterSheet'].get(v['speaker'],{}) for v in chunk}
+            profiles={v['speaker']:(_speaker_profile(s,v['speaker'])[1] or {}) for v in chunk}
             # Never include hidden_truth or future story developments as acting guidance.
             for v in chunk:
                 profile=profiles[v['speaker']]
@@ -791,7 +797,9 @@ def generation_groups(pid,ids):
     targets=[v for v in s['voices'] if v['voiceId'] in ids]
     plans=[]
     for v in targets:
-        binding=s['bindings'].get(v['speaker'])
+        sheet_id,_=_speaker_profile(s,v['speaker'])
+        binding=(s['bindings'].get(v['speaker'])
+                 or (s['bindings'].get(sheet_id) if sheet_id else None))
         if not binding or not binding.get('castName'):
             raise ValueError(f"キャストが未設定です: {v['speaker']}")
         source=core.load_project(binding['projectId'])

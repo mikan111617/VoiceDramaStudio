@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=033' in html
+    assert 'game.js?v=034' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=033' in html
+    assert 'game.js?v=034' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -629,4 +629,69 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=033' in html
+    assert 'game.js?v=034' in html
+
+
+def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
+    state=new_game(client)
+    sheet={'characters':{'mahoru':{'display_name':'真白真歩流'}},
+           'reference_characters':{
+               'arthur_king':{'display_name':'アーサー・キング','aliases':['arther']},
+               'maikuro_houmu':{'display_name':'舞黒邦夢','aliases':['maicro']}},
+           'non_character_speakers':{'TIPS':{'direction':'対象外'}}}
+    res=client.post(f'/api/game/projects/{state["id"]}/character-sheet?expectedRevision={state["revision"]}',
+        files={'file':('sheet.json',json.dumps(sheet,ensure_ascii=False).encode('utf8'),'application/json')})
+    assert res.status_code==200,res.text
+    state=res.json()
+    assert 'arthur_king' in state['referenceCharacters']
+    assert 'maikuro_houmu' in state['referenceCharacters']
+    text=('#arther\nようこそ。[p]\n'
+          '#maicro\n館へようこそ。[p]\n'
+          '#TIPS\nこれは説明です。[p]\n')
+    res=ks_file(client,state,text,name='old_script.ks')
+    assert res.status_code==200,res.text
+    result=res.json()
+    assert [v['speaker'] for v in result['voices']]==['arther','maicro']
+    assert result['scenarios'][0]['ignoredSpeakers']=={'TIPS':1}
+    assert game._speaker_profile(result,'arther')[0]=='arthur_king'
+    assert game._speaker_profile(result,'maicro')[0]=='maikuro_houmu'
+
+
+def test_reference_sheet_only_cast_binding_is_used_by_alias_generation(client):
+    state=new_game(client)
+    sheet={'characters':{},'reference_characters':{
+        'arthur_king':{'display_name':'アーサー・キング','aliases':['arther']}}}
+    res=client.post(f'/api/game/projects/{state["id"]}/character-sheet?expectedRevision={state["revision"]}',
+        files={'file':('sheet.json',json.dumps(sheet,ensure_ascii=False).encode(),'application/json')})
+    assert res.status_code==200,res.text
+    state=res.json()
+    cast=client.post('/api/projects',json={'title':'参照音声を含むキャスト'}).json()
+    cast['voices'].append({'name':'アーサー・キング','engine':'irodori',
+        'model':'Aratako/Irodori-TTS-v4.1-Small','mode':'clone','language':'Japanese','refs':[]})
+    cast=client.put(f'/api/projects/{cast["id"]}',json={'state':cast,'expectedRevision':cast['revision']}).json()
+    res=client.put(f'/api/game/projects/{state["id"]}',json={'expectedRevision':state['revision'],
+        'changes':{'bindings':{'arthur_king':{'projectId':cast['id'],'castName':'アーサー・キング'}}}})
+    assert res.status_code==200,res.text
+    state=res.json()
+    assert state['bindings']['arthur_king']['castName']=='アーサー・キング'
+    # The KS speaker uses the old pipeline's alias. The saved canonical
+    # character-sheet binding must still be used for synthesis.
+    res=ks_file(client,state,'#arther\nご挨拶します。[p]\n',name='old_script.ks')
+    assert res.status_code==200,res.text
+    game_state=res.json()
+    plan=game.generation_groups(game_state['id'],{game_state['voices'][0]['voiceId']})
+    assert len(plan)==1 and plan[0][3]['name']=='アーサー・キング'
+
+
+def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
+    root=Path(__file__).resolve().parents[1]
+    src=(root/'static'/'game.js').read_text(encoding='utf8')
+    assert 'function sheetEntries()' in src
+    assert 'Object.entries(game?.referenceCharacters||{})' in src
+    assert 'function castRoster()' in src
+    assert 'キャラクターシート登録者（台詞未検出' in src
+    assert 'シート登録済み · 台詞未検出' in src
+    assert 'for(const item of castRoster())' in src
+    assert 'resolveSheetProfile(v.speaker)' in src
+    html=(root/'static'/'game.html').read_text(encoding='utf8')
+    assert 'game.js?v=034' in html and 'game.css?v=034' in html
