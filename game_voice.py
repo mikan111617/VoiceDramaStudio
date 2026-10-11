@@ -544,18 +544,26 @@ def import_character_sheet(pid,body,revision):
         blocked=body.get('non_character_speakers',{})
         s['nonCharacterSpeakers']=list(blocked)[:1000]
         s['speakerFilterEnabled']=True
-        # Existing game voice projects can have been imported BEFORE the
-        # character sheet. Remove UI-only lines from the voice work list
-        # without touching any files, IDs, captions or real character takes.
-        ks_scenarios={sc['key'] for sc in s['scenarios'] if sc.get('format')=='ks'}
-        s['voices']=[v for v in s['voices'] if v['scenario'] not in ks_scenarios
-                     or _speaker_allowed(s,v['speaker'])]
+        # Rebuild work rows from each *stored* KS, not just filter the current
+        # voice list. A previously unknown speaker (e.g. #arther / #maicro)
+        # was omitted on first import; adding aliases to the character sheet
+        # must make its original dialogue available without re-uploading KS.
+        # _assign prioritizes explicit [voice id] tags and retains existing
+        # captions/takes for the matching lines. A failed remap stays atomic.
         for sc in s['scenarios']:
             if sc.get('format')!='ks':
                 continue
-            rows=parse_ks(sc['content'])
-            valid,ignored=_filter_ks_rows(s,rows)
-            sc['count']=sum(v['scenario']==sc['key'] for v in s['voices'])
+            try:
+                parsed=parse_ks(sc['content'])
+                rows,ignored=_filter_ks_rows(s,parsed)
+                s['lastIssued']=max(s['lastIssued'],_issued([
+                    {'voiceId':row.get('existingId','')} for row in parsed]))
+                previous=[v for v in s['voices'] if v['scenario']==sc['key']]
+                restored=_assign(s,sc['key'],rows,previous)
+            except ValueError as exc:
+                raise ValueError(f'{sc.get("filename",sc["key"])}: {exc}') from exc
+            s['voices']=[v for v in s['voices'] if v['scenario']!=sc['key']]+restored
+            sc['count']=len(restored)
             sc['ignoredSpeakers']=ignored
         return _save(pid,s,revision)
 

@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=034' in html
+    assert 'game.js?v=035' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=034' in html
+    assert 'game.js?v=035' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -629,7 +629,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=034' in html
+    assert 'game.js?v=035' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -694,4 +694,88 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=034' in html and 'game.css?v=034' in html
+    assert 'game.js?v=035' in html and 'game.css?v=035' in html
+
+
+def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
+    """Regression: prologue lines for #arther/#maicro were lost at first sheet import."""
+    state=new_game(client)
+    original=('#maicro\n[voice id="v00373"]\n一つ目。[p]\n'
+              '#yuduki\n[voice id="v00375"]\nこんにちは。[p]\n'
+              '#arther\n[voice id="v00376"]\nお久しぶりです。[p]\n')
+    # Import the old sheet with reference names, but no legacy KS aliases.
+    sheet={'characters':{},'reference_characters':{
+        'yuduki':{'display_name':'真白結月'},
+        'arthur_king':{'display_name':'アーサー・キング'},
+        'maikuro_houmu':{'display_name':'舞黒邦夢'}},
+        'non_character_speakers':{'TIPS':{'direction':'不要'}}}
+    def upload(s,body):
+        return client.post(f'/api/game/projects/{s["id"]}/character-sheet?expectedRevision={s["revision"]}',
+            files={'file':('character_sheet.json',json.dumps(body,ensure_ascii=False).encode(),'application/json')})
+    res=upload(state,sheet)
+    assert res.status_code==200,res.text
+    state=res.json()
+    res=ks_file(client,state,original,name='prologue.ks')
+    assert res.status_code==200,res.text
+    state=res.json()
+    assert [(x['speaker'],x['voiceId']) for x in state['voices']]==[('yuduki','v00375')]
+    assert state['scenarios'][0]['ignoredSpeakers']=={'arther':1,'maicro':1}
+    # A generated take/caption for a pre-existing character survives sheet re-import.
+    state['voices'][0]['caption']='既存の演技指示'
+    state['voices'][0]['audio']='yuduki/prologue/v00375.wav'
+    game._write(state['id'],state)
+    sheet['reference_characters']['arthur_king']['aliases']=['arther']
+    sheet['reference_characters']['maikuro_houmu']['aliases']=['maicro']
+    res=upload(state,sheet)
+    assert res.status_code==200,res.text
+    restored=res.json()
+    assert [(x['speaker'],x['voiceId']) for x in restored['voices']]==[
+        ('maicro','v00373'),('yuduki','v00375'),('arther','v00376')]
+    assert restored['scenarios'][0]['ignoredSpeakers']=={}
+    assert restored['scenarios'][0]['count']==3
+    assert restored['scenarios'][0]['content']==original
+    previous=next(v for v in restored['voices'] if v['speaker']=='yuduki')
+    assert previous['caption']=='既存の演技指示'
+    assert previous['audio']=='yuduki/prologue/v00375.wav'
+    assert not previous['stale']
+    # No phantom ID may be allocated during subsequent reimport.
+    again=ks_file(client,restored,original,name='prologue.ks')
+    assert again.status_code==200,again.text
+    assert [(x['speaker'],x['voiceId']) for x in again.json()['voices']]==[
+        ('maicro','v00373'),('yuduki','v00375'),('arther','v00376')]
+
+
+def test_sheet_update_does_not_invent_audio_ids_when_new_ks_speaker_is_untagged(client):
+    s=new_game(client)
+    old={'characters':{'mahoru':{'display_name':'真白真歩流'}},
+         'reference_characters':{'arthur_king':{'display_name':'アーサー・キング'}}}
+    def upload(state,body):
+        return client.post(f'/api/game/projects/{state["id"]}/character-sheet?expectedRevision={state["revision"]}',
+            files={'file':('sheet.json',json.dumps(body,ensure_ascii=False).encode(),'application/json')})
+    s=upload(s,old).json()
+    text='#mahoru\n既存。[p]\n#arther\n後から認識される。[p]\n'
+    s=ks_file(client,s,text,name='prologue.ks').json()
+    former=s['voices'][0]['voiceId']
+    old['reference_characters']['arthur_king']['aliases']=['arther']
+    res=upload(s,old)
+    assert res.status_code==200,res.text
+    recovered=res.json()
+    assert len(recovered['voices'])==2
+    assert recovered['voices'][0]['voiceId']==former
+    assert recovered['voices'][1]['speaker']=='arther'
+    assert recovered['voices'][1]['voiceId']!=former
+    assert recovered['lastIssued']>=2
+
+
+def test_sheet_update_keeps_filtered_voice_list_and_recalculates_tips(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\n本文。[p]\n#TIPS\n説明。[p]\n',name='prologue.ks').json()
+    old=s['voices'][0]['voiceId']
+    sheet={'characters':{'mahoru':{'display_name':'真白真歩流'}},
+           'reference_characters':{'arthur_king':{'display_name':'アーサー・キング','aliases':['arther']}}}
+    res=client.post(f'/api/game/projects/{s["id"]}/character-sheet?expectedRevision={s["revision"]}',
+        files={'file':('sheet.json',json.dumps(sheet,ensure_ascii=False).encode(),'application/json')})
+    assert res.status_code==200,res.text
+    result=res.json()
+    assert len(result['voices'])==1 and result['voices'][0]['voiceId']==old
+    assert result['scenarios'][0]['ignoredSpeakers']=={'TIPS':1}
