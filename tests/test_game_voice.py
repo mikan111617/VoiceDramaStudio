@@ -268,3 +268,126 @@ def test_japanese_speaker_and_scene_names_are_supported(client):
     v=r.json()['voices'][0]
     assert v['scenario']=='食堂' and v['speaker']=='真歩流'
     assert game._game_audio_relative(v)=='真歩流/食堂/'+v['voiceId']+'.wav'
+
+
+def caption_sheet_rows(content):
+    import csv
+    reader=csv.DictReader(io.StringIO(content.decode('utf-8-sig'),newline=''))
+    return list(reader)
+
+
+def encode_caption_rows(rows, encoding='utf-8-sig'):
+    import csv
+    output=io.StringIO(newline='')
+    writer=csv.DictWriter(output,fieldnames=['ボイスID','シナリオ','キャラ名','セリフ','キャプション'],lineterminator='\r\n')
+    writer.writeheader();writer.writerows(rows)
+    return output.getvalue().encode(encoding)
+
+
+def send_caption_sheet(client, s, content, action='import'):
+    return client.post(f'/api/game/projects/{s["id"]}/captions/{action}?expectedRevision={s["revision"]}',
+                       files={'file':('game_captions.csv',content,'text/csv')})
+
+
+def test_caption_csv_export_import_changes_captions_only_and_marks_audio_stale(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#真歩流\n「サブレが、ない！」[p]\n#愛理\n「そうなの？\n」[p]\n').json()
+    first=s['voices'][0];second=s['voices'][1]
+    loaded=game._load(s['id'])
+    loaded['voices'][0]['audio']='真歩流/scene1/'+first['voiceId']+'.wav'
+    loaded['voices'][0]['caption']='もともとの演技指示'
+    game._write(s['id'],loaded)
+    s=game.get_game(s['id'])
+    original=scenarios_before=s['scenarios']
+    data=client.get(f'/api/game/projects/{s["id"]}/captions.csv')
+    assert data.status_code==200 and data.content.startswith(b'\xef\xbb\xbf')
+    assert 'attachment' in data.headers['content-disposition']
+    rows=caption_sheet_rows(data.content)
+    assert len(rows)==2
+    assert list(rows[0])==['ボイスID','シナリオ','キャラ名','セリフ','キャプション']
+    assert rows[0]['ボイスID']==first['voiceId']
+    assert rows[0]['キャプション']=='もともとの演技指示'
+    rows[0]['キャプション']='困惑しながら、声を大きく上げる'
+    rows[1]['キャプション']=''
+    encoded=encode_caption_rows(rows)
+    preview=send_caption_sheet(client,s,encoded,'preview')
+    assert preview.status_code==200,preview.text
+    assert preview.json()['rows']==2 and preview.json()['updated']==1 and preview.json()['blank']==1
+    # Preview does not save anything.
+    assert game.get_game(s['id'])['revision']==s['revision']
+    result=send_caption_sheet(client,s,encoded)
+    assert result.status_code==200,result.text
+    newer=result.json()['project'];voices=newer['voices']
+    assert voices[0]['caption']=='困惑しながら、声を大きく上げる'
+    assert voices[0]['stale'] is True
+    assert voices[0]['audio']==loaded['voices'][0]['audio']
+    assert voices[1]['caption']==''
+    assert voices[1]['ttsText']==second['ttsText']
+    assert newer['scenarios']==original and [v['voiceId'] for v in voices]==[first['voiceId'],second['voiceId']]
+    assert newer['revision']==s['revision']+1
+    again=send_caption_sheet(client,newer,encoded)
+    assert again.status_code==200
+    assert again.json()['project']['revision']==newer['revision'] # No revision for no-op
+
+
+def test_caption_csv_exports_current_scenario_or_all(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\nひとつめ。[p]\n',name='scene1.ks').json()
+    s=ks_file(client,s,'#airi\nふたつめ。[p]\n',name='scene2.ks').json()
+    base=f'/api/game/projects/{s["id"]}/captions.csv'
+    assert len(caption_sheet_rows(client.get(base).content))==2
+    one=caption_sheet_rows(client.get(base+'?scenario=scene2').content)
+    assert len(one)==1 and one[0]['シナリオ']=='scene2'
+    assert client.get(base+'?scenario=missing').status_code==400
+    one[0]['キャプション']='強く言い切る'
+    res=send_caption_sheet(client,s,encode_caption_rows(one))
+    assert res.status_code==200
+    captions={v['scenario']:v['caption'] for v in res.json()['project']['voices']}
+    assert captions=={'scene1':'','scene2':'強く言い切る'}
+
+
+@pytest.mark.parametrize('mutation',[
+    lambda a: a[0].update({'ボイスID':'v99999'}),
+    lambda a: a[0].update({'キャラ名':'変更したキャラ'}),
+    lambda a: a[0].update({'セリフ':'違う台詞'}),
+    lambda a: a[0].update({'シナリオ':'another'}),
+    lambda a: a[1].update({'ボイスID':a[0]['ボイスID']}),
+    lambda a: a[0].update({'キャプション':'a'*801}),
+])
+def test_caption_csv_import_rejects_bad_or_ai_rewritten_rows_atomically(client, mutation):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\nこんにちは。[p]\n#airi\nこんばんは。[p]\n').json()
+    rows=caption_sheet_rows(client.get(f'/api/game/projects/{s["id"]}/captions.csv').content)
+    rows[0]['キャプション']='先頭を更新する'
+    rows[1]['キャプション']='2番目を更新する'
+    mutation(rows)
+    res=send_caption_sheet(client,s,encode_caption_rows(rows))
+    assert res.status_code==400,res.text
+    unchanged=game.get_game(s['id'])
+    assert unchanged['revision']==s['revision']
+    assert [v['caption'] for v in unchanged['voices']]==['','']
+
+
+def test_caption_csv_import_revision_conflict_and_shift_jis(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#真歩流\nこんにちは。[p]\n').json()
+    rows=caption_sheet_rows(client.get(f'/api/game/projects/{s["id"]}/captions.csv').content)
+    rows[0]['キャプション']='楽しげに'
+    encoded=encode_caption_rows(rows,'cp932')
+    assert send_caption_sheet(client,s,encoded,'preview').status_code==200
+    result=send_caption_sheet(client,s,encoded)
+    assert result.status_code==200,result.text
+    assert result.json()['project']['voices'][0]['caption']=='楽しげに'
+    assert send_caption_sheet(client,s,encoded).status_code==409
+
+
+def test_caption_csv_ui_has_export_import_and_copy_prompt():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static'/'game.html').read_text(encoding='utf-8')
+    js=(root/'static'/'game.js').read_text(encoding='utf-8')
+    for elem in ('exportCaptionsScene','exportCaptionsAll','importCaptions','captionPicker','copyCaptionPrompt'):
+        assert 'id="'+elem+'"' in html
+    assert '/captions/preview' in js and '/captions/import' in js
+    assert 'navigator.clipboard.writeText' in js
+    assert '/captions.csv' in js
+    assert 'game.js?v=030' in html

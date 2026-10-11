@@ -5,6 +5,7 @@ original voice assets. Projects live in workspace/game_voice/g_<hex>.
 """
 from __future__ import annotations
 import copy
+import csv
 import difflib
 import io
 import json
@@ -292,6 +293,114 @@ def import_voice_list(pid,payload,revision):
             'encoding':'utf-8','newline':'\n','count':len(all_voices),
             'outputPrefix':Path(str(payload.get('output_dir','voice')).replace('\\','/')).name or 'voice'}]
         return _save(pid,s,revision)
+
+
+
+# CSV interchange for ChatGPT/Claude. IDs and original dialogue are immutable.
+CAPTION_CSV_FIELDS = ('ボイスID', 'シナリオ', 'キャラ名', 'セリフ', 'キャプション')
+CAPTION_CSV_LIMIT = 8 * 1024 * 1024
+
+
+def export_captions_csv(pid, scenario_key=None):
+    """Export original dialogue with immutable identity columns; no TTS required."""
+    with GAME_LOCK:
+        s = _load(pid)
+        if scenario_key and not any(sc['key'] == scenario_key for sc in s['scenarios']):
+            raise ValueError('指定したシナリオが見つかりません')
+        out = io.StringIO(newline='')
+        writer = csv.writer(out, lineterminator='\r\n')
+        writer.writerow(CAPTION_CSV_FIELDS)
+        scenarios = [sc['key'] for sc in s['scenarios'] if not scenario_key or sc['key'] == scenario_key]
+        for key in scenarios:
+            for voice in s['voices']:
+                if voice['scenario'] != key:
+                    continue
+                writer.writerow([voice['voiceId'], key, voice['speaker'], voice['text'], voice.get('caption', '')])
+        # BOM: Excel on Windows opens Japanese text without mojibake.
+        return out.getvalue().encode('utf-8-sig')
+
+
+def _parse_caption_csv(body, state):
+    if not isinstance(body, bytes) or not body or len(body) > CAPTION_CSV_LIMIT:
+        raise ValueError('CSVは8MB以内にしてください')
+    try:
+        decoded = body.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        # Excel may re-export a CSV as Shift_JIS on Windows.
+        try:
+            decoded = body.decode('cp932')
+        except UnicodeDecodeError:
+            raise ValueError('CSVはUTF-8またはShift_JISで保存してください')
+    try:
+        reader = csv.DictReader(io.StringIO(decoded, newline=''), restkey='__extra__')
+        if not reader.fieldnames or any(x not in reader.fieldnames for x in CAPTION_CSV_FIELDS):
+            raise ValueError('CSVの必須列は「ボイスID・シナリオ・キャラ名・セリフ・キャプション」です')
+        if len(reader.fieldnames) != len(set(reader.fieldnames)):
+            raise ValueError('CSVに重複した列名があります')
+        voices = {v['voiceId']: v for v in state['voices']}
+        seen = set()
+        changes = []
+        count = blank = unchanged = 0
+        for row in reader:
+            count += 1
+            if count > 10000:
+                raise ValueError('CSVは10000行以内にしてください')
+            if row.get('__extra__') is not None or any(row.get(key) is None for key in CAPTION_CSV_FIELDS):
+                raise ValueError(f'CSVの{count + 1}行目の列数が正しくありません')
+            vid = row['ボイスID'].strip()
+            if not vid or vid in seen:
+                raise ValueError(f'CSVに重複または空のボイスIDがあります（{count + 1}行目）')
+            seen.add(vid)
+            voice = voices.get(vid)
+            if voice is None:
+                raise ValueError(f'不明なボイスIDです: {vid}（{count + 1}行目）')
+            # Never trust AI-edited rows based only on a numeric ID.
+            if (row['シナリオ'] != voice['scenario'] or row['キャラ名'] != voice['speaker']
+                    or row['セリフ'] != voice['text']):
+                raise ValueError(f'{vid}: シナリオ・キャラ名・台詞が元データと一致しません。キャプション列だけ編集してください')
+            caption = row['キャプション']
+            if not caption.strip():
+                blank += 1
+                continue
+            if len(caption) > 800:
+                raise ValueError(f'{vid}: キャプションは800文字以内にしてください')
+            if caption == voice.get('caption', ''):
+                unchanged += 1
+            else:
+                changes.append((vid, caption))
+        if not count:
+            raise ValueError('CSVに台詞がありません')
+        return {'rows': count, 'updated': len(changes), 'blank': blank, 'unchanged': unchanged,
+                'examples': [{'voiceId': vid, 'caption': cap[:100]} for vid, cap in changes[:6]]}, changes
+    except csv.Error as e:
+        raise ValueError(f'CSVの解析に失敗しました: {e}')
+
+
+def preview_caption_csv(pid, body, revision):
+    with GAME_LOCK:
+        state = _load(pid)
+        if int(state['revision']) != int(revision):
+            raise RuntimeError('編集の競合を検出しました。再読み込みしてください')
+        summary, _ = _parse_caption_csv(body, state)
+        return summary
+
+
+def import_caption_csv(pid, body, revision):
+    """Atomic update: captions only; unchanged or blank rows preserve existing data."""
+    with GAME_LOCK:
+        state = _load(pid)
+        if int(state['revision']) != int(revision):
+            raise RuntimeError('編集の競合を検出しました。再読み込みしてください')
+        summary, updates = _parse_caption_csv(body, state)
+        if not updates:
+            return {'project': state, 'summary': summary}
+        voices = {v['voiceId']: v for v in state['voices']}
+        for vid, caption in updates:
+            voice = voices[vid]
+            voice['caption'] = caption
+            if voice.get('audio'):
+                voice['stale'] = True
+        return {'project': _save(pid, state, revision), 'summary': summary}
 
 
 def import_state_number(pid,body,revision):

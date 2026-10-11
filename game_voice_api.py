@@ -1,12 +1,13 @@
 """HTTP endpoints for the isolated game-voice tab."""
 from __future__ import annotations
 import json
+import io
 import tempfile
 import uuid
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 import core
@@ -67,6 +68,27 @@ async def _json_upload(file:UploadFile):
 @router.post('/api/game/projects/{gid}/voice-list')
 async def import_voice_list(gid:str,expectedRevision:int,file:UploadFile=File(...)):
     return _errors(game.import_voice_list,gid,await _json_upload(file),expectedRevision)
+
+@router.get('/api/game/projects/{gid}/captions.csv')
+def export_caption_sheet(gid: str, scenario: str = ''):
+    data = _errors(game.export_captions_csv, gid, scenario or None)
+    name = 'game_captions.csv'
+    return StreamingResponse(io.BytesIO(data), media_type='text/csv; charset=utf-8',
+                             headers={'Content-Disposition':f'attachment; filename="{name}"',
+                                      'Cache-Control':'no-store'})
+
+
+@router.post('/api/game/projects/{gid}/captions/preview')
+async def preview_caption_sheet(gid: str, expectedRevision: int, file: UploadFile = File(...)):
+    data = await file.read(game.CAPTION_CSV_LIMIT + 1)
+    return _errors(game.preview_caption_csv, gid, data, expectedRevision)
+
+
+@router.post('/api/game/projects/{gid}/captions/import')
+async def import_caption_sheet(gid: str, expectedRevision: int, file: UploadFile = File(...)):
+    data = await file.read(game.CAPTION_CSV_LIMIT + 1)
+    return _errors(game.import_caption_csv, gid, data, expectedRevision)
+
 
 @router.post('/api/game/projects/{gid}/voice-id-state')
 async def import_id_state(gid:str,expectedRevision:int,file:UploadFile=File(...)):

@@ -52,6 +52,41 @@ async function startAnalysis(){
  if(!confirm(`${ids.length}件の演技指示をOllamaで自動生成します。\n既に入力したキャプションも更新されます。\n原文は変更されません。`))return;
  try{const job=await request(`/api/game/projects/${game.id}/analyze`,json('POST',{voiceIds:ids,model}));message('Ollamaで演技指示を解析中です');$('analyzeSelected').disabled=true;poll(job.id)}catch(e){message('Ollamaの解析を開始できません: '+e.message,true)}
 }
+function exportCaptionCsv(scope){
+ if(!game||!game.voices.length)return message('先にシナリオを取り込んでください',true);
+ if(scope==='scene'&&!scenarioKey)return message('シナリオを選択してください',true);
+ const params=scope==='scene'?('?scenario='+encodeURIComponent(scenarioKey)):'';
+ const link=document.createElement('a');link.href=`/api/game/projects/${game.id}/captions.csv`+params;
+ link.download='game_captions.csv';document.body.appendChild(link);link.click();link.remove();
+ message('キャプション編集用CSVを書き出します');
+}
+const CAPTION_AI_PROMPT=`添付のCSVの「キャプション」列だけ記入し、編集済みのCSVファイルとして返してください。
+「ボイスID」「シナリオ」「キャラ名」「セリフ」の各列と行数・行順は絶対に変更しないでください。
+キャプションには、元の台詞にない発話を追加せず、声の感情・話し方・テンポ・抑揚を具体的な日本語で1文（原則80字以内）で記入してください。
+前後の台詞から状況を把握し、未開示の秘密や今後の展開を先取りしないでください。
+出力はUTF-8のCSVとし、列名も変更せず、解説文やMarkdownをCSV内へ追加しないでください。`;
+async function copyCaptionPrompt(){
+ try{await navigator.clipboard.writeText(CAPTION_AI_PROMPT);message('ChatGPT・Claude用の依頼文をコピーしました')}
+ catch(e){message('コピーできません。ブラウザのクリップボード権限を確認してください',true)}
+}
+async function importCaptionCsv(){
+ const file=$('captionPicker').files[0];if(!file||!game)return;
+ const gid=game.id,revision=game.revision;
+ try{
+  if(file.size>8*1024*1024)return message('CSVは8MB以内にしてください',true);
+  const form=new FormData();form.append('file',file);
+  busy('キャプションを照合中…');
+  const summary=await request(`/api/game/projects/${gid}/captions/preview?expectedRevision=${revision}`,{method:'POST',body:form});
+  busy('保存済み');
+  if(!summary.updated)return message(`変更するキャプションはありません（空欄 ${summary.blank}件、同じ内容 ${summary.unchanged}件）`);
+  const samples=summary.examples.map(x=>`${x.voiceId}: ${x.caption}`).join('\n');
+  if(!confirm(`キャプションCSVを反映しますか？\n\n対象: ${summary.rows}行\n変更: ${summary.updated}件\n空欄（変更なし）: ${summary.blank}件\n同じ内容: ${summary.unchanged}件\n\n変更例:\n${samples}\n\n台詞本文・ID・音声ファイルは変更しません。変更済み音声は要再生成になります。`))return;
+  busy('キャプションを反映中…');
+  const result=await request(`/api/game/projects/${gid}/captions/import?expectedRevision=${revision}`,{method:'POST',body:form});
+  game=result.project;renderAll();busy('保存済み');message(`キャプションを${result.summary.updated}件反映しました`);
+ }catch(e){busy('保存エラー');message('CSVを取り込めません: '+e.message,true)}
+ finally{$('captionPicker').value=''}
+}
 function downloadZip(){if(!game||!game.scenarios.length)return message('シナリオがありません',true);const link=document.createElement('a');link.href=`/api/game/projects/${game.id}/export.zip`;link.download='game_voice_export.zip';document.body.appendChild(link);link.click();link.remove();message('ゲーム用ZIPを準備しています。未生成音声は missing_voices.json に記録されます。')}
-function wire(){$('newProject').onclick=()=>createNew();$('projectList').onchange=e=>openGame(e.target.value);for(const [button,picker,kind] of [['importKs','ksPicker','ks'],['importJson','jsonPicker','json'],['importState','statePicker','state'],['importSheet','sheetPicker','sheet'],['importStory','storyPicker','story']]){$(button).onclick=()=>(game?$(picker).click():message('プロジェクトを作成してください',true));$(picker).onchange=()=>uploadFiles($(picker),kind)}$('scenarioList').onclick=e=>{const b=e.target.closest('[data-scenario]');if(b)showScenario(b.dataset.scenario)};$('voiceList').onclick=e=>{if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice()};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value)};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;}
+function wire(){$('newProject').onclick=()=>createNew();$('projectList').onchange=e=>openGame(e.target.value);for(const [button,picker,kind] of [['importKs','ksPicker','ks'],['importJson','jsonPicker','json'],['importState','statePicker','state'],['importSheet','sheetPicker','sheet'],['importStory','storyPicker','story']]){$(button).onclick=()=>(game?$(picker).click():message('プロジェクトを作成してください',true));$(picker).onchange=()=>uploadFiles($(picker),kind)}$('scenarioList').onclick=e=>{const b=e.target.closest('[data-scenario]');if(b)showScenario(b.dataset.scenario)};$('voiceList').onclick=e=>{if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice()};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value)};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;$('exportCaptionsScene').onclick=()=>exportCaptionCsv('scene');$('exportCaptionsAll').onclick=()=>exportCaptionCsv('all');$('importCaptions').onclick=()=>game?$('captionPicker').click():message('ゲーム音声プロジェクトを作成してください',true);$('captionPicker').onchange=importCaptionCsv;$('copyCaptionPrompt').onclick=copyCaptionPrompt;}
 wire();refreshGames().catch(e=>message(e.message,true));
