@@ -8,6 +8,8 @@ let jobTimer=null;
 let bulkFiles=[],bulkMode='assign',bulkKind='voice',bulkCast='',bulkSort='natural',bulkScene='',bulkStart='',bulkOnlyMissing=true,bulkTargets={};
 let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
+const LIBRARY_TABS=[['voice','セリフ'],['bgm','BGM'],['sfx','効果音'],['ambience','環境音'],['other','その他']];
+let libraryTab='voice',libraryQueries={};
 let excelImportMode='merge';
 let castCopySelection=new Set();
 // Local edit history only: never roll back audio files, uploads or server-side
@@ -81,7 +83,7 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker)].filter(Boolean))]}
@@ -197,6 +199,44 @@ function libraryDisplayInfo(asset,dialogues){
  return {title:texts.length?texts.join(' / '):asset.name,
   context:[...new Set(lines.map(l=>[sceneName(l.sceneId),l.speaker].filter(Boolean).join(' · ')))].filter(Boolean).join(' / ')};
 }
+function libraryAssetKind(asset,dialogues){
+ if(['reference','voice','bgm','sfx','ambience'].includes(asset.kind))return asset.kind;
+ return dialogues.has(asset.id)?'voice':'other';
+}
+function librarySearchText(value){return String(value||'').normalize('NFKC').toLocaleLowerCase().trim()}
+function filteredLibraryAssets(kind,query,dialogues=libraryDialogueMap()){
+ const search=librarySearchText(query);
+ return state.assets.filter(a=>{
+  if(libraryAssetKind(a,dialogues)!==kind)return false;
+  const text=kind==='voice'?libraryDisplayInfo(a,dialogues).title:a.name;
+  return !search||librarySearchText(text).includes(search);
+ }).slice().reverse();
+}
+function libraryAssetCard(a,dialogues){
+ const kind=libraryAssetKind(a,dialogues),info=kind==='voice'?libraryDisplayInfo(a,dialogues):{title:a.name,context:''};
+ return `<div class="asset-card asset-draggable" draggable="true" data-drag-asset="${esc(a.id)}" title="マルチトラックのレーンへドラッグできます"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc(LIBRARY_TABS.find(t=>t[0]===kind)?.[1]||'その他')}</span><div class="asset-meta"><b class="asset-display-title">${esc(info.title)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div>${info.context?`<div class="asset-dialogue-context">${esc(info.context)}</div><div class="asset-file-name">${esc(a.name)}</div>`:''}<div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`;
+}
+function updateLibraryResults(){
+ if(view!=='assets'||!$('libraryResults'))return;
+ const dialogues=libraryDialogueMap(),counts={};
+ for(const asset of state.assets){const kind=libraryAssetKind(asset,dialogues);counts[kind]=(counts[kind]||0)+1}
+ const results=filteredLibraryAssets(libraryTab,libraryQueries[libraryTab],dialogues);
+ for(const [kind] of LIBRARY_TABS){const tab=$('libraryTab-'+kind);tab.setAttribute('aria-selected',String(kind===libraryTab));tab.tabIndex=kind===libraryTab?0:-1;tab.querySelector('.library-tab-count').textContent=counts[kind]||0}
+ $('libraryResults').setAttribute('aria-labelledby','libraryTab-'+libraryTab);
+ $('librarySearch').placeholder=libraryTab==='voice'?'セリフ本文を検索':'タイトルを検索';
+ $('librarySearchLabel').textContent=libraryTab==='voice'?'セリフ内容で検索':'タイトルで検索';
+ $('libraryResultCount').textContent=`${results.length} / ${counts[libraryTab]||0}件表示`;
+ $('clearLibrarySearch').disabled=!libraryQueries[libraryTab];
+ $('libraryResults').innerHTML=results.map(a=>libraryAssetCard(a,dialogues)).join('')||`<div class="empty">${libraryQueries[libraryTab]?'検索に一致する音声がありません。':'この種類の音声はまだありません。'}</div>`;
+}
+function selectLibraryTab(kind){
+ if(!LIBRARY_TABS.some(t=>t[0]===kind))return;
+ libraryTab=kind;$('librarySearch').value=libraryQueries[kind]||'';updateLibraryResults();
+}
+function renderLibraryView(){
+ $('editorContent').innerHTML=`<div class="library-controls"><div class="library-tabs" role="tablist" aria-label="音声の種類">${LIBRARY_TABS.map(([kind,label])=>`<button type="button" id="libraryTab-${kind}" data-library-tab="${kind}" role="tab" aria-controls="libraryResults" aria-selected="${kind===libraryTab}">${esc(label)} <span class="library-tab-count">0</span></button>`).join('')}</div><label for="librarySearch" id="librarySearchLabel">セリフ内容で検索</label><div class="library-search-row"><input id="librarySearch" type="search" value="${esc(libraryQueries[libraryTab]||'')}" placeholder="セリフ本文を検索"><button type="button" id="clearLibrarySearch" class="btn ghost">検索をクリア</button></div><div id="libraryResultCount" class="small muted" role="status" aria-live="polite"></div></div>${bulkDropZone('library')}<div id="libraryResults" role="tabpanel" aria-labelledby="libraryTab-${libraryTab}"></div><button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
+ updateLibraryResults();
+}
 function renderAll(){if(!state)return;renderSidebar();renderEditor();renderTimeline();renderInspector()}
 function bulkDropZone(mode){return `<div class="batch-dropzone" data-audio-drop="${mode}"><div class="dropzone-icon">⇩</div><div><b>${mode==='assign'?'生成済みの台詞音声をまとめて割り当て':mode==='reference'?'キャストの参照音声をドロップ':'音声ファイルをまとめてライブラリへ追加'}</b><p>音声ファイルをここへドラッグ＆ドロップ · 複数ファイル対応 · 取り込み前に割り当てを確認</p></div></div>`}
 function renderEditor(){if(!state)return;const act=$('panelActions');const title=$('editorTitle');const sub=$('editorSub');const key=$('editorKicker');
@@ -209,8 +249,7 @@ function renderEditor(){if(!state)return;const act=$('panelActions');const title
   $('editorContent').innerHTML=bulkDropZone('reference')+(state.voices.length?state.voices.map((v,i)=>`<article class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><header class="cast-card-heading"><div class="cast-identity"><span class="cast-number">CAST ${String(i+1).padStart(2,'0')}</span><h3>${esc(v.name)}</h3></div><span class="cast-reference-count">参照音声 ${(v.refs||[]).length}件</span></header><div class="inspector-grid cast-fields"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><section class="cast-reference-section"><div class="cast-reference-heading"><div class="cast-reference-kicker">VOICE SAMPLES</div><h4>${esc(v.name)} の参照音声</h4></div><div class="cast-reference-preview">${(v.refs||[]).map(id=>state.assets.find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)}</span>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}</div>`).join('')||'<span class="small muted">参照音声はまだありません</span>'}</div></section><div class="asset-actions cast-card-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('このキャストの全台詞へ設定を適用',`data-voice-apply="${i}"`)}${button('⇄ 別作品へコピー',`data-cast-copy="${i}"`)}${button('🗑 このキャストを削除',`data-cast-delete="${i}"`,'danger')}</div></article>`).join(''):'<div class="empty">キャストがありません。追加すると声を登録できます。</div>')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
  }else{
  key.textContent='AUDIO LIBRARY';title.textContent='音声ライブラリ';sub.textContent='音声をドラッグして右のマルチトラックへ配置できます。BGM・効果音・環境音など';act.innerHTML=button('↓ 音声をまとめて取り込む',`id="batchLibraryBtn"`,'primary')+button('＋ 音声ファイル',`id="uploadAudioBtn"`)+button(`🗑 選択削除 (${trashSelection.size})`,`id="trashSelectedBtn" ${trashSelection.size?'':'disabled'}`);
- const dialogueMap=libraryDialogueMap();
- $('editorContent').innerHTML=bulkDropZone('library')+(state.assets.filter(a=>a.kind!=='reference').length?state.assets.filter(a=>a.kind!=='reference').slice().reverse().map(a=>{const info=libraryDisplayInfo(a,dialogueMap);return `<div class="asset-card asset-draggable" draggable="true" data-drag-asset="${esc(a.id)}" title="マルチトラックのBGM・効果音・環境音のレーンへドラッグできます"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc((a.kind||'audio').toUpperCase())}</span><div class="asset-meta"><b class="asset-display-title">${esc(info.title)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div>${info.context?`<div class="asset-dialogue-context">${esc(info.context)}</div><div class="asset-file-name">${esc(a.name)}</div>`:''}<div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${a.kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`}).join(''):'<div class="empty">音声素材はまだありません。WAV / MP3などを取り込めます。</div>')+`<button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
+ renderLibraryView();
  }
 }
 function timelineDuration(){return Math.max(40,...activeClips().map(c=>Number(c.start||0)+Number(c.duration||0)+7))}
@@ -254,7 +293,7 @@ function stageAudioBatch(files,mode='assign',cast=''){
   if(!audios.length)return toast('WAV / MP3 / FLAC / OGG / M4A / AAC / OPUSを指定してください',true);
   if(audios.length>250)return toast('一度に250ファイルまで取り込めます',true);
   bulkFiles=audios.map((file,i)=>({file,key:++bulkNextKey,original:i}));
-  bulkMode=mode;bulkCast=cast;bulkKind=mode==='reference'?'reference':'voice';
+  bulkMode=mode;bulkCast=cast;bulkKind=mode==='reference'?'reference':mode==='library'?libraryTab:'voice';
   bulkSort='natural';bulkScene=selectedScene;bulkStart=(selectedLine&&lineById(selectedLine)?.sceneId===selectedScene)?selectedLine:'';
   bulkOnlyMissing=true;bulkBusy=false;
   sortBatchFiles();rebuildBatchAssignments();showAudioBatchModal();
@@ -701,6 +740,8 @@ function dragEnd(e){
  if(current.used){dirtyState();renderInspector();renderTimeline()}
 }
 function handleGlobalClick(e){const target=e.target;
+ const libraryButton=target.closest('[data-library-tab]');if(libraryButton){selectLibraryTab(libraryButton.dataset.libraryTab);return}
+ if(target.id==='clearLibrarySearch'){libraryQueries[libraryTab]='';$('librarySearch').value='';updateLibraryResults();$('librarySearch').focus();return}
  if(handleBatchModalClick(e))return;
  if(target.closest('[data-restore]')){restoreAsset(target.closest('[data-restore]').dataset.restore);return}
  if(target.closest('[data-trash]')){trashAsset(target.closest('[data-trash]').dataset.trash);return}
@@ -743,7 +784,7 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='addLineTop'||target.id==='addLineBottom')addLine();
  if(target.id==='addVoiceBtn')addVoice();
  if(target.id==='generateMissingBtn')generate(activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).map(x=>x.id));
- if(target.id==='uploadAudioBtn')uploadAudio('sfx');
+ if(target.id==='uploadAudioBtn')uploadAudio(libraryTab);
  if(target.id==='insUploadBtn')uploadAudio('sfx');
  if(target.id==='attachPickerBtn')uploadAudio('voice',selectedLine);
  if(target.id==='generateLineBtn')generate([selectedLine]);
@@ -875,6 +916,8 @@ function installPanelResizers(){
  window.addEventListener('harborlayoutchange',()=>{if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes)});
 }
 function wire(){
+ $('editorContent').addEventListener('input',e=>{if(e.target.id==='librarySearch'){libraryQueries[libraryTab]=e.target.value;updateLibraryResults()}});
+ $('editorContent').addEventListener('keydown',e=>{const tab=e.target.closest('[data-library-tab]');if(!tab)return;const index=LIBRARY_TABS.findIndex(t=>t[0]===tab.dataset.libraryTab);let next;if(e.key==='ArrowRight')next=(index+1)%LIBRARY_TABS.length;else if(e.key==='ArrowLeft')next=(index+LIBRARY_TABS.length-1)%LIBRARY_TABS.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=LIBRARY_TABS.length-1;else return;e.preventDefault();selectLibraryTab(LIBRARY_TABS[next][0]);$('libraryTab-'+libraryTab).focus()});
  $('undoBtn').onclick=undoEdit;$('redoBtn').onclick=redoEdit;historyButtons();
  $('projectButton').onclick=openProjects;$('settingsBtn').onclick=openSettings;$('exportExcelBtn').onclick=async()=>{try{await saveNow();location.href=`/api/projects/${state.id}/excel/export`}catch(e){toast(e.message,true)}};
  $('renderBtn').onclick=renderAudio;$('addSceneBtn').onclick=addScene;
@@ -914,7 +957,7 @@ function wire(){
       e.preventDefault();if(undo)undoEdit();else redoEdit();restoreEditingFocus(focus);return;
     }
   }
-  const writing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
+  const writing=['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''} });
 }
 installPanelResizers();

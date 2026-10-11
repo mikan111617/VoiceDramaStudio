@@ -410,7 +410,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -466,7 +466,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -649,7 +649,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -714,7 +714,7 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=0312' in html and 'game.css?v=0312' in html
+    assert 'game.js?v=0313' in html and 'game.css?v=0313' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -928,7 +928,7 @@ def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client)
     js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
     assert 'stage-ks?expectedRevision=' in js
     assert '/finalize-ks' in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html
 
 
 def test_stage_blocks_early_generation_and_export(client):
@@ -1101,7 +1101,7 @@ def test_game_cast_editor_has_same_model_ref_and_design_controls():
     assert 'gameRefPicker' in html and 'ゲーム音声専用の声設定' in html
     for term in ('data-cast-source','data-local-field','data-ref-upload','data-ref-play','data-ref-delete','data-ref-design','voiceModels','renderLocalCastEditor'):
         assert term in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html
 
 
 
@@ -1271,4 +1271,4 @@ def test_pronunciation_ui_has_import_edit_tabs_and_preview():
     for term in ('function renderDictionaries','function speechPreview','function setupDictionaryControls',
                   'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText'):
         assert term in js
-    assert 'game.js?v=0312' in html
+    assert 'game.js?v=0313' in html

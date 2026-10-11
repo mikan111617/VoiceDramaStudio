@@ -42,6 +42,16 @@ button.danger,.btn.danger,.game-ref-row .ref-remove,.dict-delete{color:var(--red
 .asset-meta>.small{flex:none;white-space:nowrap;margin-top:4px}
 .asset-dialogue-context,.asset-file-name{color:var(--muted);font-size:12px;overflow-wrap:anywhere;line-height:1.7;margin-top:5px}
 .asset-file-name{font-family:Consolas,monospace;font-size:11px}
+.library-controls{margin-bottom:18px}
+.library-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.library-tabs button{padding:9px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-size:13px;display:flex;align-items:center;gap:7px}
+.library-tabs button[aria-selected=true]{background:#d9ecf4;color:var(--accent2);border-color:#699fb8;box-shadow:inset 0 -2px #348bb2}
+.library-tab-count{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.library-controls>label{display:block;color:var(--muted);font-size:12px;margin-bottom:7px}
+.library-search-row{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.library-search-row input{min-width:0;flex:1;width:100%;padding:10px 12px;border-radius:6px;font-size:14px}
+.library-search-row button{flex:none;font-size:12px}
+@media(max-width:600px){.library-search-row{flex-wrap:wrap}.library-search-row input{flex-basis:100%}.library-tabs button{padding:10px 12px;min-height:42px}}
 .project-choice small{color:var(--muted)}
 .shell,.main-layout{height:calc(100dvh - var(--harbor-chrome-height));min-height:640px}
 .side,.sidebar{background:var(--side);border-color:var(--line)}

@@ -86,3 +86,21 @@ test('shared audio shows its distinct dialogue associations and ignores duplicat
  const e=editor();e.run(`state.scenes[0].name='港';state.scenes[1].name='館';state.lines=[{id:'x',sceneId:'s',speaker:'愛理',text:'こんにちは。',takes:[{assetId:'shared'},{assetId:'shared'}]},{id:'y',sceneId:'other',speaker:'真歩流',text:'行こう！',takes:[{assetId:'shared'}]}];`);
  assert.deepEqual(e.get("libraryDisplayInfo({id:'shared',name:'voice.wav'},libraryDialogueMap())"),{title:'こんにちは。 / 行こう！',context:'港 · 愛理 / 館 · 真歩流'});
 });
+
+test('library tabs search dialogue content separately from music and sound titles',()=>{
+ const e=editor();e.run(`state.lines=[{id:'x',text:'港の向こうへ行こう！',takes:[{assetId:'voice'}]}];state.assets=[{id:'voice',kind:'voice',name:'generated.wav'},{id:'music',kind:'bgm',name:'Ocean BGM.wav'},{id:'sound',kind:'sfx',name:'ドアの音.wav'},{id:'ref',kind:'reference',name:'港の向こう.wav'}];`);
+ assert.deepEqual(e.get("filteredLibraryAssets('voice','向こう').map(a=>a.id)"),['voice']);
+ assert.deepEqual(e.get("filteredLibraryAssets('voice','generated').map(a=>a.id)"),[]);
+ assert.deepEqual(e.get("filteredLibraryAssets('bgm',' ｏｃｅａｎ ').map(a=>a.id)"),['music']);
+ assert.deepEqual(e.get("filteredLibraryAssets('sfx','ドア').map(a=>a.id)"),['sound']);
+ assert.deepEqual(e.get("filteredLibraryAssets('bgm','向こう').map(a=>a.id)"),[]);
+ assert.deepEqual(e.get("filteredLibraryAssets('voice','').map(a=>a.id)"),['voice']);
+});
+
+test('legacy dialogue audio is discoverable while ambience and unassigned files stay available',()=>{
+ const e=editor();e.run(`state.lines=[{id:'x',text:'こんにちは。',takes:[{assetId:'legacy'}]}];state.assets=[{id:'legacy',kind:'other',name:'legacy.wav'},{id:'unassigned',kind:'voice',name:'未割当.wav'},{id:'sea',kind:'ambience',name:'波の音.wav'},{id:'unknown',kind:'other',name:'素材.wav'}];`);
+ assert.deepEqual(e.get("filteredLibraryAssets('voice','こんにちは').map(a=>a.id)"),['legacy']);
+ assert.deepEqual(e.get("filteredLibraryAssets('voice','未割当').map(a=>a.id)"),['unassigned']);
+ assert.deepEqual(e.get("filteredLibraryAssets('ambience','波').map(a=>a.id)"),['sea']);
+ assert.deepEqual(e.get("filteredLibraryAssets('other','').map(a=>a.id)"),['unknown']);
+});
