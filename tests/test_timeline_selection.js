@@ -74,3 +74,15 @@ test('resize changes just the active clip while preserving the selection',()=>{
  assert.equal(e.get('state.clips[1].duration'),5);assert.equal(e.get('state.clips[0].duration'),2);
  assert.deepEqual(e.get('[...selectedClips]'),['a','b','c']);
 });
+
+test('library titles resolve old takes, current takes, and clip links without renaming files',()=>{
+ const e=editor();e.run(`state.scenes[0].name='港';state.lines=[{id:'line',sceneId:'s',speaker:'愛理',text:'海が見える。',takes:[{assetId:'old'},{assetId:'new'}]}];state.clips[0].lineId='line';state.clips[0].assetId='linked';`);
+ for(const id of ['old','new','linked'])assert.deepEqual(e.get(`libraryDisplayInfo({id:'${id}',name:'line_generated.wav'},libraryDialogueMap())`),{title:'海が見える。',context:'港 · 愛理'});
+ assert.deepEqual(e.get("libraryDisplayInfo({id:'bgm',name:'港の音楽.wav'},libraryDialogueMap())"),{title:'港の音楽.wav',context:''});
+ e.run("state.lines[0].text='海がきれい！'");assert.equal(e.get("libraryDisplayInfo({id:'old',name:'old.wav'},libraryDialogueMap()).title"),'海がきれい！');
+});
+
+test('shared audio shows its distinct dialogue associations and ignores duplicate takes',()=>{
+ const e=editor();e.run(`state.scenes[0].name='港';state.scenes[1].name='館';state.lines=[{id:'x',sceneId:'s',speaker:'愛理',text:'こんにちは。',takes:[{assetId:'shared'},{assetId:'shared'}]},{id:'y',sceneId:'other',speaker:'真歩流',text:'行こう！',takes:[{assetId:'shared'}]}];`);
+ assert.deepEqual(e.get("libraryDisplayInfo({id:'shared',name:'voice.wav'},libraryDialogueMap())"),{title:'こんにちは。 / 行こう！',context:'港 · 愛理 / 館 · 真歩流'});
+});

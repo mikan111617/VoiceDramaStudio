@@ -32,6 +32,16 @@ button.danger,.btn.danger,.game-ref-row .ref-remove,.dict-delete{color:var(--red
 .mode-switch a:hover,.modes a:not(.active):hover{background:#e2f2f8;color:var(--accent2)}
 .project-name,.project-choice{background:var(--surface);border-color:var(--line);color:var(--text)}
 .project-name{min-width:170px;max-width:280px;font-size:14px}
+.topbar .project-name{display:flex;align-items:center;gap:14px;flex:0 1 auto;width:clamp(260px,38vw,680px);min-width:260px;max-width:min(680px,100%);white-space:normal;overflow:visible;text-overflow:clip}
+.project-name .project-title{float:none;flex:1;min-width:0;color:var(--text);overflow-wrap:anywhere;text-align:left}
+.project-name .project-chevron{float:none;flex:none;color:var(--accent)}
+.scene-rename-btn{flex:none;width:26px;height:30px;padding:0;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-size:16px}
+.scene-rename-btn:hover,.scene-rename-btn:focus-visible{color:var(--accent);border-color:#aac8d7;background:#f5fafb}
+.asset-meta{align-items:flex-start}
+.asset-meta .asset-display-title{flex:1;min-width:0;font-size:16px;line-height:1.8;overflow-wrap:anywhere;white-space:pre-wrap;margin-bottom:0}
+.asset-meta>.small{flex:none;white-space:nowrap;margin-top:4px}
+.asset-dialogue-context,.asset-file-name{color:var(--muted);font-size:12px;overflow-wrap:anywhere;line-height:1.7;margin-top:5px}
+.asset-file-name{font-family:Consolas,monospace;font-size:11px}
 .project-choice small{color:var(--muted)}
 .shell,.main-layout{height:calc(100dvh - var(--harbor-chrome-height));min-height:640px}
 .side,.sidebar{background:var(--side);border-color:var(--line)}
@@ -167,3 +177,4 @@ kbd{background:#f4fafc;border-color:var(--line);color:var(--text)}
 @media(max-width:900px){.shell{height:auto;min-height:0}.side-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}.side-tabs button{text-align:center}.bar,.topbar{padding:12px 16px}.top-actions{margin-left:0}.main{height:850px}.details{height:750px}}
 @media(max-width:600px){.harbor-masthead{padding:16px 16px 84px;flex-wrap:wrap}.harbor-brand strong{font-size:20px;letter-spacing:2px}.harbor-focus .harbor-masthead{padding:12px 16px}.bar,.topbar{gap:10px}.top-actions .btn.ghost{display:inline-block}.top-actions .small{display:inline}.project-name{min-width:120px;max-width:100%}.voice-list{padding:12px}.voice-row{padding:14px 12px}.voice-row-meta{gap:8px}.pane-head{padding:14px}.toolset{width:100%}.side-tabs{grid-template-columns:1fr}.speaker-select-tools button{white-space:normal}.production .inline{flex-wrap:wrap}.production .inline>button{flex-basis:100%}.inspector-grid{gap:10px}.workbench-title{align-items:flex-start}.brand{min-width:0}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.progress div,.panel-resizer{transition:none}}
+@media(max-width:600px){.topbar .project-name{width:100%;min-width:0;max-width:100%}}
