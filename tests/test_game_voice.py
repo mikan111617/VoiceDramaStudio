@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=038' in html
+    assert 'game.js?v=039' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=038' in html
+    assert 'game.js?v=039' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -629,7 +629,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=038' in html
+    assert 'game.js?v=039' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -694,7 +694,7 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=038' in html and 'game.css?v=038' in html
+    assert 'game.js?v=039' in html and 'game.css?v=039' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -908,7 +908,7 @@ def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client)
     js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
     assert 'stage-ks?expectedRevision=' in js
     assert '/finalize-ks' in js
-    assert 'game.js?v=038' in html
+    assert 'game.js?v=039' in html
 
 
 def test_stage_blocks_early_generation_and_export(client):
@@ -1081,7 +1081,7 @@ def test_game_cast_editor_has_same_model_ref_and_design_controls():
     assert 'gameRefPicker' in html and 'ゲーム音声専用の声設定' in html
     for term in ('data-cast-source','data-local-field','data-ref-upload','data-ref-play','data-ref-delete','data-ref-design','voiceModels','renderLocalCastEditor'):
         assert term in js
-    assert 'game.js?v=038' in html
+    assert 'game.js?v=039' in html
 
 
 
@@ -1116,3 +1116,139 @@ def test_game_voice_scenario_speaker_bulk_select_has_controls():
     assert "$('selectAll').indeterminate=" in js
     assert "$('speakerSelectAll').onclick=()=>markSpeaker(true)" in js
     assert "$('speakerDeselectAll').onclick=()=>markSpeaker(false)" in js
+
+
+
+def _dict_import(client,state,kind,body):
+    return client.post(f'/api/game/projects/{state["id"]}/dictionaries/{kind}?expectedRevision={state["revision"]}',
+        files={'file':('dictionary.json',json.dumps(body,ensure_ascii=False).encode('utf8'),'application/json')})
+
+
+def test_speech_dictionaries_import_legacy_json_without_touching_ks(client):
+    state=new_game(client)
+    src='#mahoru\n舞黒館に行くよ。朱志香さん。[p]\n'
+    state=ks_file(client,state,src).json()
+    original=state['voices'][0].copy()
+    p={'舞黒館':'まいくろかん','舞黒':'まいくろ','朱志香':'じゅしか','2F':'にかい'}
+    resp=_dict_import(client,state,'pronunciation',p)
+    assert resp.status_code==200,resp.text
+    state=resp.json()
+    pro={'version':1,'entries':{'朱志香':{'reading':'じゅしか','aliases':['ジュシカ'],'enabled':True,
+        'accent':'じゅ','instruction':'冒頭のじゅを強めに'},
+        '愛理':{'reading':'あいり','enabled':False,'note':'不要'}}}
+    resp=_dict_import(client,state,'prosody',pro)
+    assert resp.status_code==200,resp.text
+    state=resp.json()
+    assert state['pronunciationDictionary']==p
+    assert state['prosodyDictionary']['愛理']['enabled'] is False
+    assert state['scenarios'][0]['content']==src
+    voice=state['voices'][0]
+    assert voice==original
+    txt,notes=game._speech_inputs(state,voice)
+    assert txt=='まいくろかんに行くよ。じゅしかさん。'
+    assert notes=='冒頭のじゅを強めに'
+    assert game._speech_text('12F 2F 2Floor','2F' and {'2F':'にかい'})=='12F にかい 2Floor'
+
+
+def test_dictionary_from_attached_files_roundtrip_and_longest_match(client):
+    # Test the exact shapes of the two original uploaded dictionaries.
+    path=Path(__file__).resolve().parents[1] / 'examples'
+    readings=json.loads((path/'pronunciation_dictionary.json').read_text(encoding='utf8'))
+    accents=json.loads((path/'prosody_dictionary.json').read_text(encoding='utf8'))
+    state=new_game(client)
+    state=_dict_import(client,state,'pronunciation',readings).json()
+    state=_dict_import(client,state,'prosody',accents).json()
+    assert len(state['pronunciationDictionary'])==34
+    assert len(state['prosodyDictionary'])==11
+    voice={'ttsText':'富礼知朱志香は舞黒館の2Fにいる。叡留久が来た。'}
+    text,caption=game._speech_inputs(state,voice)
+    assert text=='ふれち、じゅしかはまいくろかんのにかいにいる。えるくが来た。'
+    assert 'じゅしか' in caption and 'えるく' in caption
+    assert '舞黒' not in text and '朱志香' not in text
+
+
+def test_dictionary_can_edit_disable_remove_and_mark_only_affected_takes_stale(client):
+    state=new_game(client)
+    state=ks_file(client,state,'#mahoru\n舞黒館です。[p]\n#airi\nこんにちは。[p]\n').json()
+    for v in state['voices']:
+        v['audio']=f'{v["speaker"]}/scene1/{v["voiceId"]}.wav'
+    game._write(state['id'],state)
+    changed=client.put(f'/api/game/projects/{state["id"]}',json={
+        'expectedRevision':state['revision'],'changes':{'pronunciationDictionary':{'舞黒館':'まいくろかん'}}})
+    assert changed.status_code==200,changed.text
+    next_state=changed.json()
+    assert next_state['voices'][0]['stale'] is True
+    assert next_state['voices'][1]['stale'] is False
+    assert next_state['voices'][0]['audio']==state['voices'][0]['audio']
+    next_state['voices'][0]['stale']=False
+    game._write(next_state['id'],next_state)
+    pro={'朱志香':{'reading':'じゅしか','aliases':[], 'enabled':False,'instruction':'大声で'}}
+    r=client.put(f'/api/game/projects/{state["id"]}',json={
+        'expectedRevision':next_state['revision'],'changes':{'prosodyDictionary':pro}})
+    assert r.status_code==200,r.text
+    assert all(not v['stale'] for v in r.json()['voices'])
+    # Manual delete is a legal dictionary update.
+    r2=client.put(f'/api/game/projects/{state["id"]}',json={
+        'expectedRevision':r.json()['revision'],'changes':{'prosodyDictionary':{}}})
+    assert r2.status_code==200,r2.text
+    assert r2.json()['pronunciationDictionary']=={'舞黒館':'まいくろかん'}
+
+
+def test_bad_dictionary_upload_keeps_all_existing_project_state(client):
+    state=new_game(client)
+    for kind,body in [('pronunciation',{'':'empty'}),('pronunciation',{'舞黒館':[]}),
+        ('prosody',{'entries':{'朱志香':{'aliases':'string'}}}),('prosody',{'hello':'world'})]:
+        resp=_dict_import(client,state,kind,body)
+        assert resp.status_code==400,resp.text
+        assert game.get_game(state['id'])['revision']==state['revision']
+    # Importing a valid dictionary with a stale expectedRevision gives 409.
+    state=_dict_import(client,state,'pronunciation',{'舞黒館':'まいくろかん'}).json()
+    res=client.post(f'/api/game/projects/{state["id"]}/dictionaries/pronunciation?expectedRevision={state["revision"]-1}',
+      files={'file':('dict.json',b'{"test":"reading"}','application/json')})
+    assert res.status_code==409
+
+
+def test_dictionary_worker_request_applies_readings_and_prosody(client,monkeypatch):
+    state=new_game(client)
+    state=ks_file(client,state,'#mahoru\n朱志香さん、舞黒館に来ました！[p]\n').json()
+    local=game.default_local_cast('mahoru')
+    changes={'localCasts':{'mahoru':local},'localCastMode':{'mahoru':'local'},
+             'pronunciationDictionary':{'朱志香':'じゅしか','舞黒館':'まいくろかん'},
+             'prosodyDictionary':{'朱志香':{'reading':'じゅしか','aliases':[],
+                 'enabled':True,'accent':'じゅ','instruction':'冒頭のじゅにアクセント'}}}
+    r=client.put(f'/api/game/projects/{state["id"]}',json={'expectedRevision':state['revision'],'changes':changes})
+    assert r.status_code==200,r.text
+    state=r.json()
+    import app as studio
+    monkeypatch.setattr(studio,'python_for',lambda engine,settings:sys.executable)
+    class CP:returncode=0;stdout='';stderr=''
+    def fake(args,**kwargs):
+        data=json.loads(Path(args[2]).read_text(encoding='utf8'))
+        item=data['items'][0]
+        assert item['text']=='じゅしかさん、まいくろかんに来ました！'
+        assert '冒頭のじゅにアクセント' in item['caption']
+        Path(item['output']).write_bytes(short_wav())
+        Path(args[3]).write_text(json.dumps({'ok':True,'items':[{'ok':True,'id':item['id'],'output':item['output']}]}))
+        return CP()
+    monkeypatch.setattr(game.subprocess,'run',fake)
+    job={'status':'running','total':0,'completed':0,'message':'','errors':[]}
+    game.generate_game_audio(state['id'],[state['voices'][0]['voiceId']],40,job)
+    assert job['status']=='done',job
+    after=game.get_game(state['id'])
+    assert after['voices'][0]['ttsText']=='朱志香さん、舞黒館に来ました！'
+    assert after['voices'][0]['text']=='朱志香さん、舞黒館に来ました！'
+    assert after['voices'][0]['caption']==''
+    assert after['voices'][0]['audio']
+
+
+def test_pronunciation_ui_has_import_edit_tabs_and_preview():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static'/'game.html').read_text(encoding='utf8')
+    js=(root/'static'/'game.js').read_text(encoding='utf8')
+    for target in ('sideTabPronunciation','sidePronunciationPanel','newPronunciation','newProsody',
+                   'pronunciationEntries','prosodyEntries','pronunciationPicker','prosodyPicker'):
+        assert f'id="{target}"' in html
+    for term in ('function renderDictionaries','function speechPreview','function setupDictionaryControls',
+                  'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText'):
+        assert term in js
+    assert 'game.js?v=039' in html

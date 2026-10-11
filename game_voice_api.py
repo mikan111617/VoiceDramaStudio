@@ -94,6 +94,13 @@ async def _json_upload(file:UploadFile):
     try:return json.loads(body.decode('utf-8-sig'))
     except (UnicodeError,ValueError):raise HTTPException(400,'有効なUTF-8 JSONを指定してください')
 
+@router.post('/api/game/projects/{gid}/dictionaries/{kind}')
+async def import_speech_dictionary(gid:str,kind:str,expectedRevision:int,file:UploadFile=File(...)):
+    if kind not in ('pronunciation','prosody'):
+        raise HTTPException(400,'読み方辞書かアクセント辞書を指定してください')
+    return _errors(game.import_speech_dictionary,gid,kind,await _json_upload(file),expectedRevision)
+
+
 @router.post('/api/game/projects/{gid}/voice-list')
 async def import_voice_list(gid:str,expectedRevision:int,file:UploadFile=File(...)):
     return _errors(game.import_voice_list,gid,await _json_upload(file),expectedRevision)

@@ -86,7 +86,8 @@ def create_game(title='新しいゲーム音声'):
              'localCasts':{}, 'localCastMode':{}, 'voiceAssets':[],
              'characterSheet':{}, 'referenceCharacters':{}, 'nonCharacterSpeakers':[],
              'speakerFilterEnabled':False, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice',
-             'pendingKS':[], 'lastIdRemaps':[]}
+             'pendingKS':[], 'lastIdRemaps':[],
+             'pronunciationDictionary':{}, 'prosodyDictionary':{}}
         return _write(pid,s)
 
 
@@ -785,6 +786,110 @@ def analyze_captions(pid,voice_ids,model,job):
         job['status']='error';job['message']=str(e)
 
 
+# Pronunciation and prosody dictionaries remain separate from the actual KS
+# text and per-line user-entered caption. Both dictionaries are game-project-local.
+MAX_DICTIONARY_ENTRIES = 1000
+
+
+def _validate_pronunciation_dictionary(value):
+    if not isinstance(value,dict) or len(value)>MAX_DICTIONARY_ENTRIES:
+        raise ValueError('読み方辞書は最大1000語のJSONオブジェクトで指定してください')
+    result={}
+    for surface,reading in value.items():
+        if not isinstance(surface,str) or not (1<=len(surface)<=100) or any(ord(c)<32 for c in surface):
+            raise ValueError('読み方辞書の単語は1〜100文字にしてください')
+        if not isinstance(reading,str) or not (1<=len(reading.strip())<=120) or any(ord(c)<32 for c in reading):
+            raise ValueError(f'{surface} の読みは1〜120文字で指定してください')
+        result[surface]=reading.strip()
+    return result
+
+
+def _validate_prosody_dictionary(value):
+    if not isinstance(value,dict) or len(value)>MAX_DICTIONARY_ENTRIES:
+        raise ValueError('アクセント辞書は最大1000語のJSONオブジェクトで指定してください')
+    result={}
+    for surface,item in value.items():
+        if not isinstance(surface,str) or not (1<=len(surface)<=100) or any(ord(c)<32 for c in surface):
+            raise ValueError('アクセント辞書の単語は1〜100文字にしてください')
+        if not isinstance(item,dict):raise ValueError(f'{surface} のアクセント設定はJSONオブジェクトが必要です')
+        aliases=item.get('aliases',[])
+        if not isinstance(aliases,list) or len(aliases)>30 or any(not isinstance(x,str) or len(x)>100 for x in aliases):
+            raise ValueError(f'{surface} の別名は30件以内・各100文字以内にしてください')
+        if item.get('enabled',True) not in (True,False):
+            raise ValueError(f'{surface} の有効設定はtrue/falseで指定してください')
+        entry={}
+        for key,limit in (('reading',120),('accent',80),('instruction',500),('note',500)):
+            v=item.get(key,'')
+            if not isinstance(v,str) or len(v)>limit or any(ord(c)<32 and c not in '\n\t' for c in v):
+                raise ValueError(f'{surface} の {key} は{limit}文字以内にしてください')
+            entry[key]=v
+        entry['aliases']=aliases
+        entry['enabled']=item.get('enabled',True)
+        result[surface]=entry
+    return result
+
+
+def _speech_text(original, dictionary):
+    """Replace only the longest original surface once; never recursively."""
+    if not dictionary:return original
+    tokens=sorted(dictionary,key=lambda x:(-len(x),x))
+    pattern=re.compile('|'.join(re.escape(x) for x in tokens))
+    def replacement(match):
+        key=match.group(0)
+        # An ASCII token such as 2F must not match inside 12F or 2Floor.
+        if key.isascii() and any(c.isalnum() for c in key):
+            begin,end=match.span()
+            if begin and original[begin-1].isascii() and original[begin-1].isalnum():return key
+            if end<len(original) and original[end].isascii() and original[end].isalnum():return key
+        return dictionary[key]
+    return pattern.sub(replacement,original)
+
+
+def _speech_inputs(state,voice):
+    """Effective worker inputs, without mutating KS, captions, or ttsText."""
+    original=voice['ttsText']
+    text=_speech_text(original,state.get('pronunciationDictionary',{}))
+    notes=[]
+    for name,item in state.get('prosodyDictionary',{}).items():
+        if not item.get('enabled',True):continue
+        terms=[name,*item.get('aliases',[])]
+        if not any(term and term in original for term in terms):continue
+        # A prosody entry may provide a reading not present in the separate
+        # pronunciation dictionary. The dedicated pronunciation dictionary wins.
+        if name not in state.get('pronunciationDictionary',{}) and item.get('reading'):
+            text=_speech_text(text,{name:item['reading']})
+        instruct=item.get('instruction','').strip()
+        if not instruct and item.get('accent'):
+            instruct=f'「{name}」は「{item["accent"]}」にアクセントを置く。'
+        if instruct:notes.append(instruct)
+    return text, '\n'.join(notes)
+
+
+def _mark_changed_dictionary_voices(before,after):
+    for v in after['voices']:
+        if not v.get('audio'):continue
+        if _speech_inputs(before,v)!=_speech_inputs(after,v):v['stale']=True
+
+
+def import_speech_dictionary(pid,kind,payload,revision):
+    if kind=='pronunciation':
+        key='pronunciationDictionary'
+        entries=_validate_pronunciation_dictionary(payload)
+    elif kind=='prosody':
+        key='prosodyDictionary'
+        if not isinstance(payload,dict) or not isinstance(payload.get('entries'),dict):
+            raise ValueError('アクセント辞書は version / entries のあるJSONを選択してください')
+        entries=_validate_prosody_dictionary(payload['entries'])
+    else:raise ValueError('辞書の種類が正しくありません')
+    with GAME_LOCK:
+        state=_load(pid)
+        if state['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
+        before=copy.deepcopy(state)
+        state[key]=entries
+        _mark_changed_dictionary_voices(before,state)
+        return _save(pid,state,revision)
+
+
 def update_game(pid,changes,revision):
     with GAME_LOCK:
         s=_load(pid)
@@ -796,6 +901,13 @@ def update_game(pid,changes,revision):
         if 'format' in changes:
             if changes['format'] not in AUDIO_FORMATS:raise ValueError('音声形式はwavかmp3です')
             s['format']=changes['format']
+        if 'pronunciationDictionary' in changes or 'prosodyDictionary' in changes:
+            before=copy.deepcopy(s)
+            if 'pronunciationDictionary' in changes:
+                s['pronunciationDictionary']=_validate_pronunciation_dictionary(changes['pronunciationDictionary'])
+            if 'prosodyDictionary' in changes:
+                s['prosodyDictionary']=_validate_prosody_dictionary(changes['prosodyDictionary'])
+            _mark_changed_dictionary_voices(before,s)
         if 'bindings' in changes:
             bindings=changes['bindings']
             if not isinstance(bindings,dict):raise ValueError('キャスト設定が正しくありません')
@@ -1191,6 +1303,8 @@ def generate_game_audio(pid,voice_ids,steps,job):
         with GAME_LOCK:
             groups=generation_groups(pid,set(voice_ids))
         if not groups:raise ValueError('生成する台詞がありません')
+        with GAME_LOCK:
+            current_state=_load(pid)
         buckets=defaultdict(list)
         for v,engine,model,cast,refs in groups:
             buckets[(engine,model)].append((v,cast,refs))
@@ -1202,7 +1316,10 @@ def generate_game_audio(pid,voice_ids,steps,job):
                 d=Path(temp)
                 request=[]
                 for v,cast,refs in items:
-                    request.append({'id':v['voiceId'],'text':v['ttsText'],'caption':v['caption'] or cast.get('description',''),
+                    pronunciation_text,prosody_notes=_speech_inputs(current_state,v)
+                    base_caption=v['caption'] or cast.get('description','')
+                    caption=(base_caption+'\n'+prosody_notes).strip() if prosody_notes else base_caption
+                    request.append({'id':v['voiceId'],'text':pronunciation_text,'caption':caption,
                          'description':cast.get('description',''),'refs':refs,'mode':cast.get('mode','clone'),
                          'language':cast.get('language','Japanese'),'ref_text':cast.get('refText',''),
                          'num_steps':steps,'output':str(d/(v['voiceId']+'.wav')),
