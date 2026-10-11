@@ -447,3 +447,70 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
     assert 'game.js?v=031' in html
+
+
+def test_ks_reserves_explicit_id_before_reusing_old_id(client):
+    s=new_game(client)
+    # A previously imported ID (v03812) was associated with an earlier line.
+    # The new KS explicitly assigns it to a *later* line, while the earlier
+    # untagged dialogue remains eligible for SequenceMatcher reuse.
+    original='#eruku\n以前の台詞。[p]\n#eruku\n後ろの台詞。[p]\n'
+    res=ks_file(client,s,original,name='scene4.ks')
+    assert res.status_code==200,res.text
+    s=res.json()
+    id_early=s['voices'][0]['voiceId']
+    id_late=s['voices'][1]['voiceId']
+    # Simulate an old game workspace that recorded v03812 on the earlier line.
+    state=game.get_game(s['id'])
+    state['voices'][0]['voiceId']='v03812'
+    state['voices'][1]['voiceId']=id_late
+    state['lastIssued']=3958
+    game._write(s['id'],state)
+    changed=('#eruku\n以前の台詞。[p]\n'
+             '#eruku\n[voice id="v03812"]\n新しく書いた台詞。[p]\n')
+    res=ks_file(client,state,changed,name='scene4.ks')
+    assert res.status_code==200,res.text
+    newer=res.json()
+    assert newer['voices'][0]['voiceId']=='v03959'
+    assert newer['voices'][1]['voiceId']=='v03812'
+    assert newer['voices'][1]['text']=='新しく書いた台詞。'
+    assert len({v['voiceId'] for v in newer['voices']})==2
+
+
+def test_ks_explicit_id_elsewhere_is_not_reused_and_reports_owner(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\n[voice id="v03812"]\n既に使っている。[p]\n',name='scene3.ks').json()
+    res=ks_file(client,s,'#eruku\n[voice id="v03812"]\n新しい台詞。[p]\n',name='scene4.ks')
+    assert res.status_code==400
+    assert 'scene4.ks' in res.json()['detail']
+    assert 'scene3' in res.json()['detail']
+    assert 'v03812' in res.json()['detail']
+    assert game.get_game(s['id'])['revision']==s['revision']
+
+
+def test_ks_duplicate_tag_reports_two_line_numbers(client):
+    s=new_game(client)
+    text=('#eruku\n[voice id="v03812"]\n初め。[p]\n'
+          '#eruku\n[voice id="v03812"]\n次。[p]\n')
+    res=ks_file(client,s,text,name='scene4.ks')
+    assert res.status_code==400
+    assert '2行目' in res.json()['detail']
+    assert '5行目' in res.json()['detail']
+
+
+def test_ks_explicit_id_does_not_reuse_unrelated_caption_or_audio(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#eruku\n最初。[p]\n#eruku\n次。[p]\n',name='scene4.ks').json()
+    previous=s['voices'][1]['voiceId']
+    first=s['voices'][0]['voiceId']
+    change={'voices':[{'voiceId':first,'caption':'元の第一台詞の演技指示'}]}
+    result=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],'changes':change})
+    assert result.status_code==200
+    s=result.json()
+    new_source='#eruku\n[voice id="v03812"]\n最初。[p]\n#eruku\n次。[p]\n'
+    result=ks_file(client,s,new_source,name='scene4.ks')
+    assert result.status_code==200,result.text
+    newer=result.json()
+    assert newer['voices'][0]['voiceId']=='v03812'
+    assert newer['voices'][0]['caption']==''  # Never inherit first voice's caption.
+    assert newer['voices'][1]['voiceId']==previous

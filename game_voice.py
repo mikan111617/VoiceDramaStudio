@@ -202,27 +202,54 @@ def _assign(s,scenario_key,rows,old_rows):
             for i,j in zip(range(i1,i2),range(j1,j2)):
                 if old_rows[i]['speaker']==rows[j]['speaker']:
                     reused[j]=old_rows[i]
-    other_ids={v['voiceId'] for v in s['voices'] if v['scenario']!=scenario_key}
+    # Reserve *all* IDs explicitly embedded in the incoming KS before using
+    # sequence matching. Otherwise an earlier untagged line may inherit an ID
+    # that belongs to a later [voice id="..."] line in the same file.
+    other_owners={v['voiceId']:v['scenario'] for v in s['voices']
+                  if v['scenario']!=scenario_key}
     old_by_id={v['voiceId']:v for v in old_rows}
-    occupied=other_ids | set(old_by_id)
-    s['lastIssued']=max(s['lastIssued'],_issued(s['voices']), _issued([{'voiceId':r['existingId']} for r in rows]))
+    explicit_locations={}
+    for row in rows:
+        vid=row.get('existingId')
+        if not vid:
+            continue
+        if vid in explicit_locations:
+            raise ValueError(f'{row.get("voiceTagLine") or row.get("sourceLine") or "不明"}行目: '
+                             f'ボイスID {vid} が同じKS内で重複しています'
+                             f'（最初は{explicit_locations[vid]}行目）')
+        explicit_locations[vid]=row.get('voiceTagLine') or row.get('sourceLine') or '不明'
+        if vid in other_owners:
+            raise ValueError(f'{row.get("voiceTagLine") or row.get("sourceLine") or "不明"}行目: '
+                             f'ボイスID {vid} は別シナリオ「{other_owners[vid]}」で使用中です。'
+                             '既存のゲーム音声プロジェクト内のシナリオを確認してください')
+    reserved=set(explicit_locations)
+    occupied=set(other_owners) | set(old_by_id) | reserved
+    s['lastIssued']=max(s['lastIssued'],_issued(s['voices']),
+                        _issued([{'voiceId':r['existingId']} for r in rows]))
     assigned=[];local=set()
     for i,row in enumerate(rows):
         explicit_id=row.get('existingId')
-        # The script's explicit ID is authoritative: an existing ID from this
-        # SAME scenario must remain valid even if insertion/reordering makes the
-        # sequence matcher pair the row with a different old dialogue.
-        reuse=(old_by_id.get(explicit_id) if explicit_id else None) or reused.get(i)
-        vid=explicit_id or (reuse and reuse.get('voiceId'))
-        if vid and (vid in local or vid in other_ids or
-                    (not explicit_id and vid not in old_by_id and vid in occupied)):
-            raise ValueError(f'ボイスIDが重複しています: {vid}')
+        if explicit_id:
+            # A tagged ID is authoritative; never borrow a different old
+            # voice's audio/caption because a fuzzy match happened to align.
+            vid=explicit_id
+            reuse=old_by_id.get(vid)
+        else:
+            candidate=reused.get(i)
+            candidate_id=candidate.get('voiceId') if candidate else None
+            # An inferred ID must not steal an explicit ID elsewhere in this KS
+            # nor an ID already assigned by a previous row.
+            if candidate_id and candidate_id in old_by_id and candidate_id not in reserved and candidate_id not in local:
+                vid=candidate_id
+                reuse=candidate
+            else:
+                vid=None
+                reuse=None
         if not vid:
             while True:
-                s['lastIssued']+=1;vid=f"v{s['lastIssued']:05d}"
+                s['lastIssued']+=1
+                vid=f"v{s['lastIssued']:05d}"
                 if vid not in occupied and vid not in local:break
-            # New IDs must never inherit the wrong old row's voice data.
-            reuse=None
         local.add(vid)
         item={'voiceId':vid,'speaker':row['speaker'],'scenario':scenario_key,'text':row['text'],
               'ttsText':(reuse.get('ttsText') if reuse and reuse.get('text')==row['text'] else row['text']),
