@@ -770,7 +770,7 @@ let preferredPanelSizes=null;
 function clampPanelSize(value,min,max){return Math.min(Math.max(Number(value)||min,min),Math.max(min,max))}
 function horizontalPanelsActive(){return window.matchMedia('(min-width: 951px)').matches}
 function measuredPanelSizes(){
- return {sidebar:document.querySelector('.sidebar').getBoundingClientRect().width,
+ return {sidebar:document.querySelector('.sidebar').getBoundingClientRect().width||preferredPanelSizes?.sidebar||220,
   editor:document.querySelector('.editor-panel').getBoundingClientRect().width,
   inspector:document.querySelector('.workbench-foot').getBoundingClientRect().height};
 }
@@ -778,10 +778,11 @@ function applyPanelSizes(sizes){
  const layout=document.querySelector('.main-layout');
  if(horizontalPanelsActive()){
   const maxWidth=layout.getBoundingClientRect().width;
-  const remaining=maxWidth-2*PANEL_LIMITS.gutter;
-  const sidebar=clampPanelSize(sizes.sidebar,PANEL_LIMITS.sidebar,remaining-PANEL_LIMITS.editor-PANEL_LIMITS.workbench);
+  const focused=document.body.classList.contains('harbor-focus');
+  const remaining=maxWidth-(focused?1:2)*PANEL_LIMITS.gutter;
+  const sidebar=focused?0:clampPanelSize(sizes.sidebar,PANEL_LIMITS.sidebar,remaining-PANEL_LIMITS.editor-PANEL_LIMITS.workbench);
   const editor=clampPanelSize(sizes.editor,PANEL_LIMITS.editor,remaining-sidebar-PANEL_LIMITS.workbench);
-  layout.style.setProperty('--vds-sidebar-width',Math.round(sidebar)+'px');
+  if(!focused)layout.style.setProperty('--vds-sidebar-width',Math.round(sidebar)+'px');
   layout.style.setProperty('--vds-editor-width',Math.round(editor)+'px');
  }
  const workbench=document.querySelector('.workbench');
@@ -807,6 +808,7 @@ function installPanelResizers(){
   if(saved && ['sidebar','editor','inspector'].every(k=>Number.isFinite(saved[k])&&saved[k]>0))preferredPanelSizes=saved;
  }catch(_){/* localStorage disabled or old data */}
  if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes);
+ if(!preferredPanelSizes)preferredPanelSizes=measuredPanelSizes();
  const layout=document.querySelector('.main-layout');
  const workbench=document.querySelector('.workbench');
  const handlers=[['resizeSidebar','sidebar'],['resizeEditor','editor'],['resizeInspector','inspector']];
@@ -848,6 +850,7 @@ function installPanelResizers(){
   });
  }
  window.addEventListener('resize',()=>{if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes)});
+ window.addEventListener('harborlayoutchange',()=>{if(preferredPanelSizes)applyPanelSizes(preferredPanelSizes)});
 }
 function wire(){
  $('undoBtn').onclick=undoEdit;$('redoBtn').onclick=redoEdit;historyButtons();

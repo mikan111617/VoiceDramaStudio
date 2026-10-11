@@ -73,7 +73,7 @@ function renderVoiceRows(){
  const rows=all.filter(v=>!query||[v.voiceId,v.sourceId,v.speaker,v.text,v.ttsText].join(' ').toLowerCase().includes(query));
  const wrap=$('voiceList');
  $('voiceCount').textContent=`${rows.length}/${all.length}`;
- wrap.innerHTML=rows.map(v=>`<div class="voice-row ${focusedVoice===v.voiceId?'selected':''}" data-voice="${esc(v.voiceId)}"><input type="checkbox" data-mark="${esc(v.voiceId)}" ${marked.has(v.voiceId)?'checked':''} aria-label="${esc(v.voiceId)}を生成対象に選ぶ"><span class="voice-id">${esc(v.voiceId)}</span><span class="voice-speaker" title="${esc(v.speaker)}">${esc(v.speaker)}</span><span class="voice-text" title="${esc(v.text)}">${esc(v.text)}</span><span class="voice-status ${v.stale?'stale':v.audio?'ready':''}">${displayStatus(v)}</span></div>`).join('')||'<div class="empty">該当する台詞がありません。</div>';
+ wrap.innerHTML=rows.map(v=>`<div class="voice-row ${focusedVoice===v.voiceId?'selected':''}" data-voice="${esc(v.voiceId)}" role="button" tabindex="0" aria-label="${esc(v.speaker)} ${esc(v.voiceId)}の台詞を編集"><input type="checkbox" data-mark="${esc(v.voiceId)}" ${marked.has(v.voiceId)?'checked':''} aria-label="${esc(v.voiceId)}を生成対象に選ぶ"><div class="voice-row-main"><div class="voice-row-meta"><span class="voice-speaker">${esc(v.speaker)}</span><span class="voice-id">${esc(v.voiceId)}</span><span class="voice-status ${v.stale?'stale':v.audio?'ready':''}">${v.audio&&!v.stale?'✓ ':''}${displayStatus(v)}</span></div><div class="voice-text">${esc(v.text)}</div>${v.caption?`<div class="voice-caption">${esc(v.caption)}</div>`:''}</div></div>`).join('')||'<div class="empty">該当する台詞がありません。</div>';
  // Selection controls refer to the entire current scenario, even when the
  // text search hides some of its lines. Never modify other scenarios' marks.
  const totalSelected=all.filter(v=>marked.has(v.voiceId)).length;
@@ -398,18 +398,22 @@ $('gameRefPicker').onchange=e=>{const file=e.target.files[0];if(file)uploadGameR
 const GAME_LAYOUT_KEY='vds.game.layout.v1';
 let gamePanelSizes=null;
 function measureGamePanels(){return {
- side:document.querySelector('.side').getBoundingClientRect().width,
+ side:document.querySelector('.side').getBoundingClientRect().width||gamePanelSizes?.side||290,
  details:document.querySelector('.details').getBoundingClientRect().width,
- source:document.querySelector('.source-pane').getBoundingClientRect().height,
+ source:document.body.classList.contains('harbor-focus')?(gamePanelSizes?.source||180):document.querySelector('.source-pane').getBoundingClientRect().height,
  production:document.querySelector('.production').getBoundingClientRect().height
 }}
 function applyGamePanels(sizes){
  const shell=document.querySelector('.shell'),main=document.querySelector('.main'),details=document.querySelector('.details');
  const clamp=(v,min,max)=>Math.min(Math.max(Number(v)||min,min),Math.max(min,max));
  if(window.matchMedia('(min-width:901px)').matches){
-  const available=shell.getBoundingClientRect().width-16-300;
-  const side=clamp(sizes.side,160,available-240),right=clamp(sizes.details,240,available-side);
-  shell.style.setProperty('--game-side-width',side+'px');shell.style.setProperty('--game-details-width',right+'px');
+  if(document.body.classList.contains('harbor-focus')){
+   shell.style.setProperty('--game-details-width',clamp(sizes.details,240,shell.getBoundingClientRect().width-308)+'px');
+  }else{
+   const available=shell.getBoundingClientRect().width-16-300;
+   const side=clamp(sizes.side,160,available-240),right=clamp(sizes.details,240,available-side);
+   shell.style.setProperty('--game-side-width',side+'px');shell.style.setProperty('--game-details-width',right+'px');
+  }
  }
  const sourceMin=document.querySelector('.pane-head').getBoundingClientRect().height+$('shrinkGameSource').getBoundingClientRect().height+8;
  const voiceMin=document.querySelector('.voice-pane-header').getBoundingClientRect().height+24;
@@ -426,6 +430,7 @@ function resetGamePanels(){
 function installGamePanelResizers(){
  try{const saved=JSON.parse(localStorage.getItem(GAME_LAYOUT_KEY));if(saved&&['side','details','source','production'].every(k=>Number.isFinite(saved[k])&&saved[k]>0))gamePanelSizes=saved}catch(_){}
  applyGamePanels(gamePanelSizes||measureGamePanels());
+ if(!gamePanelSizes)gamePanelSizes=measureGamePanels();
  for(const [id,part] of [['resizeGameSide','side'],['resizeGameDetails','details'],['resizeGameSource','source'],['resizeGameProduction','production']]){
   const grip=$(id),horizontal=['side','details'].includes(part);let drag=null;
   grip.title='ドラッグまたは矢印キーでサイズ変更。ダブルクリックで初期化';
@@ -438,11 +443,13 @@ function installGamePanelResizers(){
  $('resetGameLayout').onclick=resetGamePanels;
  $('shrinkGameSource').onclick=()=>{const sizes=measureGamePanels();sizes.source=1;applyGamePanels(sizes);saveGamePanels()};
  window.addEventListener('resize',()=>applyGamePanels(gamePanelSizes||measureGamePanels()));
+ window.addEventListener('harborlayoutchange',()=>applyGamePanels(gamePanelSizes||measureGamePanels()));
 }
 wire();
 $('renameProject').onclick=renameGame;
 $('dismissIdRemap').onclick=dismissRemapNotice;
 installGamePanelResizers();
+$('voiceList').addEventListener('keydown',e=>{if(e.target.matches('.voice-row')&&['Enter',' '].includes(e.key)){e.preventDefault();const id=e.target.dataset.voice;focusVoice(id,true);$('voiceList').querySelector(`[data-voice="${CSS.escape(id)}"]`)?.focus({preventScroll:true})}});
 $('sideTabFiles').onclick=()=>{setSideTab('files');document.querySelector('.side-scroll').scrollTop=0};
 $('sideTabCasts').onclick=()=>{setSideTab('casts');document.querySelector('.side-scroll').scrollTop=0};
 $('speakerSelectAll').onclick=()=>markSpeaker(true);
