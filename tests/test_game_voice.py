@@ -390,4 +390,60 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=030' in html
+    assert 'game.js?v=031' in html
+
+
+def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
+    state=new_game(client)
+    original=('#mahoru\n[voice id="v00211"]\n初めの台詞。[p]\n'
+              '#airi\n[voice id="v00212"]\n二つ目。[p]\n')
+    saved=ks_file(client,state,original)
+    assert saved.status_code==200,saved.text
+    state=saved.json()
+    result=client.put(f'/api/game/projects/{state["id"]}',json={
+        'expectedRevision':state['revision'],
+        'changes':{'voices':[{'voiceId':'v00211','caption':'穏やかに話す'}]}})
+    assert result.status_code==200,result.text
+    state=result.json()
+    reordered=('#airi\n[voice id="v00212"]\n二つ目！[p]\n'
+               '#mahoru\n[voice id="v00211"]\n初めの台詞も変わった。[p]\n'
+               '#mahoru\n追加の台詞。[p]\n')
+    result=ks_file(client,state,reordered)
+    assert result.status_code==200,result.text
+    fresh=result.json()
+    assert [v['voiceId'] for v in fresh['voices']]==['v00212','v00211','v00213']
+    assert next(v for v in fresh['voices'] if v['voiceId']=='v00211')['caption']=='穏やかに話す'
+    assert next(v for v in fresh['voices'] if v['voiceId']=='v00211')['ttsText']=='初めの台詞も変わった。'
+
+
+def test_ks_accepts_scenario_larger_than_old_five_megabyte_cap(client):
+    state=new_game(client)
+    source=';'+'注'*2_200_000+'\n#mahoru\nこんにちは。[p]\n'
+    assert len(source.encode('utf8'))>5*1024*1024
+    assert len(source.encode('utf8'))<20*1024*1024
+    result=ks_file(client,state,source,name='long_scene.ks')
+    assert result.status_code==200,result.text[:500]
+    assert result.json()['voices'][0]['text']=='こんにちは。'
+
+
+def test_ks_import_reports_file_and_line_and_rejects_oversized(client):
+    state=new_game(client)
+    bad=ks_file(client,state,'#mahoru\nこんにちは。[p]またね。[p]',name='scene7.ks')
+    assert bad.status_code==400,bad.text
+    assert 'scene7.ks' in bad.json()['detail']
+    assert '2行目' in bad.json()['detail']
+    oversized=client.post(f'/api/game/projects/{state["id"]}/import-ks?expectedRevision={state["revision"]}',
+         files=[('files',('huge.ks',b'0'*(20*1024*1024+1),'text/plain'))])
+    assert oversized.status_code==400
+    assert 'huge.ks' in oversized.json()['detail']
+    assert len(client.get(f'/api/game/projects/{state["id"]}').json()['voices'])==0
+
+
+def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
+    root=Path(__file__).resolve().parents[1]
+    js=(root/'static'/'game.js').read_text(encoding='utf8')
+    html=(root/'static'/'game.html').read_text(encoding='utf8')
+    assert 'id="importError"' in html
+    assert 'showImportError(e.message)' in js
+    assert '20*1024*1024' in js
+    assert 'game.js?v=031' in html

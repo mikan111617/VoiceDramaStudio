@@ -31,6 +31,8 @@ VOICE_OLD_RE = re.compile(r'^\s*;\s*@voice\s+id="([^"]+)"', re.I)
 ID_RE = re.compile(r'^v([0-9]+)$', re.I)
 SAFE_KEY = re.compile(r'^[\w-]+$', re.UNICODE)
 AUDIO_FORMATS = ('.wav', '.mp3')
+KS_MAX_BYTES = 20 * 1024 * 1024  # Up to 20 MiB per source file.
+KS_TOTAL_MAX_BYTES = 60 * 1024 * 1024  # Prevent oversized multi-file batches.
 
 
 def _base():
@@ -107,8 +109,8 @@ def _clean_name(name):
 
 
 def _decode_ks(content):
-    if len(content)>5*1024*1024:
-        raise ValueError('KSファイルは5MB以内にしてください')
+    if len(content)>KS_MAX_BYTES:
+        raise ValueError('KSファイルは20MB以内にしてください')
     for encoding in ('utf-8-sig','utf-8','cp932'):
         try:
             return content.decode(encoding),encoding
@@ -176,8 +178,10 @@ def parse_ks(text):
     places=defaultdict(int)
     for row in rows:
         places[row['sourceLine']]+=1
-    if any(v>1 for v in places.values()):
-        raise ValueError('同じ物理行に複数の発話があります。IDを安全に割り当てるため、発話ごとに改行してください')
+    repeated_line = next((n for n, count in places.items() if count > 1), None)
+    if repeated_line is not None:
+        raise ValueError(f'{repeated_line}行目に複数の発話があります。'
+                         'ボイスIDを安全に割り当てるため、発話ごとに行を分けてください')
     return rows
 
 
@@ -198,19 +202,27 @@ def _assign(s,scenario_key,rows,old_rows):
             for i,j in zip(range(i1,i2),range(j1,j2)):
                 if old_rows[i]['speaker']==rows[j]['speaker']:
                     reused[j]=old_rows[i]
-    occupied={v['voiceId'] for v in s['voices'] if v['scenario']!=scenario_key}
-    occupied.update(v['voiceId'] for v in old_rows)
+    other_ids={v['voiceId'] for v in s['voices'] if v['scenario']!=scenario_key}
+    old_by_id={v['voiceId']:v for v in old_rows}
+    occupied=other_ids | set(old_by_id)
     s['lastIssued']=max(s['lastIssued'],_issued(s['voices']), _issued([{'voiceId':r['existingId']} for r in rows]))
     assigned=[];local=set()
     for i,row in enumerate(rows):
-        reuse=reused.get(i)
-        vid=row.get('existingId') or (reuse and reuse.get('voiceId'))
-        if vid and (vid in local or (vid in occupied and (not reuse or reuse.get('voiceId')!=vid))):
+        explicit_id=row.get('existingId')
+        # The script's explicit ID is authoritative: an existing ID from this
+        # SAME scenario must remain valid even if insertion/reordering makes the
+        # sequence matcher pair the row with a different old dialogue.
+        reuse=(old_by_id.get(explicit_id) if explicit_id else None) or reused.get(i)
+        vid=explicit_id or (reuse and reuse.get('voiceId'))
+        if vid and (vid in local or vid in other_ids or
+                    (not explicit_id and vid not in old_by_id and vid in occupied)):
             raise ValueError(f'ボイスIDが重複しています: {vid}')
         if not vid:
             while True:
                 s['lastIssued']+=1;vid=f"v{s['lastIssued']:05d}"
                 if vid not in occupied and vid not in local:break
+            # New IDs must never inherit the wrong old row's voice data.
+            reuse=None
         local.add(vid)
         item={'voiceId':vid,'speaker':row['speaker'],'scenario':scenario_key,'text':row['text'],
               'ttsText':(reuse.get('ttsText') if reuse and reuse.get('text')==row['text'] else row['text']),
@@ -238,12 +250,18 @@ def import_ks(pid,uploads,revision):
             key=_clean_name(name[:-3]);
             if key in target_keys:raise ValueError('同じ名前のシナリオが選択されています')
             target_keys.add(key)
-            decoded,encoding=_decode_ks(body)
-            new_rows=parse_ks(decoded)
+            try:
+                decoded,encoding=_decode_ks(body)
+                new_rows=parse_ks(decoded)
+            except ValueError as exc:
+                raise ValueError(f'{name}: {exc}') from exc
             staged.append((key,name,decoded,encoding,new_rows,'\r\n' if '\r\n' in decoded else '\n'))
         for key,name,decoded,encoding,new_rows,newline in staged:
             previous=[x for x in s['voices'] if x['scenario']==key]
-            new_voices=_assign(s,key,new_rows,previous)
+            try:
+                new_voices=_assign(s,key,new_rows,previous)
+            except ValueError as exc:
+                raise ValueError(f'{name}: {exc}') from exc
             s['voices']=[v for v in s['voices'] if v['scenario']!=key]+new_voices
             s['scenarios']=[sc for sc in s['scenarios'] if sc['key']!=key]+[{
                 'key':key,'filename':name,'format':'ks','content':decoded,

@@ -53,9 +53,14 @@ def update_game(gid:str,body:ChangeGame):return _errors(game.update_game,gid,bod
 async def import_ks(gid:str,expectedRevision:int,files:list[UploadFile]=File(...)):
     if not files or len(files)>30:raise HTTPException(400,'1〜30件のKSを選択してください')
     data=[]
+    total=0
     for f in files:
-        raw=await f.read(5*1024*1024+1)
-        if len(raw)>5*1024*1024:raise HTTPException(400,'各KSは5MB以内です')
+        raw=await f.read(game.KS_MAX_BYTES+1)
+        if len(raw)>game.KS_MAX_BYTES:
+            raise HTTPException(400,f'{f.filename or "KSファイル"}: 20MBの上限を超えています')
+        total+=len(raw)
+        if total>game.KS_TOTAL_MAX_BYTES:
+            raise HTTPException(400,'KSの合計サイズは60MB以内にしてください')
         data.append((f.filename or '',raw))
     return _errors(game.import_ks,gid,data,expectedRevision)
 
