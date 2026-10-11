@@ -1,13 +1,21 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Game Voice | VoiceDrama Studio</title>
-<link rel="stylesheet" href="/static/game.css?v=037"></head>
+<link rel="stylesheet" href="/static/game.css?v=038"></head>
 <body>
 <header class="bar"><div class="brand"><span class="mark">◉</span><span><b>VOICE DRAMA STUDIO</b><small>LOCAL PRODUCTION</small></span></div>
 <nav class="modes" aria-label="制作モード"><a href="/">🎧 ボイスドラマ</a><a href="/game" class="active">🎮 ゲーム音声</a></nav>
 <span id="saveNotice">準備中…</span></header>
 <div class="shell">
-<aside class="side"><div class="side-scroll">
+<aside class="side">
+<div class="side-head">
 <div class="micro">GAME VOICE PROJECT</div><div class="inline"><select id="projectList" aria-label="ゲーム音声プロジェクト"></select><button id="newProject" title="新しいゲーム音声プロジェクト">＋</button></div>
+<div class="side-tabs" role="tablist" aria-label="左側の設定画面">
+<button type="button" id="sideTabFiles" class="active" role="tab" aria-controls="sideFilesPanel" aria-selected="true">📑 シナリオ・管理</button>
+<button type="button" id="sideTabCasts" role="tab" aria-controls="sideCastsPanel" aria-selected="false">🎙 キャラクター・声</button>
+</div>
+</div>
+<div class="side-scroll">
+<section id="sideFilesPanel" class="side-panel" role="tabpanel" aria-labelledby="sideTabFiles">
 <div class="micro" style="margin-top:23px">SOURCE FILES</div><div class="button-group"><button id="importKs">① KSを仮登録</button><button id="importJson">＋ ボイスリスト JSON</button></div>
 <p class="side-help id-import-help">複数のKSを順番に追加できます。すべて登録したあと「IDを一括確定」で全シナリオの既存IDを優先し、新規IDを発行します。</p>
 <div id="pendingKsInfo" class="pending-ks-info" role="status"></div>
@@ -19,16 +27,27 @@
 <div class="side-help">ChatGPTやClaudeにCSVを渡して「キャプション」列だけ記入。読み込み前に差分を確認します。空欄は既存値を残します。</div>
 <div class="micro" style="margin-top:23px">CONTEXT & ID</div>
 <div class="button-group"><button id="importState">↥ voice ID履歴を読み込む</button><button id="importSheet">↥ キャラクターシート</button><button id="importStory">↥ 作品コンテキストJSON</button></div>
-<div id="speakerFilterInfo" class="side-help" role="status">キャラクターシート未登録：TIPSのみ自動除外します。</div><div class="side-help">元の .ks は書き換えません。音声用テキスト、演技指示、ゲーム用シナリオは別管理です。</div></div>
+<div id="speakerFilterInfo" class="side-help" role="status">キャラクターシート未登録：TIPSのみ自動除外します。</div><div class="side-help">元の .ks は書き換えません。音声用テキスト、演技指示、ゲーム用シナリオは別管理です。</div>
+</section>
+<section id="sideCastsPanel" class="side-panel" role="tabpanel" aria-labelledby="sideTabCasts" hidden>
+<div class="micro">CHARACTERS & VOICES</div>
+<p class="helper">キャラクターごとに「ボイスドラマのキャストを利用」または「ゲーム音声専用の声設定」を選択できます。</p>
+<button id="autoBindCasts" class="outline" type="button" style="width:100%;margin-bottom:12px">↻ 一致するキャストを自動対応</button>
+<div id="castBindings" class="cast-bindings"></div>
+</section>
+</div>
 <div class="side-foot"><div>ボイスID最終発行 <strong id="lastIssued">—</strong></div><div>保存先: workspace/game_voice</div></div>
 </aside>
 <main class="main"><section class="source-pane"><div class="pane-head"><div><div class="micro">SCRIPT VIEWER</div><h1 id="scenarioTitle">ゲームのシナリオ</h1><p id="scenarioMeta">.ks または JSON を取り込んでください</p></div><div class="toolset"><input id="voiceSearch" type="search" placeholder="話者・台詞・IDを検索" aria-label="台詞検索"></div></div>
 <div class="source-area" id="sourceViewer"><div class="empty">シナリオを取り込むと、ここに原文と台詞が並びます。</div></div></section>
-<section class="voice-pane"><div class="voice-pane-header"><div><div class="micro">VOICE LINES</div><h2>生成対象の台詞 <span id="voiceCount">0</span></h2></div><div class="toolset"><label class="small-label"><input id="selectAll" type="checkbox"> 全件選択</label></div></div>
+<section class="voice-pane"><div class="voice-pane-header"><div><div class="micro">VOICE LINES</div><h2>生成対象の台詞 <span id="voiceCount">0</span></h2><p id="voiceSelectionCount" class="voice-selected-count" role="status">選択 0件</p></div>
+<div class="voice-select-tools"><label class="small-label"><input id="selectAll" type="checkbox"> このシナリオを全件選択</label>
+<div class="speaker-select-tools"><label for="speakerSelect">話者でまとめて選ぶ</label><select id="speakerSelect" aria-label="このシナリオの話者"></select>
+<button id="speakerSelectAll" type="button" class="outline">この話者を選択</button><button id="speakerDeselectAll" type="button" class="outline">この話者を解除</button></div></div></div>
 <div class="voice-list" id="voiceList"></div></section>
 </main>
 <aside class="details"><div class="details-scroll"><div class="micro">VOICE INSPECTOR</div><div id="inspector"><div class="empty">台詞を選択すると、ボイスID・話者・演技指示・音声を確認できます。</div></div>
-<div class="divider"></div><div class="micro">CAST ASSIGNMENTS</div><p class="helper">キャラクターごとに「ボイスドラマのキャストを利用」または「ゲーム音声専用の声設定」を選択できます。</p><button id="autoBindCasts" class="outline" style="width:100%;margin-bottom:12px">↻ 一致するキャストを自動対応</button><div id="castBindings" class="cast-bindings"></div>
+
 </div><div class="production"><div class="micro">GAME BUILD</div><div class="inline"><label>出力音声 <select id="exportFormat"><option value="wav">WAV</option><option value="mp3">MP3（FFmpeg）</option></select></label><label>ステップ <input id="numSteps" type="number" min="1" max="80" value="40"></label></div>
 <label class="small-label">Ollamaモデル <input id="ollamaModel" type="text" value="gemma4:12b" placeholder="gemma4:12b"></label><div class="inline"><button id="analyzeSelected" class="outline">✦ 演技指示を解析</button></div><div class="inline"><button id="generateSelected" class="primary">✦ 選択分を生成</button><button id="exportZip" class="outline">↓ ゲーム用ZIP</button></div><p id="jobStatus" class="helper">ゲーム用シナリオ・ボイスID一覧・音声ファイルを出力します。</p>
 <div class="progress"><div id="progressBar"></div></div>
@@ -37,5 +56,5 @@
 <input id="captionPicker" type="file" accept=".csv,text/csv" hidden>
 <input id="ksPicker" type="file" accept=".ks" multiple hidden><input id="jsonPicker" type="file" accept=".json,application/json" hidden><input id="statePicker" type="file" accept=".json,application/json" hidden><input id="sheetPicker" type="file" accept=".json,application/json" hidden><input id="storyPicker" type="file" accept=".json,application/json" hidden>
 <div id="toasts" class="toasts"></div>
-<script src="/static/game.js?v=037" defer></script>
+<script src="/static/game.js?v=038" defer></script>
 </body></html>

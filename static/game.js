@@ -1,6 +1,7 @@
 'use strict';
 /* Entirely separate game-voice state from the VoiceDrama Studio timeline editor. */
 let game=null,scenarios=[],castProjects=[],scenarioKey='',focusedVoice='',marked=new Set(),pollTimer=null;
+let sideTab='files';
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const request=async(url,options={})=>{const response=await fetch(url,options);if(!response.ok){let msg=await response.text();try{let j=JSON.parse(msg);msg=j.detail||msg}catch{}throw Error(msg)}return response.headers.get('content-type')?.includes('application/json')?response.json():response};
@@ -43,7 +44,50 @@ function showScenario(key){scenarioKey=key;focusedVoice='';marked.clear();render
 function renderSource(){let scen=game.scenarios.find(s=>s.key===scenarioKey);$('scenarioTitle').textContent=scen?.filename||'シナリオを選んでください';$('scenarioMeta').textContent=scen?`${scen.format.toUpperCase()} • ${voicesOf().length} 台詞${Object.keys(scen.ignoredSpeakers||{}).length?' • 音声化対象外: '+Object.entries(scen.ignoredSpeakers).map(([name,count])=>name+' '+count+'件').join('、'):''} • 原文は読み取り専用`:'KS・ボイスリストJSONの両形式に対応';const viewer=$('sourceViewer');if(!scen){viewer.innerHTML='<div class="empty">左の「シナリオ .ks」か「ボイスリスト JSON」から取り込んでください。</div>';return}
 const rows=voicesOf();if(scen.format==='voice-list'){viewer.innerHTML=rows.map((v,i)=>`<div class="source-line voiced ${v.voiceId===focusedVoice?'selected':''}" data-from-voice="${esc(v.voiceId)}"><span class="number">${i+1}</span><span>${esc(v.speaker)} / ${esc(v.sourceId)}: ${esc(v.text)}</span></div>`).join('');return}
 const map=new Map(rows.map(v=>[v.sourceLine,v]));viewer.innerHTML=scen.content.split(/\r?\n/).map((line,index)=>{const n=index+1,v=map.get(n);return `<div class="source-line ${v?'voiced':''} ${v?.voiceId===focusedVoice?'selected':''}" ${v?`data-from-voice="${esc(v.voiceId)}"`:''}><span class="number">${n}</span><span>${v?'<b class="voice-id">'+esc(v.voiceId)+'</b>  ':''}${esc(line)||'&nbsp;'}</span></div>`}).join('');}
-function renderVoiceRows(){const query=$('voiceSearch').value.toLowerCase().trim();const rows=voicesOf().filter(v=>!query||[v.voiceId,v.sourceId,v.speaker,v.text,v.ttsText].join(' ').toLowerCase().includes(query));const wrap=$('voiceList');$('voiceCount').textContent=`${rows.length}/${voicesOf().length}`;wrap.innerHTML=rows.map(v=>`<div class="voice-row ${focusedVoice===v.voiceId?'selected':''}" data-voice="${esc(v.voiceId)}"><input type="checkbox" data-mark="${esc(v.voiceId)}" ${marked.has(v.voiceId)?'checked':''} aria-label="${esc(v.voiceId)}を生成対象に選ぶ"><span class="voice-id">${esc(v.voiceId)}</span><span class="voice-speaker" title="${esc(v.speaker)}">${esc(v.speaker)}</span><span class="voice-text" title="${esc(v.text)}">${esc(v.text)}</span><span class="voice-status ${v.stale?'stale':v.audio?'ready':''}">${displayStatus(v)}</span></div>`).join('')||'<div class="empty">該当する台詞がありません。</div>';$('selectAll').checked=rows.length>0&&rows.every(v=>marked.has(v.voiceId))}
+function renderVoiceRows(){
+ const query=$('voiceSearch').value.toLowerCase().trim();
+ const all=voicesOf();
+ const rows=all.filter(v=>!query||[v.voiceId,v.sourceId,v.speaker,v.text,v.ttsText].join(' ').toLowerCase().includes(query));
+ const wrap=$('voiceList');
+ $('voiceCount').textContent=`${rows.length}/${all.length}`;
+ wrap.innerHTML=rows.map(v=>`<div class="voice-row ${focusedVoice===v.voiceId?'selected':''}" data-voice="${esc(v.voiceId)}"><input type="checkbox" data-mark="${esc(v.voiceId)}" ${marked.has(v.voiceId)?'checked':''} aria-label="${esc(v.voiceId)}を生成対象に選ぶ"><span class="voice-id">${esc(v.voiceId)}</span><span class="voice-speaker" title="${esc(v.speaker)}">${esc(v.speaker)}</span><span class="voice-text" title="${esc(v.text)}">${esc(v.text)}</span><span class="voice-status ${v.stale?'stale':v.audio?'ready':''}">${displayStatus(v)}</span></div>`).join('')||'<div class="empty">該当する台詞がありません。</div>';
+ // Selection controls refer to the entire current scenario, even when the
+ // text search hides some of its lines. Never modify other scenarios' marks.
+ const totalSelected=all.filter(v=>marked.has(v.voiceId)).length;
+ $('voiceSelectionCount').textContent=`このシナリオで ${totalSelected}/${all.length}件選択中`;
+ $('selectAll').checked=all.length>0&&totalSelected===all.length;
+ $('selectAll').indeterminate=totalSelected>0&&totalSelected<all.length;
+ const speakers=[...new Set(all.map(v=>v.speaker))].sort((a,b)=>a.localeCompare(b,'ja'));
+ const picker=$('speakerSelect'),chosen=picker.value;
+ picker.innerHTML=speakers.map(speaker=>{const count=all.filter(v=>v.speaker===speaker).length;
+   const profile=resolveSheetProfile(speaker)?.profile;
+   const name=profile?.display_name&&profile.display_name!==speaker?`${speaker}（${profile.display_name}）`:speaker;
+   return `<option value="${esc(speaker)}">${esc(name)} · ${count}件</option>`;
+ }).join('');
+ if(speakers.includes(chosen))picker.value=chosen;
+ else if(speakers.length)picker.value=speakers[0];
+ picker.disabled=!speakers.length;
+ $('speakerSelectAll').disabled=!speakers.length;
+ $('speakerDeselectAll').disabled=!speakers.length;
+}
+function markSpeaker(checked){
+ const speaker=$('speakerSelect').value;
+ if(!speaker)return;
+ const matches=voicesOf().filter(v=>v.speaker===speaker);
+ for(const voice of matches){if(checked)marked.add(voice.voiceId);else marked.delete(voice.voiceId)}
+ renderVoiceRows();
+ message(`${speaker} の${matches.length}件を${checked?'選択':'解除'}しました`);
+}
+function setSideTab(mode){
+ sideTab=mode==='casts'?'casts':'files';
+ for(const [name,button,panel] of [['files','sideTabFiles','sideFilesPanel'],['casts','sideTabCasts','sideCastsPanel']]){
+  const active=sideTab===name;
+  $(button).classList.toggle('active',active);
+  $(button).setAttribute('aria-selected',String(active));
+  $(panel).hidden=!active;
+ }
+}
+
 function focusVoice(id,scrollSource=false){focusedVoice=id;renderVoiceRows();renderSource();renderInspector();if(scrollSource)$('sourceViewer').querySelector(`[data-from-voice="${CSS.escape(id)}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}
 function sheetEntries(){
  const result=[];
@@ -242,4 +286,10 @@ $('castBindings').onclick=e=>{
 };
 $('castBindings').addEventListener('toggle',e=>{if(e.target.matches('[data-cast-detail]')){const key=e.target.dataset.castDetail;e.target.open?expandedCasts.add(key):expandedCasts.delete(key)}},true);
 $('gameRefPicker').onchange=e=>{const file=e.target.files[0];if(file)uploadGameRef(file);e.target.value=''};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;$('exportCaptionsScene').onclick=()=>exportCaptionCsv('scene');$('exportCaptionsAll').onclick=()=>exportCaptionCsv('all');$('importCaptions').onclick=()=>game?$('captionPicker').click():message('ゲーム音声プロジェクトを作成してください',true);$('captionPicker').onchange=importCaptionCsv;$('copyCaptionPrompt').onclick=copyCaptionPrompt;}
-wire();refreshGames().catch(e=>message(e.message,true));
+wire();
+$('sideTabFiles').onclick=()=>{setSideTab('files');document.querySelector('.side-scroll').scrollTop=0};
+$('sideTabCasts').onclick=()=>{setSideTab('casts');document.querySelector('.side-scroll').scrollTop=0};
+$('speakerSelectAll').onclick=()=>markSpeaker(true);
+$('speakerDeselectAll').onclick=()=>markSpeaker(false);
+setSideTab('files');
+refreshGames().catch(e=>message(e.message,true));

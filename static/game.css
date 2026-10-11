@@ -44,3 +44,35 @@
 .game-cast-buttons{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
 .game-cast-buttons button{font-size:10px;white-space:normal;text-align:center;flex:1;min-width:110px}
 @media(max-width:1100px){.game-cast-grid{grid-template-columns:1fr}}
+
+
+/* v0.3.8: VoiceDrama-style left navigation for scenario or cast editing. */
+.shell{grid-template-columns:335px minmax(410px,1fr) 350px}
+.side-head{padding:17px 15px 12px;border-bottom:1px solid var(--line);flex:none}
+.side-head .micro{margin-bottom:9px}
+.side-head .inline>select{min-width:0}
+.side-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:13px}
+.side-tabs button{white-space:normal;font-size:11px;line-height:1.3;min-height:44px;padding:9px 6px;background:transparent}
+.side-tabs button.active{background:#423726;color:#f5d2a0;border-color:#aa8654}
+.side-panel[hidden]{display:none!important}
+.side-panel{min-width:0}
+.side-scroll{padding:18px 15px;min-height:0}
+.side .game-cast-card{padding:10px;margin:4px 0 11px}
+.side .game-cast-grid{grid-template-columns:1fr 1fr}
+.side .game-cast-reference{padding:8px}
+.side .game-ref-row{flex-wrap:wrap}
+.side .game-ref-row span{min-width:100%}
+.side .game-cast-buttons{display:grid;grid-template-columns:1fr}
+.side .binding-status{line-height:1.5}
+/* Select or deselect only the chosen character in the current scenario. */
+.voice-pane-header{gap:15px;align-items:flex-start}
+.voice-selected-count{font-size:11px;color:var(--muted);margin:7px 0 0}
+.voice-select-tools{display:flex;flex-direction:column;align-items:flex-end;gap:10px;min-width:430px}
+.speaker-select-tools{display:flex;align-items:center;gap:6px;width:100%}
+.speaker-select-tools label{font-size:11px;color:var(--muted);white-space:nowrap}
+.speaker-select-tools select{min-width:110px;flex:1;width:auto;padding:8px}
+.speaker-select-tools button{padding:9px 10px;font-size:11px}
+@media(max-width:1250px){.shell{grid-template-columns:290px minmax(390px,1fr) 330px}.voice-pane-header{flex-wrap:wrap}.voice-select-tools{min-width:0;align-items:flex-start;width:100%}}
+@media(max-width:950px){.shell{grid-template-columns:270px minmax(340px,1fr) 300px}.speaker-select-tools{flex-wrap:wrap}.speaker-select-tools label{width:100%}.side .game-cast-grid{grid-template-columns:1fr}}
+@media(max-width:900px){.shell{display:block;height:auto}.side{min-height:280px}.side-scroll{max-height:620px}.side .game-cast-grid{grid-template-columns:1fr 1fr}.voice-select-tools{width:100%}}
+@media(max-width:560px){.speaker-select-tools label{width:100%}.speaker-select-tools select{width:100%;flex-basis:100%}.speaker-select-tools button{flex:1}.voice-pane-header{padding:14px 15px}.side .game-cast-grid{grid-template-columns:1fr}}
