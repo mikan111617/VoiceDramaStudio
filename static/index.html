@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VoiceDrama Studio — シナリオから音へ</title>
-<link rel="stylesheet" href="/static/style.css?v=028"><style>.mode-switch{display:flex;gap:4px;align-items:center;background:#151923;border:1px solid #394151;padding:4px;border-radius:9px;white-space:nowrap}.mode-switch>a,.mode-switch>span{padding:7px 10px;font-size:11px;border-radius:6px;text-decoration:none;color:#b7becc}.mode-switch .mode-active{color:#171b22;background:#d4a968;font-weight:700}.mode-switch a:hover{background:#303847}</style></head>
+<link rel="stylesheet" href="/static/style.css?v=0310"><style>.mode-switch{display:flex;gap:4px;align-items:center;background:#151923;border:1px solid #394151;padding:4px;border-radius:9px;white-space:nowrap}.mode-switch>a,.mode-switch>span{padding:7px 10px;font-size:11px;border-radius:6px;text-decoration:none;color:#b7becc}.mode-switch .mode-active{color:#171b22;background:#d4a968;font-weight:700}.mode-switch a:hover{background:#303847}</style></head>
 <body>
 <div id="app">
 <header class="topbar">
@@ -24,7 +24,8 @@
  <div class="panel-resizer panel-resizer-vertical" id="resizeEditor" role="separator" tabindex="0" aria-label="台本編集とマルチトラックの幅を調整" aria-orientation="vertical" title="左右にドラッグしてマルチトラックを拡大・縮小。ダブルクリックで初期化"></div>
  <section class="workbench">
   <div class="workbench-head"><div class="workbench-title"><span class="tiny amber">PRODUCTION</span><h2>マルチトラック</h2><span class="muted small">台詞・音楽・効果音を重ねる</span></div><div class="transport"><button id="rewindBtn" title="先頭へ">⏮</button><button id="playBtn" class="play-btn" title="再生">▶</button><button id="stopBtn" title="停止">■</button><div id="timeDisplay" class="clock">00:00.0</div><span class="transport-divider"></span><span class="muted small">ZOOM</span><input id="zoom" type="range" min="12" max="110" value="38"><span class="muted tiny" id="zoomNumber">38 px/s</span></div></div>
-  <div class="workbench-body"><div class="timeline-shell"><div id="timeline" class="timeline"></div></div><div class="bottom-stats"><span id="timelineInfo">クリップ 0件</span><span>クリップをドラッグして移動 · 右端で長さを調整</span></div></div>
+  <div class="clip-selection-tools" aria-label="タイムラインの複数選択"><span id="clipSelectionCount" role="status">0件選択</span><button id="selectAllClips" class="btn ghost mini">全クリップ</button><button id="selectTrackClips" class="btn ghost mini" disabled>このトラックを全選択</button><button id="selectFollowingClips" class="btn ghost mini" disabled title="選択中クリップの開始時刻以降を全トラックから選択">このクリップ以降を全選択</button><button id="clearClipSelection" class="btn ghost mini">選択解除</button></div>
+  <div class="workbench-body"><div class="timeline-shell"><div id="timeline" class="timeline" tabindex="0" aria-label="マルチトラックのタイムライン"></div></div><div class="bottom-stats"><span id="timelineInfo">クリップ 0件</span><span>Ctrl/⌘＋クリックで複数選択 · Shiftで範囲選択 · ドラッグでまとめて移動</span></div></div>
   <div class="panel-resizer panel-resizer-horizontal" id="resizeInspector" role="separator" tabindex="0" aria-label="タイムラインと編集パネルの高さを調整" aria-orientation="horizontal" title="上下にドラッグしてタイムラインの高さを調整。ダブルクリックで初期化"></div>
   <div class="workbench-foot"><div class="inspector-heading"><div><div class="tiny amber">INSPECTOR</div><h3>編集パネル</h3></div><button id="reflowBtn" class="btn ghost mini" title="台詞を順番どおりに並べ直す">↔ 台詞を自動整列</button></div><div id="inspector" class="inspector"></div></div>
  </section>
@@ -35,5 +36,5 @@
 <input type="file" id="excelPicker" accept=".xlsx" hidden>
 <input type="file" id="audioPicker" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.opus" multiple hidden>
 <input type="file" id="bulkAudioPicker" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" multiple hidden>
-<script src="/static/app.js?v=028" defer></script>
+<script src="/static/app.js?v=0310" defer></script>
 </body></html>

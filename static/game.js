@@ -15,22 +15,45 @@ function selectedVoice(){return game?.voices.find(v=>v.voiceId===focusedVoice)}
 function displayStatus(v){return v.stale?'要再生成':v.audio?'生成済み':'未生成'}
 async function refreshGames(selected){scenarios=await request('/api/game/projects');const list=$('projectList');list.innerHTML=scenarios.map(p=>`<option value="${esc(p.id)}" ${p.id===selected?'selected':''}>${esc(p.title)}</option>`).join('');if(!scenarios.length){game=null;await createNew(false);return}await openGame(selected&&scenarios.some(s=>s.id===selected)?selected:scenarios[0].id)}
 async function createNew(ask=true){let name=ask?prompt('ゲーム音声プロジェクト名','新しいゲーム音声'):'新しいゲーム音声';if(!name?.trim())return;try{const created=await request('/api/game/projects',json('POST',{title:name.trim()}));await refreshGames(created.id)}catch(e){message(e.message,true)}}
+async function renameGame(){
+ if(!game)return;
+ const title=prompt('ゲーム音声プロジェクト名を変更',game.title)?.trim();
+ if(!title||title===game.title)return;
+ if(title.length>120)return message('プロジェクト名は120文字以内です',true);
+ if(await update({title})){
+  const option=$('projectList').selectedOptions[0];if(option)option.textContent=game.title;
+  const entry=scenarios.find(p=>p.id===game.id);if(entry)entry.title=game.title;
+  message('プロジェクト名を変更しました');
+ }
+}
+const dismissedRemaps=new Map();
+function remapNoticeKey(){return 'vds.game.remap-dismissed.'+game.id}
+function remapNoticeSignature(){return JSON.stringify(game?.lastIdRemaps||[])}
+function dismissRemapNotice(){
+ const key=remapNoticeKey(),signature=remapNoticeSignature();
+ dismissedRemaps.set(key,signature);
+ try{localStorage.setItem(key,signature)}catch(_){}
+ renderPendingKS();
+}
 async function openGame(id){try{game=await request('/api/game/projects/'+id);castProjects=await request('/api/game/cast-projects');focusedVoice='';marked.clear();scenarioKey=game.scenarios[0]?.key||'';busy('保存済み');$('exportFormat').value=game.format||'wav';renderAll()}catch(e){message(e.message,true)}}
 function renderAll(){if(!game)return;$('exportFormat').value=game.format||'wav';$('lastIssued').textContent=String(game.lastIssued||0);const speakerInfo=$('speakerFilterInfo');if(speakerInfo){const hasSheet=!!(game.speakerFilterEnabled||Object.keys(game.characterSheet||{}).length);speakerInfo.textContent=hasSheet?'キャラクターシートの登録者のみ音声化（TIPS・未登録話者は除外）':'キャラクターシート未登録：TIPSのみ自動除外。キャラクターシートの登録を推奨します。'}const selected=$('projectList');if(selected.querySelector(`option[value="${game.id}"]`))selected.value=game.id;renderScenarios();renderSource();renderVoiceRows();renderInspector();renderBindings();renderPendingKS();renderDictionaries()}
 function renderPendingKS(){
  const pending=game?.pendingKS||[];
  const info=$('pendingKsInfo');
- info.textContent=pending.length?`仮登録中: ${pending.length}件\n`+pending.map(x=>'・'+x.filename).join('\n'):'仮登録中のKSはありません';
+ info.textContent=pending.length?`読み込み済み・ID確定待ち: ${pending.length}件\n`+pending.map(x=>'・'+x.filename).join('\n'):'ID確定待ちのKSはありません';
  $('finalizeKs').disabled=!pending.length;
  const remaps=game?.lastIdRemaps||[];
- $('idRemapInfo').textContent=remaps.length?`前回の一括確定で自動発行IDを${remaps.length}件変更しました。\n`+
+ let dismissed=dismissedRemaps.get(remapNoticeKey());
+ try{dismissed=localStorage.getItem(remapNoticeKey())||dismissed}catch(_){}
+ $('idRemapInfo').hidden=!remaps.length||dismissed===remapNoticeSignature();
+ $('idRemapText').textContent=remaps.length?`前回の一括確定で自動発行IDを${remaps.length}件変更しました。\n`+
    remaps.slice(0,8).map(x=>`${x.scenario} / ${x.speaker}: ${x.oldId} → ${x.newId}`).join('\n')+
    (remaps.length>8?'\nほか '+(remaps.length-8)+'件':''):'';
 }
 async function finalizeKs(){
- if(!game||!(game.pendingKS||[]).length)return message('先にKSを仮登録してください',true);
+ if(!game||!(game.pendingKS||[]).length)return message('先にKSを読み込んでください',true);
  const n=game.pendingKS.length;
- if(!confirm(`仮登録中の${n}シナリオを一括確定しますか？\nすべての既存ボイスIDを先に予約し、新しいセリフだけに未使用IDを発行します。\n過去に自動発行されたIDが既存IDと衝突した場合は、自動発行側を変更します。`))return;
+ if(!confirm(`読み込んだ${n}シナリオのIDを一括確定しますか？\nすべての既存ボイスIDを先に予約し、新しいセリフだけに未使用IDを発行します。\n過去に自動発行されたIDが既存IDと衝突した場合は、自動発行側を変更します。`))return;
  busy('全シナリオのボイスIDを照合中…');
  try{
   game=await request(`/api/game/projects/${game.id}/finalize-ks`,json('POST',{expectedRevision:game.revision}));
@@ -311,8 +334,8 @@ async function uploadFiles(picker,kind){const files=[...picker.files];if(!files.
   if(tooLarge){showImportError(`${tooLarge.name}: 20MBの上限を超えています`);picker.value='';return}
   if(total>60*1024*1024){showImportError('選択したKSの合計が60MBを超えています');picker.value='';return}
  }
- const form=new FormData();const revision=game.revision;let url=`/api/game/projects/${game.id}/`;if(kind==='ks'){url+=`stage-ks?expectedRevision=${revision}`;for(const file of files)form.append('files',file)}else{const endpoint={json:'voice-list',state:'voice-id-state',sheet:'character-sheet',story:'story-context'}[kind];url+=`${endpoint}?expectedRevision=${revision}`;form.append('file',files[0])}busy('取り込み中…');try{const result=await request(url,{method:'POST',body:form});game=result;if(kind==='ks'&&!scenarioKey)scenarioKey=game.scenarios[0]?.key||'';if(kind==='json'){const added=game.scenarios.at(-1);scenarioKey=added?.key||''}focusedVoice='';marked.clear();renderAll();busy('保存済み');if(kind==='ks')clearImportError();const ignored=(kind==='ks'||kind==='sheet')?game.scenarios.flatMap(sc=>Object.entries(sc.ignoredSpeakers||{}).map(([name,n])=>`${sc.key}: ${name} ${n}件`)):[];message(`${files.length}ファイルを${kind==='ks'?'仮登録しました。全KS登録後にID一括確定を押してください':'取り込みました'}${ignored.length?'（音声化対象外: '+ignored.slice(0,6).join('、')+(ignored.length>6?' ほか':'')+'）':''}`)}catch(e){busy('取り込み失敗');if(kind==='ks')showImportError(e.message);else message(e.message,true)}finally{picker.value=''}}
-async function startGeneration(){if(!game)return;if((game.pendingKS||[]).length)return message('先に仮登録中のKSを一括確定してください',true);let ids=[...marked].filter(id=>game.voices.some(v=>v.voiceId===id));if(!ids.length)return message('台詞の左側のチェックを選んでください',true);const steps=Number($('numSteps').value);if(!Number.isInteger(steps)||steps<1||steps>80)return message('ステップ数は1〜80です',true);if(!confirm(`${ids.length}件の音声を生成します。\n選択したキャストのモデル・参照音声が使用されます。`))return;try{const job=await request(`/api/game/projects/${game.id}/generate`,json('POST',{voiceIds:ids,numSteps:steps}));message('ゲーム用音声の生成を開始しました');$('generateSelected').disabled=true;poll(job.id)}catch(e){message('生成を開始できません: '+e.message,true)}}
+ const form=new FormData();const revision=game.revision;let url=`/api/game/projects/${game.id}/`;if(kind==='ks'){url+=`stage-ks?expectedRevision=${revision}`;for(const file of files)form.append('files',file)}else{const endpoint={json:'voice-list',state:'voice-id-state',sheet:'character-sheet',story:'story-context'}[kind];url+=`${endpoint}?expectedRevision=${revision}`;form.append('file',files[0])}busy('取り込み中…');try{const result=await request(url,{method:'POST',body:form});game=result;if(kind==='ks'&&!scenarioKey)scenarioKey=game.scenarios[0]?.key||'';if(kind==='json'){const added=game.scenarios.at(-1);scenarioKey=added?.key||''}focusedVoice='';marked.clear();renderAll();busy('保存済み');if(kind==='ks')clearImportError();const ignored=(kind==='ks'||kind==='sheet')?game.scenarios.flatMap(sc=>Object.entries(sc.ignoredSpeakers||{}).map(([name,n])=>`${sc.key}: ${name} ${n}件`)):[];message(`${files.length}ファイルを${kind==='ks'?'読み込みました。全KS読み込み後にID一括確定を押してください':'取り込みました'}${ignored.length?'（音声化対象外: '+ignored.slice(0,6).join('、')+(ignored.length>6?' ほか':'')+'）':''}`)}catch(e){busy('取り込み失敗');if(kind==='ks')showImportError(e.message);else message(e.message,true)}finally{picker.value=''}}
+async function startGeneration(){if(!game)return;if((game.pendingKS||[]).length)return message('先にID確定待ちのKSを一括確定してください',true);let ids=[...marked].filter(id=>game.voices.some(v=>v.voiceId===id));if(!ids.length)return message('台詞の左側のチェックを選んでください',true);const steps=Number($('numSteps').value);if(!Number.isInteger(steps)||steps<1||steps>80)return message('ステップ数は1〜80です',true);if(!confirm(`${ids.length}件の音声を生成します。\n選択したキャストのモデル・参照音声が使用されます。`))return;try{const job=await request(`/api/game/projects/${game.id}/generate`,json('POST',{voiceIds:ids,numSteps:steps}));message('ゲーム用音声の生成を開始しました');$('generateSelected').disabled=true;poll(job.id)}catch(e){message('生成を開始できません: '+e.message,true)}}
 function poll(id){clearInterval(pollTimer);const check=async()=>{try{const job=await request('/api/game/jobs/'+id);$('jobStatus').textContent=`${job.message} — ${job.completed}/${job.total||0} 件${job.errors?.length?' · エラー'+job.errors.length:''}`;$('progressBar').style.width=job.total?Math.round(job.completed/job.total*100)+'%':'0%';if(job.status!=='running'){clearInterval(pollTimer);$('generateSelected').disabled=false;$('analyzeSelected').disabled=false;const selected=scenarioKey;game=await request('/api/game/projects/'+game.id);scenarioKey=selected;renderAll();message(job.status==='done'?'生成完了':`生成終了: ${job.message}`,job.status!=='done');}}catch(e){clearInterval(pollTimer);$('generateSelected').disabled=false;$('analyzeSelected').disabled=false;message(e.message,true)}};pollTimer=setInterval(check,1200);check();}
 async function startAnalysis(){
  if(!game)return;
@@ -372,7 +395,54 @@ $('castBindings').onclick=e=>{
 };
 $('castBindings').addEventListener('toggle',e=>{if(e.target.matches('[data-cast-detail]')){const key=e.target.dataset.castDetail;e.target.open?expandedCasts.add(key):expandedCasts.delete(key)}},true);
 $('gameRefPicker').onchange=e=>{const file=e.target.files[0];if(file)uploadGameRef(file);e.target.value=''};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;$('exportCaptionsScene').onclick=()=>exportCaptionCsv('scene');$('exportCaptionsAll').onclick=()=>exportCaptionCsv('all');$('importCaptions').onclick=()=>game?$('captionPicker').click():message('ゲーム音声プロジェクトを作成してください',true);$('captionPicker').onchange=importCaptionCsv;$('copyCaptionPrompt').onclick=copyCaptionPrompt;}
+const GAME_LAYOUT_KEY='vds.game.layout.v1';
+let gamePanelSizes=null;
+function measureGamePanels(){return {
+ side:document.querySelector('.side').getBoundingClientRect().width,
+ details:document.querySelector('.details').getBoundingClientRect().width,
+ source:document.querySelector('.source-pane').getBoundingClientRect().height,
+ production:document.querySelector('.production').getBoundingClientRect().height
+}}
+function applyGamePanels(sizes){
+ const shell=document.querySelector('.shell'),main=document.querySelector('.main'),details=document.querySelector('.details');
+ const clamp=(v,min,max)=>Math.min(Math.max(Number(v)||min,min),Math.max(min,max));
+ if(window.matchMedia('(min-width:901px)').matches){
+  const available=shell.getBoundingClientRect().width-16-300;
+  const side=clamp(sizes.side,160,available-240),right=clamp(sizes.details,240,available-side);
+  shell.style.setProperty('--game-side-width',side+'px');shell.style.setProperty('--game-details-width',right+'px');
+ }
+ const sourceMin=document.querySelector('.pane-head').getBoundingClientRect().height+$('shrinkGameSource').getBoundingClientRect().height+8;
+ const voiceMin=document.querySelector('.voice-pane-header').getBoundingClientRect().height+24;
+ main.style.setProperty('--game-source-height',clamp(sizes.source,sourceMin,main.getBoundingClientRect().height-voiceMin-8)+'px');
+ details.style.setProperty('--game-production-height',clamp(sizes.production,80,details.getBoundingClientRect().height-100-8)+'px');
+ for(const [id,part] of [['resizeGameSide','side'],['resizeGameDetails','details'],['resizeGameSource','source'],['resizeGameProduction','production']])$(id).setAttribute('aria-valuenow',Math.round(measureGamePanels()[part]));
+}
+function saveGamePanels(){gamePanelSizes=measureGamePanels();try{localStorage.setItem(GAME_LAYOUT_KEY,JSON.stringify(gamePanelSizes))}catch(_){}}
+function resetGamePanels(){
+ for(const [selector,props] of [['.shell',['--game-side-width','--game-details-width']],['.main',['--game-source-height']],['.details',['--game-production-height']]])for(const prop of props)document.querySelector(selector).style.removeProperty(prop);
+ gamePanelSizes=null;try{localStorage.removeItem(GAME_LAYOUT_KEY)}catch(_){}
+ applyGamePanels(measureGamePanels());
+}
+function installGamePanelResizers(){
+ try{const saved=JSON.parse(localStorage.getItem(GAME_LAYOUT_KEY));if(saved&&['side','details','source','production'].every(k=>Number.isFinite(saved[k])&&saved[k]>0))gamePanelSizes=saved}catch(_){}
+ applyGamePanels(gamePanelSizes||measureGamePanels());
+ for(const [id,part] of [['resizeGameSide','side'],['resizeGameDetails','details'],['resizeGameSource','source'],['resizeGameProduction','production']]){
+  const grip=$(id),horizontal=['side','details'].includes(part);let drag=null;
+  grip.title='ドラッグまたは矢印キーでサイズ変更。ダブルクリックで初期化';
+  grip.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();drag={id:e.pointerId,x:e.clientX,y:e.clientY,sizes:measureGamePanels()};grip.setPointerCapture(e.pointerId);grip.classList.add('is-resizing');document.body.classList.add('game-resizing',horizontal?'game-resizing-columns':'game-resizing-rows')});
+  grip.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;const sizes={...drag.sizes};sizes[part]+=(horizontal?e.clientX-drag.x:e.clientY-drag.y)*(['details','production'].includes(part)?-1:1);applyGamePanels(sizes)});
+  const end=e=>{if(!drag||drag.id!==e.pointerId)return;drag=null;if(grip.hasPointerCapture(e.pointerId))grip.releasePointerCapture(e.pointerId);grip.classList.remove('is-resizing');document.body.classList.remove('game-resizing','game-resizing-columns','game-resizing-rows');saveGamePanels()};
+  grip.addEventListener('pointerup',end);grip.addEventListener('pointercancel',end);grip.addEventListener('dblclick',resetGamePanels);
+  grip.addEventListener('keydown',e=>{let delta=horizontal?(e.key==='ArrowRight'?24:e.key==='ArrowLeft'?-24:0):(e.key==='ArrowDown'?24:e.key==='ArrowUp'?-24:0);if(!delta)return;e.preventDefault();const sizes=measureGamePanels();sizes[part]+=delta*(['details','production'].includes(part)?-1:1);applyGamePanels(sizes);saveGamePanels()});
+ }
+ $('resetGameLayout').onclick=resetGamePanels;
+ $('shrinkGameSource').onclick=()=>{const sizes=measureGamePanels();sizes.source=1;applyGamePanels(sizes);saveGamePanels()};
+ window.addEventListener('resize',()=>applyGamePanels(gamePanelSizes||measureGamePanels()));
+}
 wire();
+$('renameProject').onclick=renameGame;
+$('dismissIdRemap').onclick=dismissRemapNotice;
+installGamePanelResizers();
 $('sideTabFiles').onclick=()=>{setSideTab('files');document.querySelector('.side-scroll').scrollTop=0};
 $('sideTabCasts').onclick=()=>{setSideTab('casts');document.querySelector('.side-scroll').scrollTop=0};
 $('speakerSelectAll').onclick=()=>markSpeaker(true);

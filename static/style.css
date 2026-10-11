@@ -124,3 +124,11 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .tl-lane.timeline-drop-target{background-color:#203b3a;outline:2px dashed #73d5af;outline-offset:-3px}
 .history-action{font-size:11px;padding:8px 10px}
 @media(max-width:1200px){.history-action{font-size:0;padding:7px 9px}.history-action::first-letter{font-size:15px}}
+
+/* Timeline multi-selection */
+.clip-selection-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:9px 14px;border-bottom:1px solid var(--border)}
+#clipSelectionCount{font-size:11px;color:var(--accent2);margin-right:4px}
+.track-select-button{margin-top:7px;padding:4px 3px;font-size:9px;color:var(--accent2);border:1px solid #615742;border-radius:4px;background:#252632;width:100%}
+.bottom-stats{flex-wrap:wrap}
+.tl-clip{touch-action:none}
+.tl-clip:focus-visible{outline:2px solid var(--accent2)}
