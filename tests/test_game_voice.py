@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=031' in html
+    assert 'game.js?v=033' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=031' in html
+    assert 'game.js?v=033' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -514,3 +514,119 @@ def test_ks_explicit_id_does_not_reuse_unrelated_caption_or_audio(client):
     assert newer['voices'][0]['voiceId']=='v03812'
     assert newer['voices'][0]['caption']==''  # Never inherit first voice's caption.
     assert newer['voices'][1]['voiceId']==previous
+
+
+# Character sheet speakers are a whitelist for imported KS only.
+def _upload_sheet(client, state, allowed=('mahoru',), reference=(), blocked=('TIPS','警察')):
+    body={'characters':{x:{'display_name':{'mahoru':'真白真歩流'}.get(x,x),'aliases':['真歩流'] if x=='mahoru' else []} for x in allowed},
+          'reference_characters':{x:{'display_name':x} for x in reference},
+          'non_character_speakers':{x:{'direction':'音声不要'} for x in blocked}}
+    return client.post(f'/api/game/projects/{state["id"]}/character-sheet?expectedRevision={state["revision"]}',
+                       files={'file':('character_sheet.json',json.dumps(body,ensure_ascii=False).encode('utf8'),'application/json')})
+
+
+def test_tips_excluded_without_sheet_and_no_voice_id_issued(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\n最初。[p]\n#TIPS\n説明文。[p]\n#airi\n次の台詞。[p]\n').json()
+    assert [v['speaker'] for v in s['voices']]==['mahoru','airi']
+    assert [v['voiceId'] for v in s['voices']]==['v00001','v00002']
+    assert s['scenarios'][0]['ignoredSpeakers']=={'TIPS':1}
+    zipped=client.get(f'/api/game/projects/{s["id"]}/export.zip')
+    assert zipped.status_code==200
+    with ZipFile(io.BytesIO(zipped.content)) as archive:
+        script=archive.read('voiced_scenarios/scene1.ks').decode('utf8')
+        assert '#TIPS\n説明文。[p]' in script
+        assert script.count('[voice id=')==2
+
+
+def test_sheet_filters_unknown_system_and_allows_display_names(client):
+    s=new_game(client)
+    response=_upload_sheet(client,s,reference=('yuduki',))
+    assert response.status_code==200,response.text
+    s=response.json()
+    source=('#mahoru\nおはよう。[p]\n#真歩流\nまたね。[p]\n'
+            '#yuduki\nごきげんよう。[p]\n#TIPS\n説明。[p]\n'
+            '#警察\n待ちなさい。[p]\n#UNKNOWN\n謎の話者。[p]\n')
+    response=ks_file(client,s,source)
+    assert response.status_code==200,response.text
+    s=response.json()
+    assert [v['speaker'] for v in s['voices']]==['mahoru','真歩流','yuduki']
+    assert s['scenarios'][0]['ignoredSpeakers']=={'TIPS':1,'UNKNOWN':1,'警察':1}
+    assert [v['voiceId'] for v in s['voices']]==['v00001','v00002','v00003']
+
+
+def test_importing_sheet_later_prunes_old_tips_preserves_actor_id_audio_and_source(client):
+    s=new_game(client)
+    original=('#mahoru\n声あり。[p]\n#TIPS\n説明。[p]\n#警察\n台詞。[p]\n')
+    s=ks_file(client,s,original).json()
+    assert [v['speaker'] for v in s['voices']]==['mahoru','警察']
+    actor=s['voices'][0]['voiceId']
+    # Existing workspace from older versions may still contain TIPS as a voice.
+    snapshot=game.get_game(s['id'])
+    snapshot['voices'].insert(1,{
+        'voiceId':'v03812','speaker':'TIPS','scenario':'scene1','text':'説明。',
+        'caption':'旧説明','audio':'TIPS/scene1/v03812.wav',
+        'ttsText':'説明。','sourceLine':4,'sourceEnd':4,'voiceTagLine':0})
+    snapshot['lastIssued']=3812
+    game._write(s['id'],snapshot)
+    response=_upload_sheet(client,s)
+    assert response.status_code==200,response.text
+    s=response.json()
+    assert len(s['voices'])==1 and s['voices'][0]['voiceId']==actor
+    assert s['scenarios'][0]['content']==original
+    assert s['scenarios'][0]['count']==1
+    assert s['scenarios'][0]['ignoredSpeakers']=={'TIPS':1,'警察':1}
+    assert s['lastIssued']==3812
+    # A subsequent KS reimport must preserve the real actor's ID.
+    new=ks_file(client,s,original)
+    assert new.status_code==200,new.text
+    assert new.json()['voices'][0]['voiceId']==actor
+
+
+def test_old_tips_id_not_duplicated_or_caption_transferred(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#eruku\n[voice id="v03812"]\n最初の台詞。[p]\n').json()
+    snapshot=game.get_game(s['id'])
+    snapshot['voices'][0]['speaker']='TIPS'
+    snapshot['voices'][0]['caption']='誤って保存した説明文'
+    game._write(s['id'],snapshot)
+    response=ks_file(client,s,'#eruku\n[voice id="v03812"]\n最初の台詞。[p]\n')
+    assert response.status_code==200,response.text
+    actor=response.json()['voices'][0]
+    assert actor['voiceId']=='v03812' and actor['speaker']=='eruku'
+    assert actor['caption']==''
+
+
+def test_export_removes_ignored_tips_voice_tag_from_copy_only(client):
+    s=new_game(client)
+    source='#TIPS\n[voice id="v03812"]\nゲームの説明。[p]\n#mahoru\n台詞。[p]\n'
+    s=ks_file(client,s,source).json()
+    assert [v['speaker'] for v in s['voices']]==['mahoru']
+    assert s['lastIssued']>=3812
+    zipped=client.get(f'/api/game/projects/{s["id"]}/export.zip')
+    with ZipFile(io.BytesIO(zipped.content)) as archive:
+        out=archive.read('voiced_scenarios/scene1.ks').decode('utf8')
+        assert 'v03812' not in out
+        assert 'ゲームの説明。[p]' in out
+        assert s['voices'][0]['voiceId'] in out
+    assert game.get_game(s['id'])['scenarios'][0]['content']==source
+
+
+def test_sheet_filter_keeps_explicit_json_voice_list_unmodified(client):
+    s=new_game(client)
+    s=_upload_sheet(client,s).json()
+    payload={'batch_name':'guest_voice','speakers':[{'speaker':'guest_voice',
+             'items':[{'id':'greet_0','text':'Hello'}]}]}
+    result=client.post(f'/api/game/projects/{s["id"]}/voice-list?expectedRevision={s["revision"]}',
+                       files={'file':('voice.json',json.dumps(payload).encode(),'application/json')})
+    assert result.status_code==200,result.text
+    assert result.json()['voices'][0]['speaker']=='guest_voice'
+
+
+def test_game_sheet_filter_ui_status_and_noncharacter_count():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static/game.html').read_text(encoding='utf8')
+    js=(root/'static/game.js').read_text(encoding='utf8')
+    assert 'id="speakerFilterInfo"' in html
+    assert 'ignoredSpeakers' in js
+    assert 'game.js?v=033' in html

@@ -83,7 +83,8 @@ def create_game(title='新しいゲーム音声'):
         pid = 'g_' + uuid.uuid4().hex[:16]
         s = {'id':pid, 'title':str(title).strip()[:120] or 'ゲーム音声', 'revision':1,
              'lastIssued':0, 'scenarios':[], 'voices':[], 'bindings':{},
-             'characterSheet':{}, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice'}
+             'characterSheet':{}, 'referenceCharacters':{}, 'nonCharacterSpeakers':[],
+             'speakerFilterEnabled':False, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice'}
         return _write(pid,s)
 
 
@@ -185,6 +186,60 @@ def parse_ks(text):
     return rows
 
 
+
+# KS files contain UI and instruction blocks like #TIPS in addition to real
+# dialogue. A sheet provides an explicit speaker allow-list; scripts without
+# a sheet still avoid the known UI-only TIPS speaker.
+DEFAULT_NON_VOICE_SPEAKERS = frozenset({'tips'})
+
+
+def _sheet_active(state):
+    # Old projects imported a character sheet before this flag existed.
+    return bool(state.get('speakerFilterEnabled') or state.get('characterSheet'))
+
+
+def _speaker_allowed(state, speaker):
+    normalized=str(speaker).strip().casefold()
+    if not normalized or normalized in DEFAULT_NON_VOICE_SPEAKERS:
+        return False
+    excluded={str(x).strip().casefold() for x in state.get('nonCharacterSpeakers', [])}
+    if normalized in excluded:
+        return False
+    if not _sheet_active(state):
+        return True
+    profiles=[*state.get('characterSheet',{}).items(),
+              *state.get('referenceCharacters',{}).items()]
+    for ident, profile in profiles:
+        names=[ident,profile.get('display_name',''),*(profile.get('aliases',[]) or [])]
+        if normalized in {str(value).strip().casefold() for value in names if value}:
+            return True
+    return False
+
+
+def _filter_ks_rows(state, rows):
+    kept=[]
+    ignored=defaultdict(int)
+    for row in rows:
+        if _speaker_allowed(state,row['speaker']):
+            kept.append(row)
+        else:
+            ignored[row['speaker']]+=1
+    return kept,dict(sorted(ignored.items()))
+
+
+def _profile(raw):
+    return {
+        'display_name':str(raw.get('display_name','')),
+        'aliases':[str(x) for x in raw.get('aliases',[])[:30]] if isinstance(raw.get('aliases'),list) else [],
+        'reading':str(raw.get('reading','')),
+        'baseline_tone':str(raw.get('baseline_tone','')),
+        'speech_style':raw.get('speech_style',[]) if isinstance(raw.get('speech_style',[]),list) else [],
+        'stable_traits':raw.get('stable_traits',[]) if isinstance(raw.get('stable_traits',[]),list) else [],
+        'acting_notes':raw.get('acting_notes',[]) if isinstance(raw.get('acting_notes',[]),list) else [],
+        'arc':raw.get('arc',[]) if isinstance(raw.get('arc',[]),list) else [],
+    }
+
+
 def _issued(voices):
     return max((int(m.group(1)) for v in voices if (m:=ID_RE.fullmatch(str(v.get('voiceId',''))))), default=0)
 
@@ -230,10 +285,12 @@ def _assign(s,scenario_key,rows,old_rows):
     for i,row in enumerate(rows):
         explicit_id=row.get('existingId')
         if explicit_id:
-            # A tagged ID is authoritative; never borrow a different old
-            # voice's audio/caption because a fuzzy match happened to align.
+            # Explicit KS IDs are authoritative, but reusing an ID previously
+            # misattributed to #TIPS must not transfer TIPS audio/captions.
             vid=explicit_id
             reuse=old_by_id.get(vid)
+            if reuse and reuse.get('speaker') != row['speaker']:
+                reuse=None
         else:
             candidate=reused.get(i)
             candidate_id=candidate.get('voiceId') if candidate else None
@@ -279,11 +336,15 @@ def import_ks(pid,uploads,revision):
             target_keys.add(key)
             try:
                 decoded,encoding=_decode_ks(body)
-                new_rows=parse_ks(decoded)
+                parsed_rows=parse_ks(decoded)
+                new_rows, ignored=_filter_ks_rows(s,parsed_rows)
+                # Reserve IDs that were already tagged in the source even if
+                # they belong to a non-voice UI speaker; never issue them again.
+                s['lastIssued']=max(s['lastIssued'], _issued([{'voiceId':r['existingId']} for r in parsed_rows]))
             except ValueError as exc:
                 raise ValueError(f'{name}: {exc}') from exc
-            staged.append((key,name,decoded,encoding,new_rows,'\r\n' if '\r\n' in decoded else '\n'))
-        for key,name,decoded,encoding,new_rows,newline in staged:
+            staged.append((key,name,decoded,encoding,new_rows,ignored,'\r\n' if '\r\n' in decoded else '\n'))
+        for key,name,decoded,encoding,new_rows,ignored,newline in staged:
             previous=[x for x in s['voices'] if x['scenario']==key]
             try:
                 new_voices=_assign(s,key,new_rows,previous)
@@ -292,7 +353,8 @@ def import_ks(pid,uploads,revision):
             s['voices']=[v for v in s['voices'] if v['scenario']!=key]+new_voices
             s['scenarios']=[sc for sc in s['scenarios'] if sc['key']!=key]+[{
                 'key':key,'filename':name,'format':'ks','content':decoded,
-                'encoding':encoding,'newline':newline,'count':len(new_voices)}]
+                'encoding':encoding,'newline':newline,'count':len(new_voices),
+                'ignoredSpeakers':ignored}]
         return _save(pid,s,revision)
 
 
@@ -461,19 +523,34 @@ def import_state_number(pid,body,revision):
 def import_character_sheet(pid,body,revision):
     if not isinstance(body,dict) or not isinstance(body.get('characters'),dict):
         raise ValueError('charactersを含むキャラクターシートJSONを指定してください')
+    if not isinstance(body.get('reference_characters',{}),dict):
+        raise ValueError('reference_charactersはオブジェクトで指定してください')
+    if not isinstance(body.get('non_character_speakers',{}),(dict,list)):
+        raise ValueError('non_character_speakersはオブジェクトまたは配列で指定してください')
     with GAME_LOCK:
         s=_load(pid)
         if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
-        s['characterSheet']={str(k):{
-            'display_name':str(v.get('display_name','')),
-            'aliases':[str(x) for x in v.get('aliases',[])[:30]] if isinstance(v.get('aliases'),list) else [],
-            'reading':str(v.get('reading','')),
-            'baseline_tone':str(v.get('baseline_tone','')),
-            'speech_style':v.get('speech_style',[]) if isinstance(v.get('speech_style',[]),list) else [],
-            'stable_traits':v.get('stable_traits',[]) if isinstance(v.get('stable_traits',[]),list) else [],
-            'acting_notes':v.get('acting_notes',[]) if isinstance(v.get('acting_notes',[]),list) else [],
-            'arc':v.get('arc',[]) if isinstance(v.get('arc',[]),list) else [],
-        } for k,v in body['characters'].items() if isinstance(v,dict)}
+        s['characterSheet']={str(k):_profile(v) for k,v in body['characters'].items() if isinstance(v,dict)}
+        s['referenceCharacters']={str(k):_profile(v) for k,v in body.get('reference_characters',{}).items()
+                                  if isinstance(v,dict)}
+        if not s['characterSheet'] and not s['referenceCharacters']:
+            raise ValueError('キャラクターシートに音声化するcharactersがありません')
+        blocked=body.get('non_character_speakers',{})
+        s['nonCharacterSpeakers']=list(blocked)[:1000]
+        s['speakerFilterEnabled']=True
+        # Existing game voice projects can have been imported BEFORE the
+        # character sheet. Remove UI-only lines from the voice work list
+        # without touching any files, IDs, captions or real character takes.
+        ks_scenarios={sc['key'] for sc in s['scenarios'] if sc.get('format')=='ks'}
+        s['voices']=[v for v in s['voices'] if v['scenario'] not in ks_scenarios
+                     or _speaker_allowed(s,v['speaker'])]
+        for sc in s['scenarios']:
+            if sc.get('format')!='ks':
+                continue
+            rows=parse_ks(sc['content'])
+            valid,ignored=_filter_ks_rows(s,rows)
+            sc['count']=sum(v['scenario']==sc['key'] for v in s['voices'])
+            sc['ignoredSpeakers']=ignored
         return _save(pid,s,revision)
 
 
@@ -631,6 +708,13 @@ def _quoted_script(s,scenario):
     content=scenario['content'];lines=content.splitlines()
     voices=sorted([v for v in s['voices'] if v['scenario']==scenario['key']],key=lambda v:v['sourceLine'])
     insert={};replace={}
+    # If a non-character line contains an old voice tag in the source,
+    # exclude the tag from the GAME copy too, or it would refer to missing audio.
+    # The original imported text is not modified.
+    remove_tags=set()
+    for row in parse_ks(content):
+        if row.get('voiceTagLine') and not _speaker_allowed(s,row['speaker']):
+            remove_tags.add(row['voiceTagLine'])
     for v in voices:
         source_line=int(v['sourceLine'])
         if not 1<=source_line<=len(lines):raise ValueError('シナリオの行番号が不正です')
@@ -646,6 +730,7 @@ def _quoted_script(s,scenario):
             insert[source_line]=f'[voice id="{v["voiceId"]}"]'
     built=[]
     for n,line in enumerate(lines,1):
+        if n in remove_tags:continue
         if n in insert:built.append(insert[n])
         built.append(replace.get(n,line))
     text=scenario['newline'].join(built)+scenario['newline']
