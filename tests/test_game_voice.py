@@ -390,7 +390,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=036' in html
+    assert 'game.js?v=037' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -446,7 +446,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=036' in html
+    assert 'game.js?v=037' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -629,7 +629,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=036' in html
+    assert 'game.js?v=037' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -690,11 +690,11 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'Object.entries(game?.referenceCharacters||{})' in src
     assert 'function castRoster()' in src
     assert 'キャラクターシート登録者（台詞未検出' in src
-    assert 'シート登録済み · 台詞未検出' in src
+    assert 'シート登録済み · 現在のシナリオに台詞なし' in src
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=036' in html and 'game.css?v=036' in html
+    assert 'game.js?v=037' in html and 'game.css?v=037' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -908,7 +908,7 @@ def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client)
     js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
     assert 'stage-ks?expectedRevision=' in js
     assert '/finalize-ks' in js
-    assert 'game.js?v=036' in html
+    assert 'game.js?v=037' in html
 
 
 def test_stage_blocks_early_generation_and_export(client):
@@ -936,3 +936,149 @@ def test_remapped_ids_manifest_included_in_game_export(client):
         assert remaps==s['lastIdRemaps']
         assert remaps[0]['oldId']=='v00001'
         assert remaps[0]['newId']=='v00002'
+
+
+
+def test_game_local_cast_reference_upload_preview_and_delete(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#mahoru\n声を生成します。[p]\n').json()
+    key='mahoru'
+    local=game.default_local_cast(key)
+    local.update({'model':'phasefield-audio/Irodori-TTS-v4.1-Anime','description':'明るい少女の声'})
+    res=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+        'changes':{'localCasts':{key:local},'localCastMode':{key:'local'}}})
+    assert res.status_code==200,res.text
+    s=res.json()
+    result=client.post(f'/api/game/projects/{s["id"]}/casts/mahoru/reference?expectedRevision={s["revision"]}',
+       files={'file':('mahoru.wav',short_wav(),'audio/wav')})
+    assert result.status_code==200,result.text
+    s=result.json()
+    assert s['localCasts'][key]['model'].endswith('Anime')
+    aid=s['localCasts'][key]['refs'][0]
+    assert s['voiceAssets'][0]['id']==aid
+    assert (core.WORKSPACE/'game_voice'/s['id']/'reference_audio'/(aid+'.wav')).is_file()
+    preview=client.get(f'/api/game/projects/{s["id"]}/references/{aid}')
+    assert preview.status_code==200 and len(preview.content)>100
+    plan=game.generation_groups(s['id'],{s['voices'][0]['voiceId']})
+    assert plan[0][1]=='irodori' and plan[0][2].endswith('Anime')
+    assert plan[0][3]['description']=='明るい少女の声'
+    assert plan[0][4] and plan[0][4][0].endswith(aid+'.wav')
+    done=client.delete(f'/api/game/projects/{s["id"]}/casts/mahoru/references/{aid}?expectedRevision={s["revision"]}')
+    assert done.status_code==200,done.text
+    assert done.json()['localCasts'][key]['refs']==[]
+    assert client.get(f'/api/game/projects/{s["id"]}/references/{aid}').status_code==404
+
+
+def test_game_local_cast_uses_legacy_sheet_alias_and_keeps_shared_override(client):
+    s=new_game(client)
+    sheet={'characters':{},'reference_characters':{
+      'arthur_king':{'display_name':'アーサー・キング','aliases':['arther']}}}
+    res=client.post(f'/api/game/projects/{s["id"]}/character-sheet?expectedRevision={s["revision"]}',
+       files={'file':('sheet.json',json.dumps(sheet,ensure_ascii=False).encode(),'application/json')})
+    s=res.json()
+    s=ks_file(client,s,'#arther\n[voice id="v00376"]\nこんにちは。[p]\n',name='prologue.ks').json()
+    cast=game.default_local_cast('arthur_king');cast['description']='ゆったりとした話し方'
+    response=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCasts':{'arthur_king':cast},'localCastMode':{'arthur_king':'local'}}})
+    assert response.status_code==200,response.text
+    s=response.json()
+    plan=game.generation_groups(s['id'],{'v00376'})
+    assert plan[0][3]['description']=='ゆったりとした話し方'
+    # Local voice setting is preserved when temporarily switching to shared.
+    response=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCastMode':{'arthur_king':'shared'}}})
+    assert response.status_code==200
+    assert response.json()['localCasts']['arthur_king']['description']=='ゆったりとした話し方'
+    with pytest.raises(ValueError,match='キャストが未設定'):
+        game.generation_groups(s['id'],{'v00376'})
+
+
+def test_game_local_cast_qwen_mode_and_model_validation(client):
+    s=new_game(client)
+    s=ks_file(client,s,'#airi\nこんにちは。[p]\n').json()
+    base=game.default_local_cast('airi')
+    base.update(engine='qwen',model='Qwen/Qwen3-TTS-12Hz-1.7B-Base',mode='clone')
+    res=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCasts':{'airi':base},'localCastMode':{'airi':'local'}}})
+    assert res.status_code==200
+    s=res.json()
+    with pytest.raises(ValueError,match='Qwen用参照音声'):
+        game.generation_groups(s['id'],{s['voices'][0]['voiceId']})
+    base.update(mode='design',model='Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign')
+    res=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCasts':{'airi':base}}})
+    assert res.status_code==200,res.text
+    s=res.json()
+    assert game.generation_groups(s['id'],{s['voices'][0]['voiceId']})[0][3]['mode']=='design'
+    broken=dict(base,model='not/a/real-model')
+    res=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCasts':{'airi':broken}}})
+    assert res.status_code==400
+    assert game.get_game(s['id'])['revision']==s['revision']
+
+
+def test_game_local_cast_generated_job_tts_uses_local_configuration(client,monkeypatch):
+    s=new_game(client)
+    s=ks_file(client,s,'#juri\nごきげんよう。[p]\n').json()
+    cast=game.default_local_cast('juri');cast.update(description='ゆったりと上品に',
+            model='phasefield-audio/Irodori-TTS-v4.1-Anime')
+    s=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+      'changes':{'localCasts':{'juri':cast},'localCastMode':{'juri':'local'}}}).json()
+    import app as studio
+    monkeypatch.setattr(studio,'python_for',lambda engine,settings:sys.executable)
+    class CP: returncode=0; stdout=''; stderr=''
+    def fake(args,**kwargs):
+        payload=json.loads(Path(args[2]).read_text(encoding='utf8'))
+        assert payload['model'].endswith('Anime')
+        item=payload['items'][0]
+        assert item['description']=='ゆったりと上品に'
+        assert item['caption']=='ゆったりと上品に'
+        assert item['mode']=='clone'
+        Path(item['output']).write_bytes(short_wav())
+        Path(args[3]).write_text(json.dumps({'ok':True,'items':[{'id':item['id'],'ok':True,'output':item['output']}]}))
+        return CP()
+    monkeypatch.setattr(game.subprocess,'run',fake)
+    job={'status':'running','total':0,'completed':0,'message':'','errors':[]}
+    game.generate_game_audio(s['id'],[s['voices'][0]['voiceId']],40,job)
+    assert job['status']=='done',job
+    assert game.get_game(s['id'])['voices'][0]['audio']
+
+
+def test_game_local_design_creates_private_ref_and_switches_qwen_to_clone(client,monkeypatch):
+    s=new_game(client)
+    s=ks_file(client,s,'#mary\nこんにちは。[p]\n').json()
+    cast=game.default_local_cast('mary')
+    cast.update(engine='qwen',mode='design',model='Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',description='落ち着いた声')
+    s=client.put(f'/api/game/projects/{s["id"]}',json={'expectedRevision':s['revision'],
+       'changes':{'localCasts':{'mary':cast},'localCastMode':{'mary':'local'}}}).json()
+    import app as studio
+    monkeypatch.setattr(studio,'python_for',lambda engine,settings:sys.executable)
+    class CP:returncode=0;stdout='';stderr=''
+    def fake(args,**kwargs):
+        payload=json.loads(Path(args[2]).read_text(encoding='utf8'))
+        assert payload['engine']=='qwen' and payload['model'].endswith('VoiceDesign')
+        item=payload['items'][0]
+        assert item['mode']=='design'
+        Path(item['output']).write_bytes(short_wav())
+        Path(args[3]).write_text(json.dumps({'ok':True,'items':[{'ok':True,'id':item['id']}]}))
+        return CP()
+    monkeypatch.setattr(game.subprocess,'run',fake)
+    job={'status':'running','total':0,'completed':0,'message':'','errors':[]}
+    game.design_game_reference(s['id'],'mary','おはようございます',job)
+    assert job['status']=='done',job
+    result=game.get_game(s['id'])
+    assert result['localCasts']['mary']['model'].endswith('Base')
+    assert result['localCasts']['mary']['mode']=='clone'
+    assert result['localCasts']['mary']['refText']=='おはようございます'
+    assert len(result['voiceAssets'])==1
+    assert client.get(f'/api/game/projects/{s["id"]}/references/{job["referenceAssetId"]}').status_code==200
+
+
+def test_game_cast_editor_has_same_model_ref_and_design_controls():
+    root=Path(__file__).resolve().parents[1]
+    html=(root/'static'/'game.html').read_text(encoding='utf8')
+    js=(root/'static'/'game.js').read_text(encoding='utf8')
+    assert 'gameRefPicker' in html and 'ゲーム音声専用の声設定' in html
+    for term in ('data-cast-source','data-local-field','data-ref-upload','data-ref-play','data-ref-delete','data-ref-design','voiceModels','renderLocalCastEditor'):
+        assert term in js
+    assert 'game.js?v=037' in html

@@ -67,6 +67,33 @@ function castRoster(){
          ...sheetOnly.sort((a,b)=>a.speaker.localeCompare(b.speaker))];
 }
 function renderInspector(){const wrap=$('inspector');const v=selectedVoice();if(!v){wrap.innerHTML='<div class="empty">台詞をクリックすると、演技指示を編集したり生成音声を試聴できます。</div>';return}const profile=resolveSheetProfile(v.speaker)?.profile;wrap.innerHTML=`<h2 class="voice-inspector-title">${esc(v.speaker)}</h2><div class="keypair"><span class="tag">${esc(v.voiceId)}</span><span class="muted">${esc(v.scenario)} ${v.sourceLine?'· line '+v.sourceLine:''}</span></div>${v.sourceId?`<div class="note">ゲーム内ID: <b>${esc(v.sourceId)}</b></div>`:''}<div class="field"><label>元の台詞（シナリオ上の文章）</label><div class="note">${esc(v.text)}</div></div><div class="field"><label>読み上げテキスト（ゲーム原文は変更しません）</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div><div class="field"><label>演技指示・キャプション（任意）</label><textarea id="caption">${esc(v.caption||'')}</textarea></div><button class="primary" id="saveLine">この台詞の設定を保存</button>${v.audio?`<div class="field"><label>生成済み音声 ${v.stale?'（編集後・旧テイク）':''}</label><audio class="audio" controls preload="none" src="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}"></audio></div>`:''}${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>（${esc(profile.reading||'')}）<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;}
+// Same model choices and parameters as VoiceDrama Studio's cast editor.
+const voiceModels={
+ irodori:[['Aratako/Irodori-TTS-v4.1-Small','Irodori v4.1 Small'],['Aratako/Irodori-TTS-v4-Large','Irodori v4 Large'],['Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only','Irodori Large INT8'],['Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only','Irodori Large INT4'],['phasefield-audio/Irodori-TTS-v4.1-Anime','Irodori v4.1 Anime'],['phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only','Irodori Anime INT8']],
+ qwen:[['Qwen/Qwen3-TTS-12Hz-1.7B-Base','Qwen3 Base 1.7B'],['Qwen/Qwen3-TTS-12Hz-0.6B-Base','Qwen3 Base 0.6B'],['Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign','Qwen3 Voice Design 1.7B']]
+};
+function localCastDefault(speaker){return {name:speaker,engine:'irodori',model:voiceModels.irodori[0][0],mode:'clone',language:'Japanese',description:'',refText:'',refs:[]}}
+function castKeyFor(speaker){return resolveSheetProfile(speaker)?.id||speaker}
+function renderLocalCastEditor(speaker,cast){
+ const models=voiceModels[cast.engine]||voiceModels.irodori;
+ const fieldSelect=(name,label,options)=>`<label>${label}<select data-local-field="${name}">${options.map(([val,title])=>`<option value="${esc(val)}" ${cast[name]===val?'selected':''}>${esc(title)}</option>`).join('')}</select></label>`;
+ const refs=(cast.refs||[]).map(id=>(game.voiceAssets||[]).find(a=>a.id===id)).filter(Boolean);
+ return `<details class="game-cast-detail" data-cast-detail="${esc(speaker)}" ${expandedCasts.has(speaker)?'open':''}>
+ <summary>⚙ 声の詳細設定　${esc(cast.model?.split('/').at(-1)||'')}</summary>
+ <div class="game-cast-settings">
+ <div class="game-cast-grid">
+ ${fieldSelect('engine','既定TTS',[['irodori','Irodori-TTS'],['qwen','Qwen3-TTS']])}
+ ${fieldSelect('language','言語',['Japanese','English','Chinese','Auto'].map(x=>[x,x]))}
+ ${fieldSelect('mode','生成方式',[['clone','参照音声'],['design','Voice Design']])}
+ ${fieldSelect('model','音声モデル',models)}
+ </div>
+ <label>声の説明（Voice Design・演技の基礎）<textarea data-local-field="description" rows="2">${esc(cast.description||'')}</textarea></label>
+ <label>Qwen Base：参照音声の書き起こし（任意）<textarea data-local-field="refText" rows="2">${esc(cast.refText||'')}</textarea></label>
+ <div class="game-cast-reference"><strong>登録済み参照音声（${refs.length}件）</strong>
+ ${refs.map(a=>`<div class="game-ref-row"><span title="${esc(a.name)}">${esc(a.name)}</span><button type="button" data-ref-play="${esc(a.id)}">▶ 試聴</button><button type="button" data-ref-delete="${esc(a.id)}" class="ref-remove" title="この参照音声を外す">×</button></div>`).join('')||'<p class="helper">参照音声はまだありません</p>'}
+ <div class="game-cast-buttons"><button type="button" data-ref-upload="${esc(speaker)}">＋ 参照音声を登録</button><button type="button" data-ref-design="${esc(speaker)}">✦ Voice Designで声を作成</button></div>
+ <p class="helper">参照音声はゲーム音声プロジェクト内に保存します。Voice Designは生成後に参照音声として登録されます。</p></div></div></details>`;
+}
 function renderBindings(){
  const roster=castRoster();
  const options=[{value:'',label:'キャストを選択'}];
@@ -74,18 +101,56 @@ function renderBindings(){
   options.push({value:p.id+'|'+encodeURIComponent(cast.name),
     label:p.title+' / '+cast.name+' ('+(cast.model?.split('/').at(-1)||cast.engine)+')'});
  const draw=item=>{
-  const binding=game.bindings?.[item.speaker];
+  const key=castKeyFor(item.speaker);
+  const binding=game.bindings?.[item.speaker]||game.bindings?.[key];
   const selected=binding?binding.projectId+'|'+encodeURIComponent(binding.castName):'';
+  const active=game.localCastMode?.[key]==='local'||game.localCastMode?.[item.speaker]==='local';
+  const cast=game.localCasts?.[key]||game.localCasts?.[item.speaker]||localCastDefault(key);
   const info=item.active?`<span class="binding-status">台詞 ${item.count}件</span>`
-    :'<span class="binding-status sheet-only">シート登録済み · 台詞未検出</span>';
-  return `<div class="binding ${item.active?'':'binding-unused'}"><label>${esc(item.speaker)} <span class="muted">${esc(item.profile.display_name||'')}</span>${info}</label><select data-bind="${esc(item.speaker)}">${options.map(o=>`<option value="${esc(o.value)}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('')}</select></div>`;
+    :'<span class="binding-status sheet-only">シート登録済み · 現在のシナリオに台詞なし</span>';
+  return `<div class="binding game-cast-card ${item.active?'':'binding-unused'}" data-cast-speaker="${esc(key)}"><label class="cast-name">${esc(item.speaker)} <span class="muted">${esc(item.profile.display_name||'')}</span>${info}</label>
+  <label class="game-cast-source">音声設定の使用元<select data-cast-source="${esc(key)}"><option value="shared" ${!active?'selected':''}>ボイスドラマのキャストを利用</option><option value="local" ${active?'selected':''}>ゲーム音声専用の声設定</option></select></label>
+  ${active?renderLocalCastEditor(key,cast):`<label class="game-shared-cast">共有するキャスト<select data-bind="${esc(key)}">${options.map(o=>`<option value="${esc(o.value)}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('')}</select></label>`}
+  </div>`;
  };
  const used=roster.filter(item=>item.active);
  const unused=roster.filter(item=>!item.active);
  $('castBindings').innerHTML=(used.length?'<div class="binding-heading">シナリオ内の話者</div>'+used.map(draw).join(''):'')+
   (unused.length?`<div class="binding-heading">キャラクターシート登録者（台詞未検出：${unused.length}人）</div>`+
-    '<p class="binding-help">ここに表示されても音声は自動生成されません。登場するKSを取り込むと台詞一覧に追加されます。</p>'+unused.map(draw).join(''):'')+
+    '<p class="binding-help">キャスト設定を先に用意できます。KSを読み込むと台詞へ適用されます。</p>'+unused.map(draw).join(''):'')+
   (roster.length?'':'<div class="helper">キャラクターシートまたはシナリオを取り込むと一覧が表示されます。</div>');
+}
+let expandedCasts=new Set(),refUploadSpeaker='';
+async function setCastSource(key,source){
+ const modes={...(game.localCastMode||{})},casts={...(game.localCasts||{})};
+ modes[key]=source;
+ if(source==='local'&&!casts[key])casts[key]=localCastDefault(key);
+ if(source==='local')expandedCasts.add(key);
+ if(await update({localCasts:casts,localCastMode:modes})){renderBindings();message(`${key}の音声設定を変更しました`)}
+}
+async function setLocalCastField(key,field,value){
+ const casts={...(game.localCasts||{})};const cast={...(casts[key]||localCastDefault(key))};cast[field]=value;
+ if(field==='engine'){cast.model=voiceModels[value][0][0];cast.mode='clone'}
+ if(field==='mode'&&cast.engine==='qwen')cast.model=value==='design'?'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign':'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
+ if(field==='model'&&cast.engine==='qwen')cast.mode=value.includes('VoiceDesign')?'design':'clone';
+ casts[key]=cast;expandedCasts.add(key);
+ if(await update({localCasts:casts}))renderBindings();
+}
+async function uploadGameRef(file){
+ if(!game||!refUploadSpeaker)return;
+ const speaker=refUploadSpeaker;refUploadSpeaker='';
+ const form=new FormData();form.append('file',file);
+ try{busy('参照音声を登録中…');game=await request(`/api/game/projects/${game.id}/casts/${encodeURIComponent(speaker)}/reference?expectedRevision=${game.revision}`,{method:'POST',body:form});renderBindings();busy('保存済み');message(`${speaker}に参照音声を登録しました`)}
+ catch(e){busy('保存エラー');message('参照音声の登録に失敗: '+e.message,true)}
+}
+async function removeGameRef(speaker,id){if(!confirm('この参照音声をゲーム用キャストから外しますか？'))return;
+ try{game=await request(`/api/game/projects/${game.id}/casts/${encodeURIComponent(speaker)}/references/${encodeURIComponent(id)}?expectedRevision=${game.revision}`,{method:'DELETE'});renderBindings();message('参照音声を外しました')}
+ catch(e){message(e.message,true)}
+}
+function previewGameRef(aid){const player=new Audio(`/api/game/projects/${game.id}/references/${encodeURIComponent(aid)}`);player.play().catch(e=>message('試聴できません: '+e.message,true));}
+async function designGameCast(speaker){
+ const example=prompt('新しい声のサンプル台詞を入力してください','こんにちは。今日もよろしくお願いします。');if(!example?.trim())return;
+ try{const job=await request(`/api/game/projects/${game.id}/casts/${encodeURIComponent(speaker)}/design`,json('POST',{sampleText:example}));message('Voice Designを開始しました');poll(job.id)}catch(e){message(e.message,true)}
 }
 async function autoBindCasts(){
  const bindings={...game.bindings};let found=0;
@@ -163,5 +228,18 @@ async function importCaptionCsv(){
  finally{$('captionPicker').value=''}
 }
 function downloadZip(){if((game?.pendingKS||[]).length)return message('先に「全KSのボイスIDを一括確定」してください',true);if(!game||!game.scenarios.length)return message('シナリオがありません',true);const link=document.createElement('a');link.href=`/api/game/projects/${game.id}/export.zip`;link.download='game_voice_export.zip';document.body.appendChild(link);link.click();link.remove();message('ゲーム用ZIPを準備しています。未生成音声は missing_voices.json に記録されます。')}
-function wire(){$('newProject').onclick=()=>createNew();$('finalizeKs').onclick=finalizeKs;$('projectList').onchange=e=>openGame(e.target.value);for(const [button,picker,kind] of [['importKs','ksPicker','ks'],['importJson','jsonPicker','json'],['importState','statePicker','state'],['importSheet','sheetPicker','sheet'],['importStory','storyPicker','story']]){$(button).onclick=()=>(game?$(picker).click():message('プロジェクトを作成してください',true));$(picker).onchange=()=>uploadFiles($(picker),kind)}$('scenarioList').onclick=e=>{const b=e.target.closest('[data-scenario]');if(b)showScenario(b.dataset.scenario)};$('voiceList').onclick=e=>{if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice()};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value)};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;$('exportCaptionsScene').onclick=()=>exportCaptionCsv('scene');$('exportCaptionsAll').onclick=()=>exportCaptionCsv('all');$('importCaptions').onclick=()=>game?$('captionPicker').click():message('ゲーム音声プロジェクトを作成してください',true);$('captionPicker').onchange=importCaptionCsv;$('copyCaptionPrompt').onclick=copyCaptionPrompt;}
+function wire(){$('newProject').onclick=()=>createNew();$('finalizeKs').onclick=finalizeKs;$('projectList').onchange=e=>openGame(e.target.value);for(const [button,picker,kind] of [['importKs','ksPicker','ks'],['importJson','jsonPicker','json'],['importState','statePicker','state'],['importSheet','sheetPicker','sheet'],['importStory','storyPicker','story']]){$(button).onclick=()=>(game?$(picker).click():message('プロジェクトを作成してください',true));$(picker).onchange=()=>uploadFiles($(picker),kind)}$('scenarioList').onclick=e=>{const b=e.target.closest('[data-scenario]');if(b)showScenario(b.dataset.scenario)};$('voiceList').onclick=e=>{if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice()};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{
+ if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value);
+ else if(e.target.matches('[data-cast-source]'))setCastSource(e.target.dataset.castSource,e.target.value);
+ else if(e.target.matches('[data-local-field]'))setLocalCastField(e.target.closest('[data-cast-speaker]').dataset.castSpeaker,e.target.dataset.localField,e.target.value);
+};
+$('castBindings').onclick=e=>{
+ const target=e.target,speaker=target.closest('[data-cast-speaker]')?.dataset.castSpeaker;
+ if(target.matches('[data-ref-upload]')){refUploadSpeaker=speaker;$('gameRefPicker').click()}
+ else if(target.matches('[data-ref-play]'))previewGameRef(target.dataset.refPlay);
+ else if(target.matches('[data-ref-delete]'))removeGameRef(speaker,target.dataset.refDelete);
+ else if(target.matches('[data-ref-design]'))designGameCast(speaker);
+};
+$('castBindings').addEventListener('toggle',e=>{if(e.target.matches('[data-cast-detail]')){const key=e.target.dataset.castDetail;e.target.open?expandedCasts.add(key):expandedCasts.delete(key)}},true);
+$('gameRefPicker').onchange=e=>{const file=e.target.files[0];if(file)uploadGameRef(file);e.target.value=''};$('exportFormat').onchange=async e=>{if(await update({format:e.target.value}))renderAll()};$('analyzeSelected').onclick=startAnalysis;$('generateSelected').onclick=startGeneration;$('exportZip').onclick=downloadZip;$('exportCaptionsScene').onclick=()=>exportCaptionCsv('scene');$('exportCaptionsAll').onclick=()=>exportCaptionCsv('all');$('importCaptions').onclick=()=>game?$('captionPicker').click():message('ゲーム音声プロジェクトを作成してください',true);$('captionPicker').onchange=importCaptionCsv;$('copyCaptionPrompt').onclick=copyCaptionPrompt;}
 wire();refreshGames().catch(e=>message(e.message,true));

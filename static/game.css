@@ -20,3 +20,27 @@
 .pending-ks-info:not(:empty){padding:10px 12px;border-radius:8px;background:#253044;border:1px solid #49586e}
 .remap-info{margin:12px 0;font-size:11px;line-height:1.5;color:#f1cd91;white-space:pre-wrap;overflow-wrap:anywhere}
 .remap-info:not(:empty){padding:10px;border-radius:8px;background:#332c27;border:1px solid #73583b}
+
+
+/* Game-local voice editor: same fields as VoiceDrama cast settings. */
+.game-cast-card{border:1px solid #3c4d64;border-radius:10px;padding:12px;background:#1c2635;margin:4px 0 12px}
+.game-cast-card .cast-name{font-size:12px;font-weight:700}
+.game-cast-source{display:block;margin:9px 0 10px;color:#a9bfd4;font-size:11px}
+.game-cast-source select,.game-shared-cast select{margin-top:5px;width:100%}
+.game-shared-cast{display:block;color:#a9bfd4;font-size:11px}
+.game-cast-detail{margin-top:9px;border-top:1px solid #43536b;padding:12px 0 2px}
+.game-cast-detail summary{cursor:pointer;color:#efc890;font-size:11px;font-weight:700;white-space:normal;overflow-wrap:anywhere}
+.game-cast-settings{margin-top:15px}
+.game-cast-settings label{display:block;margin:0 0 10px;font-size:11px;color:#aeb7c6}
+.game-cast-settings select,.game-cast-settings textarea{display:block;margin-top:5px;width:100%}
+.game-cast-settings textarea{min-height:65px;resize:vertical;line-height:1.5}
+.game-cast-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
+.game-cast-reference{border:1px solid #3a4c65;border-radius:8px;padding:10px;background:#151e2e}
+.game-cast-reference strong{font-size:11px;color:#d8e6f3}
+.game-ref-row{display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #344358}
+.game-ref-row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:11px}
+.game-ref-row button{padding:6px 7px;font-size:10px;white-space:nowrap}
+.game-ref-row .ref-remove{color:#eaa5a5}
+.game-cast-buttons{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.game-cast-buttons button{font-size:10px;white-space:normal;text-align:center;flex:1;min-width:110px}
+@media(max-width:1100px){.game-cast-grid{grid-template-columns:1fr}}

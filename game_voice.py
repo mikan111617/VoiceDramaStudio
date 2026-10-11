@@ -83,6 +83,7 @@ def create_game(title='新しいゲーム音声'):
         pid = 'g_' + uuid.uuid4().hex[:16]
         s = {'id':pid, 'title':str(title).strip()[:120] or 'ゲーム音声', 'revision':1,
              'lastIssued':0, 'scenarios':[], 'voices':[], 'bindings':{},
+             'localCasts':{}, 'localCastMode':{}, 'voiceAssets':[],
              'characterSheet':{}, 'referenceCharacters':{}, 'nonCharacterSpeakers':[],
              'speakerFilterEnabled':False, 'storyContext':{}, 'format':'wav', 'voicePrefix':'voice',
              'pendingKS':[], 'lastIdRemaps':[]}
@@ -807,6 +808,32 @@ def update_game(pid,changes,revision):
                     orig=core.load_project(project_id)
                     if not any(c.get('name')==cast_name for c in orig['voices']):raise ValueError('指定したキャストが見つかりません')
             s['bindings']=bindings
+        changed_cast_keys=set()
+        if 'localCastMode' in changes:
+            flags=changes['localCastMode']
+            if not isinstance(flags,dict) or len(flags)>250 or any(
+                not isinstance(k,str) or not SAFE_KEY.fullmatch(k) or v not in ('local','shared') for k,v in flags.items()):
+                raise ValueError('声設定の切り替え値が正しくありません')
+            for key in set(flags)|set(s.get('localCastMode',{})):
+                if flags.get(key,'shared')!=s.get('localCastMode',{}).get(key,'shared'):
+                    changed_cast_keys.add(key)
+            s['localCastMode']=flags
+        if 'localCasts' in changes:
+            local=changes['localCasts']
+            if not isinstance(local,dict) or len(local)>250:raise ValueError('個別キャスト設定が不正です')
+            active={speaker for v in s['voices'] for speaker in (v['speaker'], _speaker_profile(s,v['speaker'])[0]) if speaker}
+            active.update(s.get('characterSheet',{}))
+            active.update(s.get('referenceCharacters',{}))
+            for key,cast in local.items():
+                _clean_name(key)
+                if key not in active:raise ValueError(f'シナリオに存在しないキャストです: {key}')
+                local[key]=_validate_local_cast(cast,s.get('voiceAssets',[]))
+            for key in set(local)|set(s.get('localCasts',{})):
+                if local.get(key)!=s.get('localCasts',{}).get(key):
+                    changed_cast_keys.add(key)
+            s['localCasts']=local
+        for key in changed_cast_keys:
+            _mark_voice_takes_stale_for_cast(s,key)
         if 'voices' in changes:
             vmap={v['voiceId']:v for v in s['voices']}
             items=changes['voices']
@@ -934,6 +961,182 @@ def make_export_zip(pid,destination):
         return {'total':len(s['voices']),'audio':len(files),'missing':len(missing)}
 
 
+# Game-specific voice configurations share the VoiceDrama TTS worker and
+# model names, but live entirely inside a game project and have private refs.
+GAME_TTS_MODELS = {
+    'irodori': (
+        'Aratako/Irodori-TTS-v4.1-Small',
+        'Aratako/Irodori-TTS-v4-Large',
+        'Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only',
+        'Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only',
+        'phasefield-audio/Irodori-TTS-v4.1-Anime',
+        'phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only',
+    ),
+    'qwen': (
+        'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+        'Qwen/Qwen3-TTS-12Hz-0.6B-Base',
+        'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    ),
+}
+REFERENCE_EXTENSIONS=frozenset({'.wav','.mp3','.flac','.ogg','.m4a','.aac','.opus'})
+MAX_REFERENCE_BYTES=20*1024*1024
+
+
+def default_local_cast(speaker):
+    return {'name':speaker,'engine':'irodori','model':GAME_TTS_MODELS['irodori'][0],
+            'mode':'clone','language':'Japanese','description':'','refText':'','refs':[]}
+
+
+def _validate_local_cast(spec, assets):
+    if not isinstance(spec,dict):raise ValueError('キャストの設定が正しくありません')
+    engine=spec.get('engine','irodori')
+    if engine not in GAME_TTS_MODELS:raise ValueError('TTSエンジンが不正です')
+    mode=spec.get('mode','clone')
+    if mode not in ('clone','design'):raise ValueError('生成方式が不正です')
+    model=spec.get('model') or GAME_TTS_MODELS[engine][0]
+    if model not in GAME_TTS_MODELS[engine]:raise ValueError('未対応の音声モデルです')
+    if engine=='qwen' and (('VoiceDesign' in model) != (mode=='design')):
+        raise ValueError('Qwen Baseは参照音声方式、VoiceDesignはVoice Design方式を選択してください')
+    language=spec.get('language','Japanese')
+    if language not in ('Japanese','English','Chinese','Auto'):raise ValueError('言語が不正です')
+    desc=spec.get('description','');reftext=spec.get('refText','')
+    if not isinstance(desc,str) or len(desc)>2000 or not isinstance(reftext,str) or len(reftext)>4000:
+        raise ValueError('声の説明・参照文字起こしが長すぎます')
+    refs=spec.get('refs',[])
+    if not isinstance(refs,list) or len(refs)>10 or len(refs)!=len(set(refs)):
+        raise ValueError('参照音声は最大10本です')
+    known={a['id'] for a in assets}
+    if any(not isinstance(x,str) or x not in known for x in refs):
+        raise ValueError('ゲーム音声の参照音声IDが不正です')
+    return {'name':str(spec.get('name',''))[:128],'engine':engine,'model':model,
+            'mode':mode,'language':language,'description':desc,'refText':reftext,'refs':refs}
+
+
+def _game_ref_path(pid, asset):
+    filename=str(asset.get('filename',''))
+    if not re.fullmatch(r'ref_[0-9a-f]{16}\.(?:wav|mp3|flac|ogg|m4a|aac|opus)',filename):
+        raise ValueError('参照音声ファイル名が不正です')
+    return _folder(pid)/'reference_audio'/filename
+
+
+def _mark_voice_takes_stale_for_cast(state, speaker):
+    # A changed cast setting must not silently export speech created with an
+    # older model/reference. Keep all audio files, but require regeneration.
+    for voice in state.get('voices',[]):
+        canonical,_=_speaker_profile(state,voice['speaker'])
+        if (speaker==voice['speaker'] or speaker==canonical) and voice.get('audio'):
+            voice['stale']=True
+
+
+def upload_game_reference(pid,speaker,filename,body,revision):
+    if not isinstance(body,bytes) or not body or len(body)>MAX_REFERENCE_BYTES:
+        raise ValueError('参照音声は20MB以内のファイルを指定してください')
+    basename=Path(str(filename).replace('\\','/')).name
+    ext=Path(basename).suffix.lower()
+    if ext not in REFERENCE_EXTENSIONS:raise ValueError('WAV / MP3 / FLAC / OGG / M4A / AAC / OPUSのみ対応')
+    speaker=_clean_name(speaker)
+    with GAME_LOCK:
+        s=_load(pid)
+        if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
+        if speaker not in s.get('localCasts',{}):raise ValueError('先に「ゲーム専用の声設定」を有効にしてください')
+        if len(s.get('voiceAssets',[]))>=250:raise ValueError('参照音声は250本以内です')
+        if len(s['localCasts'][speaker].get('refs',[]))>=10:
+            raise ValueError('1キャラクターに登録できる参照音声は10本までです')
+        import io
+        from render import duration_of
+        aid='ref_'+uuid.uuid4().hex[:16]
+        asset={'id':aid,'filename':aid+ext,'name':basename[:160]}
+        target=_game_ref_path(pid,asset);target.parent.mkdir(parents=True,exist_ok=True)
+        try:
+            target.write_bytes(body)
+            duration=duration_of(target)
+            asset['duration']=round(duration,3)
+            s.setdefault('voiceAssets',[]).append(asset)
+            cast=s['localCasts'][speaker]
+            cast.setdefault('refs',[]).append(aid)
+            _mark_voice_takes_stale_for_cast(s,speaker)
+            _save(pid,s,revision)
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
+        return _load(pid)
+
+
+def remove_game_reference(pid,speaker,aid,revision):
+    speaker=_clean_name(speaker)
+    with GAME_LOCK:
+        s=_load(pid)
+        if s['revision']!=revision:raise RuntimeError('編集の競合を検出しました')
+        cast=s.get('localCasts',{}).get(speaker)
+        asset=next((a for a in s.get('voiceAssets',[]) if a['id']==aid),None)
+        if not cast or not asset or aid not in cast.get('refs',[]):
+            raise ValueError('このキャラクターの参照音声が見つかりません')
+        cast['refs'].remove(aid)
+        _mark_voice_takes_stale_for_cast(s,speaker)
+        # Other local casts may share the same ID. Keep the underlying audio.
+        still_used=any(aid in c.get('refs',[]) for c in s['localCasts'].values())
+        if not still_used:
+            s['voiceAssets']=[a for a in s['voiceAssets'] if a['id']!=aid]
+        result=_save(pid,s,revision)
+        if not still_used:_game_ref_path(pid,asset).unlink(missing_ok=True)
+        return result
+
+
+def design_game_reference(pid,speaker,text,job):
+    try:
+        import app as studio
+        speaker=_clean_name(speaker)
+        if not 1<=len(text.strip())<=500:raise ValueError('サンプル台詞は1〜500文字です')
+        with GAME_LOCK:
+            s=_load(pid)
+            cast=s.get('localCasts',{}).get(speaker)
+            if not cast:raise ValueError('ゲーム専用の声設定を登録してください')
+            cast=_validate_local_cast(cast,s.get('voiceAssets',[]))
+        engine=cast['engine']
+        model=('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' if engine=='qwen' else cast['model'])
+        job['total']=1;job['message']=f'{speaker} の参照音声を作成中'
+        with tempfile.TemporaryDirectory(prefix='vds_game_design_') as temp:
+            folder=Path(temp);output=folder/'sample.wav';reply=folder/'response.json'
+            payload={'engine':engine,'model':model,
+              'irodori_dir':core.load_global_settings()['irodori_dir'],
+              'items':[{'id':speaker,'text':text.strip(),
+                'caption':cast['description'] or '自然で聞き取りやすい話し方',
+                'description':cast['description'],'mode':'design','refs':[],
+                'language':cast['language'],'num_steps':40,'output':str(output)}]}
+            request=folder/'request.json';request.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf8')
+            cp=subprocess.run([studio.python_for(engine,None),str(core.ROOT/'tts_worker.py'),str(request),str(reply)],
+                 cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf8',errors='replace',timeout=1200)
+            if not reply.exists():raise RuntimeError('Voice Design応答なし: '+(cp.stderr+cp.stdout)[-500:])
+            result=json.loads(reply.read_text(encoding='utf8'))
+            if not result.get('ok'):raise RuntimeError(result.get('error','生成失敗'))
+            item=result['items'][0]
+            if not item.get('ok'):raise RuntimeError(item.get('error','生成失敗'))
+            if not output.is_file():raise RuntimeError('音声が生成されませんでした')
+            with GAME_LOCK:
+                latest=_load(pid)
+                current=latest.get('localCasts',{}).get(speaker)
+                if not current:raise ValueError('生成中にキャストが削除されました')
+                aid='ref_'+uuid.uuid4().hex[:16]
+                asset={'id':aid,'filename':aid+'.wav','name':f'{speaker} - Voice Design.wav'}
+                dest=_game_ref_path(pid,asset);dest.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copy2(output,dest)
+                try:
+                    from render import duration_of
+                    asset['duration']=round(duration_of(dest),3)
+                    latest.setdefault('voiceAssets',[]).append(asset)
+                    current.setdefault('refs',[]).append(aid)
+                    current['refText']=text.strip();current['mode']='clone'
+                    if engine=='qwen':current['model']='Qwen/Qwen3-TTS-12Hz-1.7B-Base'
+                    _mark_voice_takes_stale_for_cast(latest,speaker)
+                    _save(pid,latest,latest['revision'])
+                except Exception:
+                    dest.unlink(missing_ok=True);raise
+            job['referenceAssetId']=aid;job['completed']=1
+        job['status']='done';job['message']='参照音声を生成し、ゲーム専用キャストに登録しました'
+    except Exception as exc:
+        job['status']='error';job['message']=str(exc)
+
+
 def generation_groups(pid,ids):
     s=_load(pid)
     if s.get('pendingKS'):
@@ -942,20 +1145,38 @@ def generation_groups(pid,ids):
     plans=[]
     for v in targets:
         sheet_id,_=_speaker_profile(s,v['speaker'])
-        binding=(s['bindings'].get(v['speaker'])
-                 or (s['bindings'].get(sheet_id) if sheet_id else None))
-        if not binding or not binding.get('castName'):
-            raise ValueError(f"キャストが未設定です: {v['speaker']}")
-        source=core.load_project(binding['projectId'])
-        cast=next((x for x in source['voices'] if x['name']==binding['castName']),None)
-        if cast is None:raise ValueError('キャストが見つかりません: '+v['speaker'])
-        engine=cast.get('engine','irodori')
-        model=cast.get('model') or ('Qwen/Qwen3-TTS-12Hz-1.7B-Base' if engine=='qwen' else 'Aratako/Irodori-TTS-v4.1-Small')
-        refs=[]
-        for aid in cast.get('refs',[]):
-            a=next((a for a in source['assets'] if a['id']==aid),None)
-            if a:refs.append(str(core.asset_path(source['id'],a)))
-        if engine=='qwen' and not refs:
+        # Local game-specific cast overrides a VoiceDrama shared cast. Aliases
+        # such as #arther resolve to canonical arthur_king local settings.
+        active_local=(s.get('localCastMode',{}).get(v['speaker'])=='local'
+                      or bool(sheet_id and s.get('localCastMode',{}).get(sheet_id)=='local'))
+        local=(s.get('localCasts',{}).get(v['speaker'])
+               or (s.get('localCasts',{}).get(sheet_id) if sheet_id else None)) if active_local else None
+        if active_local and local is None:
+            raise ValueError(f'{v["speaker"]} のゲーム専用設定がありません')
+        if local is not None:
+            cast=_validate_local_cast(local,s.get('voiceAssets',[]))
+            engine=cast['engine'];model=cast['model']
+            assets={a['id']:a for a in s.get('voiceAssets',[])}
+            refs=[]
+            for aid in cast['refs']:
+                p=_game_ref_path(pid,assets[aid])
+                if not p.is_file():raise ValueError(f'{v["speaker"]}の参照音声ファイルがありません: {assets[aid]["name"]}')
+                refs.append(str(p))
+        else:
+            binding=(s['bindings'].get(v['speaker'])
+                     or (s['bindings'].get(sheet_id) if sheet_id else None))
+            if not binding or not binding.get('castName'):
+                raise ValueError(f"キャストが未設定です: {v['speaker']}")
+            source=core.load_project(binding['projectId'])
+            cast=next((x for x in source['voices'] if x['name']==binding['castName']),None)
+            if cast is None:raise ValueError('キャストが見つかりません: '+v['speaker'])
+            engine=cast.get('engine','irodori')
+            model=cast.get('model') or ('Qwen/Qwen3-TTS-12Hz-1.7B-Base' if engine=='qwen' else 'Aratako/Irodori-TTS-v4.1-Small')
+            refs=[]
+            for aid in cast.get('refs',[]):
+                a=next((a for a in source['assets'] if a['id']==aid),None)
+                if a:refs.append(str(core.asset_path(source['id'],a)))
+        if engine=='qwen' and cast.get('mode','clone')!='design' and not refs:
             raise ValueError(f"{v['speaker']}のQwen用参照音声が登録されていません")
         plans.append((v,engine,model,cast,refs))
     return plans
@@ -982,7 +1203,7 @@ def generate_game_audio(pid,voice_ids,steps,job):
                 request=[]
                 for v,cast,refs in items:
                     request.append({'id':v['voiceId'],'text':v['ttsText'],'caption':v['caption'] or cast.get('description',''),
-                         'description':cast.get('description',''),'refs':refs,'mode':'clone',
+                         'description':cast.get('description',''),'refs':refs,'mode':cast.get('mode','clone'),
                          'language':cast.get('language','Japanese'),'ref_text':cast.get('refText',''),
                          'num_steps':steps,'output':str(d/(v['voiceId']+'.wav')),
                          'schedule':'linear','sway_coeff':-1.0})

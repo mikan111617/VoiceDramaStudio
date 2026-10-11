@@ -139,6 +139,46 @@ def cast_projects():
         except (OSError,ValueError):continue
     return result
 
+# Game-local reference audio: independent of VoiceDrama project assets.
+@router.post('/api/game/projects/{gid}/casts/{speaker}/reference')
+async def upload_cast_reference(gid:str,speaker:str,expectedRevision:int,file:UploadFile=File(...)):
+    body=await file.read(game.MAX_REFERENCE_BYTES+1)
+    return _errors(game.upload_game_reference,gid,speaker,file.filename or '',body,expectedRevision)
+
+
+@router.get('/api/game/projects/{gid}/references/{aid}')
+def play_cast_reference(gid:str,aid:str):
+    state=_errors(game.get_game,gid)
+    asset=next((x for x in state.get('voiceAssets',[]) if x['id']==aid),None)
+    if not asset:raise HTTPException(404,'参照音声が見つかりません')
+    path=_errors(game._game_ref_path,gid,asset)
+    if not path.is_file():raise HTTPException(404,'参照音声ファイルがありません')
+    return FileResponse(path,filename=asset['name'],content_disposition_type='inline')
+
+
+@router.delete('/api/game/projects/{gid}/casts/{speaker}/references/{aid}')
+def remove_cast_reference(gid:str,speaker:str,aid:str,expectedRevision:int):
+    return _errors(game.remove_game_reference,gid,speaker,aid,expectedRevision)
+
+
+class GameVoiceDesign(BaseModel):
+    sampleText:str='こんにちは。今日もよろしくお願いします。'
+
+
+@router.post('/api/game/projects/{gid}/casts/{speaker}/design')
+def design_cast_reference(gid:str,speaker:str,body:GameVoiceDesign):
+    state=_errors(game.get_game,gid)
+    if speaker not in state.get('localCasts',{}):
+        raise HTTPException(400,'先にゲーム専用の声設定を有効にしてください')
+    if not 1<=len(body.sampleText.strip())<=500:
+        raise HTTPException(400,'サンプル台詞は1〜500文字です')
+    jid='gd_'+uuid.uuid4().hex[:16]
+    job={'id':jid,'status':'running','message':'Voice Design準備中','total':0,'completed':0,'errors':[]}
+    game.GAME_JOBS[jid]=job
+    executor.submit(game.design_game_reference,gid,speaker,body.sampleText,job)
+    return job
+
+
 @router.post('/api/game/projects/{gid}/story-context')
 async def import_story_context(gid:str,expectedRevision:int,file:UploadFile=File(...)):
     return _errors(game.import_story_context,gid,await _json_upload(file),expectedRevision)
