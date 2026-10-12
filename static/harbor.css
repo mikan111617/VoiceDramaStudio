@@ -46,6 +46,11 @@ button.danger,.btn.danger,.game-ref-row .ref-remove,.dict-delete{color:var(--red
 .export-cover-preview[hidden]{display:none}
 .export-cover-preview img{width:112px;height:112px;max-width:100%;object-fit:cover;border:1px solid var(--line);border-radius:6px}
 #exportCover{max-width:100%}
+.library-source-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.library-source-bar[hidden],#libraryDropzone[hidden],#shareAllLibraryBtn[hidden],#openTrashBtn[hidden]{display:none}
+.library-source-bar>button[data-library-source]{padding:8px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px}
+.library-source-bar>button[data-library-source][aria-pressed="true"]{background:#d9ecf4;border-color:#699fb8;color:var(--accent2);font-weight:700}
+#shareAllLibraryBtn{margin-left:auto}
 .library-controls{margin-bottom:18px}
 .library-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:10px}
 /* Keep audio categories visible while the library list scrolls. */
