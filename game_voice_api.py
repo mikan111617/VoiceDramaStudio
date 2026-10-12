@@ -208,18 +208,28 @@ def analyze(gid:str,body:GameAnalyze):
 
 @router.post('/api/game/projects/{gid}/generate')
 def generate(gid:str,body:GameGenerate):
-    if len(body.voiceIds)>500 or not body.voiceIds or len(set(body.voiceIds))!=len(body.voiceIds):
-        raise HTTPException(400,'生成するボイスを1〜500件選択してください')
+    if not 1<=len(body.voiceIds)<=10000 or len(set(body.voiceIds))!=len(body.voiceIds):
+        raise HTTPException(400,'生成するボイスを1〜10000件選択してください')
     if not 1<=body.numSteps<=80:raise HTTPException(400,'ステップ数は1〜80です')
     state=_errors(game.get_game,gid)
     known={v['voiceId'] for v in state['voices']}
     if not set(body.voiceIds).issubset(known):raise HTTPException(400,'不明なボイスIDがあります')
+    if any(j.get('projectId')==gid and j['status']=='running'
+           for jid,j in game.GAME_JOBS.items() if jid.startswith('gj_')):
+        raise HTTPException(409,'このプロジェクトでは既に音声生成中です')
     _errors(game.generation_groups,gid,set(body.voiceIds))
     jid='gj_'+uuid.uuid4().hex[:16]
-    job={'id':jid,'status':'running','message':'生成の準備中','completed':0,'total':0,'errors':[]}
+    job={'id':jid,'projectId':gid,'status':'running','message':'生成の準備中','completed':0,'total':len(body.voiceIds),'errors':[]}
     game.GAME_JOBS[jid]=job
     executor.submit(game.generate_game_audio,gid,body.voiceIds,body.numSteps,job)
     return job
+
+@router.get('/api/game/projects/{gid}/generate/active')
+def current_generation(gid: str):
+    _errors(game.get_game,gid)
+    return next((j for jid,j in reversed(list(game.GAME_JOBS.items()))
+                 if jid.startswith('gj_') and j.get('projectId')==gid and j['status']=='running'), None)
+
 
 @router.get('/api/game/jobs/{jid}')
 def job_status(jid:str):
