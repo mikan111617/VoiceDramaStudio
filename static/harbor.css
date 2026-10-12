@@ -42,6 +42,10 @@ button.danger,.btn.danger,.game-ref-row .ref-remove,.dict-delete{color:var(--red
 .asset-meta>.small{flex:none;white-space:nowrap;margin-top:4px}
 .asset-dialogue-context,.asset-file-name{color:var(--muted);font-size:12px;overflow-wrap:anywhere;line-height:1.7;margin-top:5px}
 .asset-file-name{font-family:Consolas,monospace;font-size:11px}
+.export-cover-preview{display:flex;align-items:center;gap:14px;margin-top:10px;flex-wrap:wrap}
+.export-cover-preview[hidden]{display:none}
+.export-cover-preview img{width:112px;height:112px;max-width:100%;object-fit:cover;border:1px solid var(--line);border-radius:6px}
+#exportCover{max-width:100%}
 .library-controls{margin-bottom:18px}
 .library-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:10px}
 /* Keep audio categories visible while the library list scrolls. */
