@@ -30,3 +30,28 @@ test('dismissal still works when browser storage is unavailable',()=>{
  one.run("localStorage.getItem=()=>{throw Error('disabled')};localStorage.setItem=()=>{throw Error('disabled')};dismissRemapNotice();renderPendingKS()");
  assert.equal(one.elements.get('idRemapInfo').hidden,true);
 });
+
+
+test('scenario file checkboxes keep selections across files and filter already-generated lines',()=>{
+ const view=screen();
+ view.run(`
+   renderVoiceRows=()=>{};renderAll=()=>{};message=()=>{};
+   game={id:'g_test',scenarios:[{key:'one',filename:'scene1.ks'},{key:'two',filename:'scene2.ks'}],
+     voices:[{voiceId:'v1',scenario:'one',audio:'ready.wav',stale:false},
+             {voiceId:'v2',scenario:'one',audio:'',stale:false},
+             {voiceId:'v3',scenario:'two',audio:'old.wav',stale:true}]};
+   document.getElementById('scenarioList').querySelectorAll=()=>[];
+   markScenario('one',true);markScenario('two',true);
+ `);
+ assert.deepEqual(JSON.parse(view.run('JSON.stringify([...marked].sort())')),['v2','v3']);
+ view.run("showScenario('two')");
+ assert.deepEqual(JSON.parse(view.run('JSON.stringify([...marked].sort())')),['v2','v3']);
+ view.run("includeReady=true;markScenario('one',true)");
+ assert.deepEqual(JSON.parse(view.run('JSON.stringify([...marked].sort())')),['v1','v2','v3']);
+ view.run("includeReady=false;markScenario('one',false)");
+ assert.deepEqual(JSON.parse(view.run('JSON.stringify([...marked].sort())')),['v3']);
+ view.run("markAllScenarios('all')");
+ assert.equal(view.run('marked.size'),3);
+ view.run("markAllScenarios('clear')");
+ assert.equal(view.run('marked.size'),0);
+});
