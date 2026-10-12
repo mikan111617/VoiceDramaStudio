@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import core
+import shared_audio
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
@@ -231,6 +232,53 @@ def download_selected_scene_takes(pid: str, sid: str):
         # The response owns a valid archive; errors must not leave temp ZIPs behind.
         if temporary and not ready:
             temporary.unlink(missing_ok=True)
+
+
+class ShareAssetsRequest(BaseModel):
+    assetIds: list[str]
+
+
+class SharedImportRequest(BaseModel):
+    expectedRevision: int | None = None
+
+
+@app.get('/api/shared-assets')
+def get_shared_assets():
+    try:
+        return shared_audio.list_shared()
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get('/api/shared-assets/{shared_id}/audio')
+def stream_shared_audio(shared_id: str):
+    try:
+        physical, asset = shared_audio.get_shared_file(shared_id)
+        return FileResponse(physical, filename=asset["name"], content_disposition_type='inline')
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.post('/api/projects/{pid}/assets/share')
+def share_project_audio(pid: str, body: ShareAssetsRequest):
+    try:
+        return shared_audio.share_assets(pid, body.assetIds)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    except (ValueError, OSError, RuntimeError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post('/api/projects/{pid}/assets/import-shared/{shared_id}')
+def import_shared_audio(pid: str, shared_id: str, body: SharedImportRequest):
+    try:
+        return shared_audio.import_shared(pid, shared_id, body.expectedRevision)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.post('/api/projects/{pid}/assets')
