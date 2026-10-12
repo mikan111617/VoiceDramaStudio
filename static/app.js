@@ -626,7 +626,7 @@ async function renderAudio(){
    <div class="field"><label for="exportCover">ジャケット画像（任意）</label><input type="file" id="exportCover" accept="image/jpeg,image/png,.jpg,.jpeg,.png">
     <p class="small muted" id="exportCoverHint">JPEG / PNG、5MB以下。画像はMP3に埋め込まれます。WAVには埋め込めません。</p>
     <div class="export-cover-preview" id="exportCoverPreview" hidden><img id="exportCoverImage" alt="選択したジャケット画像のプレビュー"><button type="button" class="btn ghost mini" id="exportCoverClear">画像を取り消す</button></div></div>
-   <div class="field"><label>共通の保存先</label><p class="small muted"><code>VoiceDramaStudio/exports/</code> に作品名・書き出し日時付きで保存します。ブラウザからのダウンロードも従来どおり行われます。</p>
+   <div class="field"><label>共通の保存先</label><p class="small muted"><code>VoiceDramaStudio/exports/</code> に指定したタイトルだけのファイル名で保存します（例: 作品名.mp3）。同名のファイルがある場合は上書きを確認します。</p>
    <button type="button" class="btn ghost" id="openExportFolderBtn">📁 保存先フォルダを開く</button></div>
    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('書き出す','id="renderConfirmBtn"','primary')}</div>`);
   const confirm=$('renderConfirmBtn'),picker=$('exportCover'),preview=$('exportCoverPreview');
@@ -664,7 +664,18 @@ async function renderAudio(){
    if(coverData&&format!=='mp3')return toast('ジャケット画像を埋め込むにはMP3形式を選択してください',true);
    exporting=true;confirm.disabled=true;confirm.textContent='処理中…';
    try{
-    const result=await req(`/api/projects/${state.id}/render`,json('POST',{sceneId,format,title,artist,coverData}));
+    const payload={sceneId,format,title,artist,coverData};
+    const send=overwrite=>req(`/api/projects/${state.id}/render`,json('POST',{...payload,overwrite}));
+    let result;
+    try{result=await send(false)}
+    catch(e){
+     if(!e.message.includes('同名ファイルが既に存在します'))throw e;
+     const filename=title.toLowerCase().endsWith('.'+format)?title:title+'.'+format;
+     if(!confirm(`「${filename}」は保存先に既にあります。上書きしますか？`)){
+      exporting=false;confirm.disabled=false;confirm.textContent='書き出す';return;
+     }
+     result=await send(true);
+    }
     closeModal();const a=document.createElement('a');a.href=result.url;a.download=result.file;
     document.body.append(a);a.click();a.remove();
     toast(`共通exportsに保存しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
