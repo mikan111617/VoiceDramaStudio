@@ -35,7 +35,23 @@ function dismissRemapNotice(){
  try{localStorage.setItem(key,signature)}catch(_){}
  renderPendingKS();
 }
-async function openGame(id){try{game=await request('/api/game/projects/'+id);castProjects=await request('/api/game/cast-projects');focusedVoice='';marked.clear();scenarioKey=game.scenarios[0]?.key||'';busy('保存済み');$('exportFormat').value=game.format||'wav';renderAll()}catch(e){message(e.message,true)}}
+async function openGame(id){
+ try{
+  clearInterval(pollTimer);activeGameGeneration=null;$('cancelGameGeneration').hidden=true;
+  game=await request('/api/game/projects/'+id);
+  castProjects=await request('/api/game/cast-projects');
+  focusedVoice='';marked.clear();scenarioKey=game.scenarios[0]?.key||'';
+  busy('保存済み');$('exportFormat').value=game.format||'wav';
+  renderAll();
+  // Recover progress after refreshing the page or switching back to this project.
+  const ongoing=await request('/api/game/projects/'+encodeURIComponent(id)+'/generate/active');
+  if(ongoing?.status==='running'&&game?.id===id){
+   activeGameGeneration={jobId:ongoing.id,pid:id};
+   $('generateSelected').disabled=true;$('cancelGameGeneration').hidden=false;
+   poll(ongoing.id,id);
+  }
+ }catch(e){message(e.message,true)}
+}
 function renderAll(){if(!game)return;$('exportFormat').value=game.format||'wav';$('lastIssued').textContent=String(game.lastIssued||0);const speakerInfo=$('speakerFilterInfo');if(speakerInfo){const hasSheet=!!(game.speakerFilterEnabled||Object.keys(game.characterSheet||{}).length);speakerInfo.textContent=hasSheet?'キャラクターシートの登録者のみ音声化（TIPS・未登録話者は除外）':'キャラクターシート未登録：TIPSのみ自動除外。キャラクターシートの登録を推奨します。'}const selected=$('projectList');if(selected.querySelector(`option[value="${game.id}"]`))selected.value=game.id;renderScenarios();renderSource();renderVoiceRows();renderInspector();renderBindings();renderPendingKS();renderDictionaries()}
 function renderPendingKS(){
  const pending=game?.pendingKS||[];
@@ -373,7 +389,7 @@ async function startGeneration(){
  const steps=Number($('numSteps').value);
  if(!Number.isInteger(steps)||steps<1||steps>80)return message('ステップ数は1〜80です',true);
  const ready=game.voices.filter(v=>marked.has(v.voiceId)&&v.audio&&!v.stale).length;
- if(!confirm(`${ids.length}件の音声を一括生成します（複数ファイル対応）。\n${ready?'生成済み '+ready+'件を再生成します。\\n':''}モデルごとに分割して順番に処理します。\n続行しますか？`))return;
+ if(!confirm(`${ids.length}件の音声を一括生成します（複数ファイル対応）。\n${ready?'生成済み '+ready+'件を再生成します。\n':''}モデルごとに分割して順番に処理します。\n続行しますか？`))return;
  try{
   const pid=game.id;
   const job=await request(`/api/game/projects/${pid}/generate`,json('POST',{voiceIds:ids,numSteps:steps}));
