@@ -164,3 +164,49 @@ def test_open_shared_export_directory(client, monkeypatch):
     assert response.status_code == 200, response.text
     assert opened == [str(api.EXPORTS_DIR)]
     assert api.EXPORTS_DIR.is_dir()
+
+
+@pytest.mark.parametrize('fail_decode', [False, True])
+def test_mapped_mix_file_is_closed_before_temp_directory_cleanup(client, monkeypatch, fail_decode):
+    """Windows raises WinError 32 when mix.raw is still memory-mapped."""
+    import render
+    pid, sid = _project_with_audio(client)
+    mappings = []
+    original_memmap = render.np.memmap
+    original_tempdir = render.tempfile.TemporaryDirectory
+
+    def tracked_memmap(*args, **kwargs):
+        result = original_memmap(*args, **kwargs)
+        mappings.append(result)
+        return result
+
+    class GuardedTempDirectory:
+        def __init__(self, *args, **kwargs):
+            self.delegate = original_tempdir(*args, **kwargs)
+
+        def __enter__(self):
+            return self.delegate.__enter__()
+
+        def __exit__(self, exc_type, exc, tb):
+            assert mappings, 'expected a disk-backed mix'
+            assert all(mm._mmap.closed for mm in mappings), (
+                'Mix temp files must be unmapped before TemporaryDirectory cleanup')
+            return self.delegate.__exit__(exc_type, exc, tb)
+
+    monkeypatch.setattr(render.np, 'memmap', tracked_memmap)
+    monkeypatch.setattr(render.tempfile, 'TemporaryDirectory', GuardedTempDirectory)
+    if fail_decode:
+        def fail_to_decode(*args, **kwargs):
+            raise RuntimeError('decode failed for test')
+        monkeypatch.setattr(render, 'to_pcm', fail_to_decode)
+
+    result = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': 'temp cleanup test',
+    })
+    if fail_decode:
+        assert result.status_code == 400, result.text
+        assert 'decode failed' in result.json()['detail']
+    else:
+        assert result.status_code == 200, result.text
+        assert client.get(result.json()['url']).status_code == 200
+    assert all(mm._mmap.closed for mm in mappings)
