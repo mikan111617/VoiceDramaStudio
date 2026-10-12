@@ -91,7 +91,7 @@ function selectScene(id){if(id===selectedScene)return;stop();selectedScene=id;se
 function selectLine(id){selectedLine=id;selectedClip=null;document.querySelectorAll('.script-line').forEach(x=>x.classList.toggle('active',x.dataset.id===id));renderTimeline();renderInspector()}
 function syncScriptToSelectedClip(){
  if(view!=='script')return;
- const panel=$('editorContent');if(!panel)return;
+ const panel=$('editorContent');if(!panel||typeof panel.querySelectorAll!=='function')return;
  let selected=null;
  panel.querySelectorAll('.script-line').forEach(el=>{
   const isSelected=!!selectedLine&&el.dataset.id===selectedLine;
