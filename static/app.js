@@ -103,7 +103,7 @@ function syncScriptToSelectedClip(){
  const viewport=panel.getBoundingClientRect(),item=selected.getBoundingClientRect();
  const top=panel.scrollTop+item.top-viewport.top+(item.height-viewport.height)/2;
  const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
- panel.scrollTo({top:Math.max(0,top),behavior:reduced?'instant':'smooth'});
+ panel.scrollTo({top:Math.max(0,top),behavior:reduced?'auto':'smooth'});
 }
 function selectClip(id){selectedClips=new Set([id]);clipSelectionAnchor=id;selectedClip=id;selectedLine=clipById(id)?.lineId||null;renderTimeline();renderInspector();syncScriptToSelectedClip()}
 function syncClipSelection(){
@@ -570,7 +570,7 @@ function showJob(jid){clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p 
 async function renderAudio(){
  try{
   await saveNow();
-  let coverData=null;
+  let coverData=null,coverReadVersion=0,exporting=false;
   modal(`<h2>完成音声を書き出す</h2><p>すべてのトラックを同時にミックスし、フェードやループを反映します。</p>
    <div class="field"><label for="exportScope">出力範囲</label><select id="exportScope"><option value="scene">現在のシーン (${esc(sceneName(selectedScene))})</option><option value="all">全シーン（順番に連結）</option></select></div>
    <div class="field"><label for="exportFormat">出力形式</label><select id="exportFormat"><option value="wav">WAV / PCM16</option><option value="mp3">MP3 / 192kbps（FFmpeg必要）</option></select></div>
@@ -582,34 +582,36 @@ async function renderAudio(){
    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('書き出す','id="renderConfirmBtn"','primary')}</div>`);
   const confirm=$('renderConfirmBtn'),picker=$('exportCover'),preview=$('exportCoverPreview');
   picker.addEventListener('change',()=>{
+   const version=++coverReadVersion;
    coverData=null;preview.hidden=true;
-   const file=picker.files?.[0];if(!file)return;
+   const file=picker.files?.[0];if(!file){if(!exporting)confirm.disabled=false;return;}
    if(!['image/jpeg','image/png'].includes(file.type)||file.size>5*1024*1024||file.size===0){
-    toast('ジャケット画像は5MB以下のJPEGまたはPNGを選択してください',true);picker.value='';return;
+    toast('ジャケット画像は5MB以下のJPEGまたはPNGを選択してください',true);picker.value='';if(!exporting)confirm.disabled=false;return;
    }
    confirm.disabled=true;
    const reader=new FileReader();
    reader.onload=()=>{
-    if(!picker.isConnected)return;
+    if(!picker.isConnected||version!==coverReadVersion)return;
     coverData=String(reader.result||'');
-    $('exportCoverImage').src=coverData;preview.hidden=false;confirm.disabled=false;
+    $('exportCoverImage').src=coverData;preview.hidden=false;if(!exporting)confirm.disabled=false;
    };
-   reader.onerror=()=>{if(!picker.isConnected)return;picker.value='';confirm.disabled=false;toast('画像を読み込めませんでした',true)};
+   reader.onerror=()=>{if(!picker.isConnected||version!==coverReadVersion)return;picker.value='';if(!exporting)confirm.disabled=false;toast('画像を読み込めませんでした',true)};
    reader.readAsDataURL(file);
   });
-  $('exportCoverClear').onclick=()=>{picker.value='';coverData=null;preview.hidden=true;$('exportCoverImage').removeAttribute('src')};
+  $('exportCoverClear').onclick=()=>{coverReadVersion++;picker.value='';coverData=null;preview.hidden=true;$('exportCoverImage').removeAttribute('src');if(!exporting)confirm.disabled=false};
   confirm.onclick=async()=>{
+   if(exporting)return;
    const format=$('exportFormat').value,sceneId=$('exportScope').value==='scene'?selectedScene:null;
    const title=$('exportTitle').value.trim(),artist=$('exportArtist').value.trim();
    if(!title)return toast('作品タイトルを入力してください',true);
    if(coverData&&format!=='mp3')return toast('ジャケット画像を埋め込むにはMP3形式を選択してください',true);
-   confirm.disabled=true;confirm.textContent='処理中…';
+   exporting=true;confirm.disabled=true;confirm.textContent='処理中…';
    try{
     const result=await req(`/api/projects/${state.id}/render`,json('POST',{sceneId,format,title,artist,coverData}));
     closeModal();const a=document.createElement('a');a.href=result.url;a.download=result.file;
     document.body.append(a);a.click();a.remove();
     toast(`書き出しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
-   }catch(e){toast(e.message,true);if(confirm.isConnected){confirm.disabled=false;confirm.textContent='再試行'}}
+   }catch(e){toast(e.message,true);exporting=false;if(confirm.isConnected){confirm.disabled=false;confirm.textContent='再試行'}}
   };
  }catch(e){toast(e.message,true)}
 }
