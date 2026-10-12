@@ -726,7 +726,7 @@ def refresh_staleness(s):
 HEADERS={
     "id":{"台詞id","セリフid","voice_id","line_id","id","音声id"},
     "scene":{"シーン","scene","scene_name","場面"},
-    "speaker":{"話者","キャラクター","キャラ","speaker","name","人物","発話者"},
+    "speaker":{"話者","キャラクター","キャラクター名","キャラ","キャラ名","登場人物","役名","speaker","name","character","character_name","人物","発話者"},
     "text":{"台詞","セリフ","本文","text","dialogue","発話"},
     "caption":{"キャプション","演技指示","指示","caption","emotion","ト書き","演出"},
     "after":{"間","間(秒)","間（秒）","次までの間","pause","gap","gap_after","after"},
