@@ -109,3 +109,58 @@ def test_mp3_export_embeds_title_artist_and_cover(client, tmp_path):
     assert info['format']['tags']['artist'] == '煉瓦書架'
     assert any(stream.get('disposition', {}).get('attached_pic') == 1
                for stream in info['streams'])
+
+
+def test_shared_export_folder_is_readable_and_keeps_project_data(client):
+    import importlib
+    api = importlib.import_module('app')
+    pid, sid = _project_with_audio(client)
+    response = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': '第1話　事件編',
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    output = api.EXPORTS_DIR / body['savedAs']
+    assert output.is_file()
+    assert body['saveDirectory'] == str(api.EXPORTS_DIR)
+    assert output.parent == api.EXPORTS_DIR
+    assert '台本のタイトル' in output.name
+    assert '第1話' in output.name
+    assert 'シーン1' in output.name
+    assert body['savedAs'].endswith('.wav')
+    assert not (core.workdir(pid) / 'exports').exists()
+    assert client.get(body['url']).content == output.read_bytes()
+    # Repeating an export must create another file, not overwrite it.
+    again = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': '第1話　事件編',
+    })
+    assert again.status_code == 200, again.text
+    assert again.json()['savedAs'] != body['savedAs']
+    assert output.is_file()
+
+
+def test_legacy_project_export_links_remain_downloadable(client):
+    pid, _ = _project_with_audio(client)
+    old_dir = core.workdir(pid) / 'exports'
+    old_dir.mkdir(exist_ok=True)
+    old_file = old_dir / 'mix_0123456789.wav'
+    old_file.write_bytes(b'old-export')
+    response = client.get(f'/api/projects/{pid}/exports/{old_file.name}')
+    assert response.status_code == 200
+    assert response.content == b'old-export'
+    invalid = client.get(f'/api/projects/{pid}/exports/other.wav')
+    assert invalid.status_code == 400
+
+
+def test_open_shared_export_directory(client, monkeypatch):
+    import importlib
+    api = importlib.import_module('app')
+    opened = []
+    if api.sys.platform == 'win32':
+        monkeypatch.setattr(api.os, 'startfile', lambda location: opened.append(location))
+    else:
+        monkeypatch.setattr(api.subprocess, 'Popen', lambda args: opened.append(args[-1]))
+    response = client.post('/api/exports/open-folder')
+    assert response.status_code == 200, response.text
+    assert opened == [str(api.EXPORTS_DIR)]
+    assert api.EXPORTS_DIR.is_dir()
