@@ -555,8 +555,10 @@ def download_mix(pid: str, filename: str, name: str | None = None):
         project_dir = core.workdir(pid)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    # For old mix_* files, use their original project-local location.
-    p = (project_dir / 'exports' / filename) if legacy else (EXPORTS_DIR / filename)
+    # A user may legitimately choose a title like "mix_0123456789".
+    # Prefer a newly exported exact-name file; otherwise use legacy locations.
+    shared_path = EXPORTS_DIR / filename
+    p = shared_path if shared_path.is_file() else (project_dir / 'exports' / filename if legacy else shared_path)
     if not p.is_file():
         raise HTTPException(404, 'Not found')
     if name is not None:
