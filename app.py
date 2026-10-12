@@ -460,7 +460,10 @@ def download_mix(pid: str, filename: str, name: str | None = None):
     if not p.is_file():
         raise HTTPException(404, 'Not found')
     if name is not None:
-        name = _export_metadata_text(name, '作品タイトル')
+        try:
+            name = _export_metadata_text(name, '作品タイトル')
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
     return FileResponse(p, filename=_export_download_name(name, p.suffix[1:]) if name else filename)
 
 
