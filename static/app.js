@@ -10,6 +10,8 @@ let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
 const LIBRARY_TABS=[['voice','セリフ'],['bgm','BGM'],['sfx','効果音'],['ambience','環境音'],['other','その他']];
 let libraryTab='voice',libraryQueries={};
+const SHAREABLE_LIBRARY_KINDS=new Set(['bgm','sfx','ambience']);
+let librarySource='project',sharedAssets=[],sharedAssetsError='';
 let excelImportMode='merge';
 let castCopySelection=new Set();
 // Local edit history only: never roll back audio files, uploads or server-side
@@ -83,7 +85,7 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker)].filter(Boolean))]}
@@ -230,28 +232,73 @@ function filteredLibraryAssets(kind,query,dialogues=libraryDialogueMap()){
 }
 function libraryAssetCard(a,dialogues){
  const kind=libraryAssetKind(a,dialogues),info=kind==='voice'?libraryDisplayInfo(a,dialogues):{title:a.name,context:''};
- return `<div class="asset-card asset-draggable" draggable="true" data-drag-asset="${esc(a.id)}" title="マルチトラックのレーンへドラッグできます"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc(LIBRARY_TABS.find(t=>t[0]===kind)?.[1]||'その他')}</span><div class="asset-meta"><b class="asset-display-title">${esc(info.title)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div>${info.context?`<div class="asset-dialogue-context">${esc(info.context)}</div><div class="asset-file-name">${esc(a.name)}</div>`:''}<div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`;
+ const share=SHAREABLE_LIBRARY_KINDS.has(kind)?button('⇄ 共通ライブラリへ登録',`data-share-asset="${esc(a.id)}"`):'';
+ return `<div class="asset-card asset-draggable" draggable="true" data-drag-asset="${esc(a.id)}" title="マルチトラックのレーンへドラッグできます"><label class="small muted" title="一括削除の対象を選択"><input type="checkbox" data-trash-select="${esc(a.id)}" ${trashSelection.has(a.id)?'checked':''}> 選択</label><span class="asset-type">${esc(LIBRARY_TABS.find(t=>t[0]===kind)?.[1]||'その他')}</span><div class="asset-meta"><b class="asset-display-title">${esc(info.title)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div>${info.context?`<div class="asset-dialogue-context">${esc(info.context)}</div><div class="asset-file-name">${esc(a.name)}</div>`:''}<div class="asset-actions">${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${kind==='voice'?button('選択中の台詞へ',`data-attach="${esc(a.id)}"`):''}${button('＋ 台詞',`data-addclip="${esc(a.id)}:dialogue"`)}${button('＋ BGM',`data-addclip="${esc(a.id)}:bgm"`)}${button('＋ 効果音',`data-addclip="${esc(a.id)}:sfx"`)}${button('＋ 環境音',`data-addclip="${esc(a.id)}:ambience"`)}${share}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`;
+}
+function sharedAssetCard(a){
+ const already=state.assets.some(item=>item.sharedId===a.id);
+ return `<div class="asset-card"><span class="asset-type">共通素材 · ${esc(LIBRARY_TABS.find(t=>t[0]===a.kind)?.[1]||'音声')}</span><div class="asset-meta"><b class="asset-display-title">${esc(a.name)}</b><span class="muted small">${fnum(a.duration,1)}s</span></div><div class="asset-actions">${button('▶ 試聴',`data-preview-shared="${esc(a.id)}"`)}${button(already?'登録済み':'＋ この作品へ取り込む',`data-import-shared="${esc(a.id)}" ${already?'disabled':''}`,already?'ghost':'primary')}</div></div>`;
+}
+async function loadSharedAssets(){
+ try{
+  const fetched=await req('/api/shared-assets');
+  sharedAssets=Array.isArray(fetched)?fetched:[];
+  sharedAssetsError='';
+ }catch(e){
+  sharedAssetsError=e.message||'共通ライブラリを読み込めませんでした';
+  toast(sharedAssetsError,true);
+ }
+ if(view==='assets')updateLibraryResults();
 }
 function updateLibraryResults(){
  if(view!=='assets'||!$('libraryResults'))return;
+ const isShared=librarySource==='shared'&&SHAREABLE_LIBRARY_KINDS.has(libraryTab);
  const dialogues=libraryDialogueMap(),counts={};
- for(const asset of state.assets){const kind=libraryAssetKind(asset,dialogues);counts[kind]=(counts[kind]||0)+1}
- const results=filteredLibraryAssets(libraryTab,libraryQueries[libraryTab],dialogues);
- for(const [kind] of LIBRARY_TABS){const tab=$('libraryTab-'+kind);tab.setAttribute('aria-selected',String(kind===libraryTab));tab.tabIndex=kind===libraryTab?0:-1;tab.querySelector('.library-tab-count').textContent=counts[kind]||0}
+ for(const a of (isShared?sharedAssets:state.assets)){
+  const kind=isShared?a.kind:libraryAssetKind(a,dialogues);
+  counts[kind]=(counts[kind]||0)+1;
+ }
+ const search=librarySearchText(libraryQueries[libraryTab]);
+ const results=isShared?sharedAssets.filter(a=>a.kind===libraryTab&&(!search||librarySearchText(a.name).includes(search))).slice().reverse():filteredLibraryAssets(libraryTab,libraryQueries[libraryTab],dialogues);
+ for(const [kind] of LIBRARY_TABS){
+  const tab=$('libraryTab-'+kind);
+  tab.setAttribute('aria-selected',String(kind===libraryTab));
+  tab.tabIndex=kind===libraryTab?0:-1;
+  tab.querySelector('.library-tab-count').textContent=counts[kind]||0;
+ }
+ const sourceBar=$('librarySourceBar');
+ if(sourceBar)sourceBar.hidden=!SHAREABLE_LIBRARY_KINDS.has(libraryTab);
+ for(const source of ['project','shared']){
+  const el=$('librarySource-'+source);
+  if(el)el.setAttribute('aria-pressed',String(isShared?source==='shared':source==='project'));
+ }
+ const shareAll=$('shareAllLibraryBtn');
+ if(shareAll)shareAll.hidden=isShared||!SHAREABLE_LIBRARY_KINDS.has(libraryTab);
+ const dropzone=$('libraryDropzone');
+ if(dropzone)dropzone.hidden=isShared;
  $('libraryResults').setAttribute('aria-labelledby','libraryTab-'+libraryTab);
  $('librarySearch').placeholder=libraryTab==='voice'?'セリフ本文を検索':'タイトルを検索';
  $('librarySearchLabel').textContent=libraryTab==='voice'?'セリフ内容で検索':'タイトルで検索';
  $('libraryResultCount').textContent=`${results.length} / ${counts[libraryTab]||0}件表示`;
  $('clearLibrarySearch').disabled=!libraryQueries[libraryTab];
- $('libraryResults').innerHTML=results.map(a=>libraryAssetCard(a,dialogues)).join('')||`<div class="empty">${libraryQueries[libraryTab]?'検索に一致する音声がありません。':'この種類の音声はまだありません。'}</div>`;
+ $('libraryResults').innerHTML=results.map(a=>isShared?sharedAssetCard(a):libraryAssetCard(a,dialogues)).join('')||
+  `<div class="empty">${sharedAssetsError&&isShared?esc(sharedAssetsError):search?'検索に一致する音声がありません。':isShared?'共通素材はまだありません。作品内の音声を「共通ライブラリへ登録」してください。':'この種類の音声はまだありません。'}</div>`;
+ const trash=$('openTrashBtn');if(trash)trash.hidden=isShared;
 }
 function selectLibraryTab(kind){
  if(!LIBRARY_TABS.some(t=>t[0]===kind))return;
- libraryTab=kind;$('librarySearch').value=libraryQueries[kind]||'';updateLibraryResults();
+ libraryTab=kind;
+ if(!SHAREABLE_LIBRARY_KINDS.has(kind))librarySource='project';
+ $('librarySearch').value=libraryQueries[kind]||'';
+ updateLibraryResults();
 }
 function renderLibraryView(){
- $('editorContent').innerHTML=`<div class="library-tabs" role="tablist" aria-label="音声の種類">${LIBRARY_TABS.map(([kind,label])=>`<button type="button" id="libraryTab-${kind}" data-library-tab="${kind}" role="tab" aria-controls="libraryResults" aria-selected="${kind===libraryTab}">${esc(label)} <span class="library-tab-count">0</span></button>`).join('')}</div><div class="library-controls"><label for="librarySearch" id="librarySearchLabel">セリフ内容で検索</label><div class="library-search-row"><input id="librarySearch" type="search" value="${esc(libraryQueries[libraryTab]||'')}" placeholder="セリフ本文を検索"><button type="button" id="clearLibrarySearch" class="btn ghost">検索をクリア</button></div><div id="libraryResultCount" class="small muted" role="status" aria-live="polite"></div></div>${bulkDropZone('library')}<div id="libraryResults" role="tabpanel" aria-labelledby="libraryTab-${libraryTab}"></div><button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
+ $('editorContent').innerHTML=`<div class="library-tabs" role="tablist" aria-label="音声の種類">${LIBRARY_TABS.map(([kind,label])=>`<button type="button" id="libraryTab-${kind}" data-library-tab="${kind}" role="tab" aria-controls="libraryResults" aria-selected="${kind===libraryTab}">${esc(label)} <span class="library-tab-count">0</span></button>`).join('')}</div>
+ <div id="librarySourceBar" class="library-source-bar"><span class="small muted">表示する素材</span><button type="button" id="librarySource-project" data-library-source="project">この作品</button><button type="button" id="librarySource-shared" data-library-source="shared">共通ライブラリ</button><button type="button" class="btn ghost mini" id="shareAllLibraryBtn">この作品の素材をまとめて共有</button></div>
+ <div class="library-controls"><label for="librarySearch" id="librarySearchLabel">セリフ内容で検索</label><div class="library-search-row"><input id="librarySearch" type="search" value="${esc(libraryQueries[libraryTab]||'')}" placeholder="セリフ本文を検索"><button type="button" id="clearLibrarySearch" class="btn ghost">検索をクリア</button></div><div id="libraryResultCount" class="small muted" role="status" aria-live="polite"></div></div>
+ <div id="libraryDropzone">${bulkDropZone('library')}</div><div id="libraryResults" role="tabpanel" aria-labelledby="libraryTab-${libraryTab}"></div><button class="editor-bigaction" id="openTrashBtn">🗑 ゴミ箱を確認・復元</button>`;
  updateLibraryResults();
+ loadSharedAssets();
 }
 function renderAll(){if(!state)return;renderSidebar();renderEditor();renderTimeline();renderInspector()}
 function bulkDropZone(mode){return `<div class="batch-dropzone" data-audio-drop="${mode}"><div class="dropzone-icon">⇩</div><div><b>${mode==='assign'?'生成済みの台詞音声をまとめて割り当て':mode==='reference'?'キャストの参照音声をドロップ':'音声ファイルをまとめてライブラリへ追加'}</b><p>音声ファイルをここへドラッグ＆ドロップ · 複数ファイル対応 · 取り込み前に割り当てを確認</p></div></div>`}
@@ -625,6 +672,36 @@ async function renderAudio(){
   };
  }catch(e){toast(e.message,true)}
 }
+async function shareLibraryAssets(ids){
+ if(!ids.length)return toast('共有する音声がありません',true);
+ try{
+  await saveNow();
+  const response=await req(`/api/projects/${state.id}/assets/share`,json('POST',{assetIds:ids}));
+  sharedAssets=response.assets||[];
+  toast(`共通ライブラリへ ${response.added}件登録${response.existing?' · 既存 '+response.existing+'件':''}`);
+  updateLibraryResults();
+ }catch(e){toast('共通素材へ登録できません: '+e.message,true)}
+}
+async function importSharedAudio(id){
+ const buttonEl=[...document.querySelectorAll('[data-import-shared]')].find(el=>el.dataset.importShared===id);
+ if(buttonEl)buttonEl.disabled=true;
+ try{
+  await saveNow();
+  const result=await req(`/api/projects/${state.id}/assets/import-shared/${encodeURIComponent(id)}`,json('POST',{expectedRevision:state.revision}));
+  state=result.project;clearEditHistory();renderTimeline();renderInspector();
+  updateLibraryResults();
+  toast(result.alreadyImported?'この素材は登録済みです':'共通素材をこの作品の音声ライブラリに取り込みました');
+ }catch(e){toast('共通素材の取り込みに失敗: '+e.message,true);if(buttonEl?.isConnected)buttonEl.disabled=false}
+}
+async function playSharedPreview(id){
+ try{
+  stop();await ensureContext();
+  const r=await fetch('/api/shared-assets/'+encodeURIComponent(id)+'/audio');
+  if(!r.ok)throw new Error('素材を読み込めません');
+  const buffer=await ctx.decodeAudioData(await r.arrayBuffer());
+  const source=ctx.createBufferSource();source.buffer=buffer;source.connect(ctx.destination);source.start();nodes.push(source);
+ }catch(e){toast('試聴できません: '+e.message,true)}
+}
 async function trashSelectedAssets(){
  const ids=[...trashSelection].filter(id=>state.assets.some(a=>a.id===id&&a.kind!=='reference'));
  if(!ids.length)return toast('削除する音声を選択してください',true);
@@ -812,6 +889,16 @@ function dragEnd(e){
 }
 function handleGlobalClick(e){const target=e.target;
  const libraryButton=target.closest('[data-library-tab]');if(libraryButton){selectLibraryTab(libraryButton.dataset.libraryTab);return}
+ const sourceChoice=target.closest('[data-library-source]');
+ if(sourceChoice){
+  if(!SHAREABLE_LIBRARY_KINDS.has(libraryTab))return;
+  librarySource=sourceChoice.dataset.librarySource;
+  updateLibraryResults();return;
+ }
+ if(target.id==='shareAllLibraryBtn')return shareLibraryAssets(state.assets.filter(a=>a.kind===libraryTab).map(a=>a.id));
+ const sharing=target.closest('[data-share-asset]');if(sharing)return shareLibraryAssets([sharing.dataset.shareAsset]);
+ const importing=target.closest('[data-import-shared]');if(importing)return importSharedAudio(importing.dataset.importShared);
+ const sharedPreview=target.closest('[data-preview-shared]');if(sharedPreview)return playSharedPreview(sharedPreview.dataset.previewShared);
  if(target.id==='clearLibrarySearch'){libraryQueries[libraryTab]='';$('librarySearch').value='';updateLibraryResults();$('librarySearch').focus();return}
  if(handleBatchModalClick(e))return;
  if(target.closest('[data-restore]')){restoreAsset(target.closest('[data-restore]').dataset.restore);return}
