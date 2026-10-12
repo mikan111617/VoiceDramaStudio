@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import uuid
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from starlette.background import BackgroundTask
@@ -30,6 +31,8 @@ app=FastAPI(title="VoiceDrama Studio",version="0.3.13")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
+# Shared, human-readable audio exports live outside opaque workspace project IDs.
+EXPORTS_DIR = core.ROOT / 'exports'
 
 class ProjectCreate(BaseModel):
     title:str="無題の作品"
@@ -420,6 +423,19 @@ def _export_download_name(title, format_name):
     return f'{stem}.{format_name}'
 
 
+def _export_storage_name(project_title, title, scene_title, format_name):
+    """An identifiable, collision-resistant name for the shared exports folder."""
+    pieces = []
+    for text, limit in ((project_title, 52), (title, 52), (scene_title, 32)):
+        label = _export_download_name(str(text or ''), format_name).rsplit('.', 1)[0]
+        label = label[:limit].strip(' ._')
+        if label and label not in pieces and (label != 'voice_drama' or text):
+            pieces.append(label)
+    prefix = '_'.join(pieces) or 'voice_drama'
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    return f'{prefix}_{stamp}_{uuid.uuid4().hex[:10]}.{format_name}'
+
+
 @app.post('/api/projects/{pid}/render')
 def mix(pid: str, body: MixRequest):
     if body.format not in ('wav', 'mp3'):
@@ -434,9 +450,15 @@ def mix(pid: str, body: MixRequest):
         cover, cover_ext = _decode_export_cover(body.coverData)
         if cover and body.format != 'mp3':
             raise ValueError('ジャケット画像を埋め込むにはMP3形式を選択してください')
-        out_dir = core.workdir(pid) / 'exports'
-        out_dir.mkdir(exist_ok=True)
-        out = out_dir / ('mix_' + uuid.uuid4().hex[:10] + '.' + body.format)
+        scene_title = ''
+        if body.sceneId is not None:
+            scene = next((scene for scene in s['scenes'] if scene['id'] == body.sceneId), None)
+            if scene is None:
+                raise ValueError('出力するシーンが見つかりません')
+            scene_title = scene.get('name', '')
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        filename = _export_storage_name(s.get('title', ''), title, scene_title, body.format)
+        out = EXPORTS_DIR / filename
         try:
             result = render_project(s, core.workdir(pid), out, body.format, body.sceneId,
                                     title=title, artist=artist, cover_bytes=cover, cover_ext=cover_ext)
@@ -444,8 +466,10 @@ def mix(pid: str, body: MixRequest):
             out.unlink(missing_ok=True)
             raise
         return {
-            'url': f'/api/projects/{pid}/exports/{out.name}?name={quote(title, safe="")}',
+            'url': f'/api/projects/{pid}/exports/{quote(out.name, safe="")}?name={quote(title, safe="")}',
             'file': _export_download_name(title, body.format),
+            'savedAs': out.name,
+            'saveDirectory': str(EXPORTS_DIR),
             'info': result,
         }
     except (ValueError, RuntimeError, OSError) as e:
@@ -454,9 +478,17 @@ def mix(pid: str, body: MixRequest):
 
 @app.get('/api/projects/{pid}/exports/{filename}')
 def download_mix(pid: str, filename: str, name: str | None = None):
-    if '/' in filename or '\\' in filename or not filename.startswith('mix_'):
+    # Support legacy mix_ files inside each project, alongside new shared exports.
+    legacy = bool(re.fullmatch(r'mix_[a-f0-9]{10}\\.(?:wav|mp3)', filename))
+    shared = bool(re.fullmatch(r'[^/\\\\\\x00-\\x1f]{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\\.(?:wav|mp3)', filename))
+    if not (legacy or shared):
         raise HTTPException(400, 'Invalid filename')
-    p = core.workdir(pid) / 'exports' / filename
+    try:
+        # Validate the project ID even when reading from the shared directory.
+        project_dir = core.workdir(pid)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    p = (project_dir / 'exports' / filename) if legacy else (EXPORTS_DIR / filename)
     if not p.is_file():
         raise HTTPException(404, 'Not found')
     if name is not None:
@@ -465,6 +497,22 @@ def download_mix(pid: str, filename: str, name: str | None = None):
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
     return FileResponse(p, filename=_export_download_name(name, p.suffix[1:]) if name else filename)
+
+
+@app.post('/api/exports/open-folder')
+def open_export_folder():
+    """Open the dedicated output directory on this local desktop."""
+    try:
+        EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        if sys.platform == 'win32':
+            os.startfile(str(EXPORTS_DIR))
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', str(EXPORTS_DIR)])
+        else:
+            subprocess.Popen(['xdg-open', str(EXPORTS_DIR)])
+        return {'ok': True, 'path': str(EXPORTS_DIR)}
+    except (OSError, ValueError) as e:
+        raise HTTPException(500, '保存先フォルダを開けません: ' + str(e)) from e
 
 
 class Generation(BaseModel):
