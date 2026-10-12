@@ -44,7 +44,7 @@ def to_pcm(src,out):
     sf.write(str(out),data,SR,subtype='FLOAT')
 
 
-def render_project(s,project_root,out_path,format_name='wav',scene_id=None):
+def render_project(s,project_root,out_path,format_name='wav',scene_id=None,*,title='',artist='',cover_bytes=None,cover_ext=None):
     """Mix independent tracks by placing decoded segments into a disk-backed float32 buffer."""
     clips=[dict(c) for c in s['clips'] if scene_id is None or c.get('sceneId')==scene_id]
     # 'All scenes' means concatenate scenes, not overlay them at t=0.
@@ -116,6 +116,27 @@ def render_project(s,project_root,out_path,format_name='wav',scene_id=None):
         del mm
         if format_name=='mp3':
             if not ffmpeg_bin():raise RuntimeError('MP3書き出しにはFFmpegが必要です')
-            cp=subprocess.run([ffmpeg_bin(),'-hide_banner','-loglevel','error','-y','-i',str(wav_out),'-codec:a','libmp3lame','-b:a','192k',str(out_path)],capture_output=True,text=True)
-            if cp.returncode:raise RuntimeError(cp.stderr[-600:])
+            command=[ffmpeg_bin(),'-hide_banner','-loglevel','error','-y','-i',str(wav_out)]
+            if cover_bytes:
+                if cover_ext not in ('png','jpg'):
+                    raise ValueError('ジャケット画像の形式が正しくありません')
+                cover_file=tmp/('cover.'+cover_ext)
+                cover_file.write_bytes(cover_bytes)
+                command.extend(['-i',str(cover_file)])
+            command.extend(['-map','0:a:0'])
+            if cover_bytes:
+                command.extend(['-map','1:v:0'])
+            command.extend(['-codec:a','libmp3lame','-b:a','192k'])
+            if cover_bytes:
+                # ID3v2 APIC attached picture; keep PNG/JPEG without transcoding.
+                command.extend(['-codec:v','copy','-disposition:v:0','attached_pic',
+                                '-metadata:s:v:0','title=Cover (front)',
+                                '-metadata:s:v:0','comment=Cover (front)'])
+            if title:
+                command.extend(['-metadata','title='+title,'-metadata','album='+title])
+            if artist:
+                command.extend(['-metadata','artist='+artist])
+            command.extend(['-id3v2_version','3',str(out_path)])
+            cp=subprocess.run(command,capture_output=True,text=True)
+            if cp.returncode:raise RuntimeError('FFmpeg MP3 encode error: '+cp.stderr[-600:])
     return {"duration":round(end,2),"clips":len(clips),"peak":round(peak,3)}
