@@ -1,7 +1,10 @@
 """Local-only VoiceDrama Studio HTTP API. Python 3.10+."""
 from __future__ import annotations
+import base64
+import binascii
 import copy
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -375,27 +378,91 @@ def reflow(pid:str,sceneid:str):
         return core.save_project(pid,s)
 
 class MixRequest(BaseModel):
-    sceneId:str|None=None
-    format:str='wav'
+    sceneId: str | None = None
+    format: str = 'wav'
+    title: str | None = None
+    artist: str | None = None
+    coverData: str | None = None
+
+
+def _export_metadata_text(value, label):
+    text = str(value or '').strip()
+    if len(text) > 160 or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise ValueError(f'{label}には160文字以内の文字列を指定してください')
+    return text
+
+
+def _decode_export_cover(data):
+    if not data:
+        return None, None
+    if not isinstance(data, str) or len(data) > 7_100_000:
+        raise ValueError('ジャケット画像は5MB以下のJPEGまたはPNGにしてください')
+    match = re.fullmatch(r'data:image/(jpeg|png);base64,([A-Za-z0-9+/=]+)', data, re.IGNORECASE)
+    if not match:
+        raise ValueError('ジャケット画像はJPEGまたはPNG形式で指定してください')
+    kind = match.group(1).lower()
+    try:
+        image = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError('ジャケット画像のデータを読み取れません') from None
+    if not image or len(image) > 5 * 1024 * 1024:
+        raise ValueError('ジャケット画像は5MB以下にしてください')
+    if kind == 'png' and not image.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise ValueError('PNG画像の形式が正しくありません')
+    if kind == 'jpeg' and not image.startswith(b'\xff\xd8\xff'):
+        raise ValueError('JPEG画像の形式が正しくありません')
+    return image, 'png' if kind == 'png' else 'jpg'
+
+
+def _export_download_name(title, format_name):
+    stem = ''.join(' ' if ord(c) < 32 or c in '\\/:*?"<>|' else c for c in title)
+    stem = stem.strip(' .')[:100].strip(' .') or 'voice_drama'
+    return f'{stem}.{format_name}'
+
 
 @app.post('/api/projects/{pid}/render')
-def mix(pid:str,body:MixRequest):
-    if body.format not in ('wav','mp3'):raise HTTPException(400,'Unsupported output format')
+def mix(pid: str, body: MixRequest):
+    if body.format not in ('wav', 'mp3'):
+        raise HTTPException(400, 'Unsupported output format')
     try:
-        with LOCK:s=core.load_project(pid)
-        out_dir=core.workdir(pid)/'exports';out_dir.mkdir(exist_ok=True)
-        out=out_dir/('mix_'+uuid.uuid4().hex[:10]+'.'+body.format)
-        result=render_project(s,core.workdir(pid),out,body.format,body.sceneId)
-        return {'url':f'/api/projects/{pid}/exports/{out.name}','file':out.name,'info':result}
-    except Exception as e:raise HTTPException(400,str(e))
+        with LOCK:
+            s = core.load_project(pid)
+        title = _export_metadata_text(body.title if body.title is not None else s.get('title'), '作品タイトル')
+        artist = _export_metadata_text(body.artist, '制作名義')
+        if not title:
+            raise ValueError('作品タイトルを入力してください')
+        cover, cover_ext = _decode_export_cover(body.coverData)
+        if cover and body.format != 'mp3':
+            raise ValueError('ジャケット画像を埋め込むにはMP3形式を選択してください')
+        out_dir = core.workdir(pid) / 'exports'
+        out_dir.mkdir(exist_ok=True)
+        out = out_dir / ('mix_' + uuid.uuid4().hex[:10] + '.' + body.format)
+        try:
+            result = render_project(s, core.workdir(pid), out, body.format, body.sceneId,
+                                    title=title, artist=artist, cover_bytes=cover, cover_ext=cover_ext)
+        except Exception:
+            out.unlink(missing_ok=True)
+            raise
+        return {
+            'url': f'/api/projects/{pid}/exports/{out.name}?name={quote(title, safe="")}',
+            'file': _export_download_name(title, body.format),
+            'info': result,
+        }
+    except (ValueError, RuntimeError, OSError) as e:
+        raise HTTPException(400, str(e)) from e
+
 
 @app.get('/api/projects/{pid}/exports/{filename}')
-def download_mix(pid:str,filename:str):
+def download_mix(pid: str, filename: str, name: str | None = None):
     if '/' in filename or '\\' in filename or not filename.startswith('mix_'):
-        raise HTTPException(400,'Invalid filename')
-    p=core.workdir(pid)/'exports'/filename
-    if not p.is_file():raise HTTPException(404,'Not found')
-    return FileResponse(p,filename=filename)
+        raise HTTPException(400, 'Invalid filename')
+    p = core.workdir(pid) / 'exports' / filename
+    if not p.is_file():
+        raise HTTPException(404, 'Not found')
+    if name is not None:
+        name = _export_metadata_text(name, '作品タイトル')
+    return FileResponse(p, filename=_export_download_name(name, p.suffix[1:]) if name else filename)
+
 
 class Generation(BaseModel):
     lineIds:list[str]
