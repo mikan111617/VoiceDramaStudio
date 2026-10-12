@@ -183,6 +183,16 @@ def test_export_title_with_extension_is_not_doubled_and_windows_reserved_names_f
     assert reserved.status_code == 400
 
 
+def test_export_title_looking_like_legacy_name_is_downloadable(client):
+    pid, sid = _project_with_audio(client)
+    response = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': 'mix_0123456789',
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()['savedAs'] == 'mix_0123456789.wav'
+    assert client.get(response.json()['url']).status_code == 200
+
+
 def test_shared_export_collision_between_projects_requires_confirmation(client):
     project1, sid1 = _project_with_audio(client)
     other = client.post('/api/projects', json={'title': '別の作品'}).json()
