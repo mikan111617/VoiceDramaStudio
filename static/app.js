@@ -579,8 +579,14 @@ async function renderAudio(){
    <div class="field"><label for="exportCover">ジャケット画像（任意）</label><input type="file" id="exportCover" accept="image/jpeg,image/png,.jpg,.jpeg,.png">
     <p class="small muted" id="exportCoverHint">JPEG / PNG、5MB以下。画像はMP3に埋め込まれます。WAVには埋め込めません。</p>
     <div class="export-cover-preview" id="exportCoverPreview" hidden><img id="exportCoverImage" alt="選択したジャケット画像のプレビュー"><button type="button" class="btn ghost mini" id="exportCoverClear">画像を取り消す</button></div></div>
+   <div class="field"><label>共通の保存先</label><p class="small muted"><code>VoiceDramaStudio/exports/</code> に作品名・書き出し日時付きで保存します。ブラウザからのダウンロードも従来どおり行われます。</p>
+   <button type="button" class="btn ghost" id="openExportFolderBtn">📁 保存先フォルダを開く</button></div>
    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('書き出す','id="renderConfirmBtn"','primary')}</div>`);
   const confirm=$('renderConfirmBtn'),picker=$('exportCover'),preview=$('exportCoverPreview');
+  $('openExportFolderBtn').onclick=async()=>{
+   try{await req('/api/exports/open-folder',{method:'POST'})}
+   catch(e){toast('保存先フォルダを開けません: '+e.message,true)}
+  };
   picker.addEventListener('change',()=>{
    const version=++coverReadVersion;
    coverData=null;preview.hidden=true;
@@ -614,7 +620,7 @@ async function renderAudio(){
     const result=await req(`/api/projects/${state.id}/render`,json('POST',{sceneId,format,title,artist,coverData}));
     closeModal();const a=document.createElement('a');a.href=result.url;a.download=result.file;
     document.body.append(a);a.click();a.remove();
-    toast(`書き出しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
+    toast(`共通exportsに保存しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
    }catch(e){toast(e.message,true);exporting=false;if(confirm.isConnected){confirm.disabled=false;confirm.textContent='再試行'}}
   };
  }catch(e){toast(e.message,true)}
