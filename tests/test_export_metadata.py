@@ -22,6 +22,7 @@ from app import app
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(core, 'WORKSPACE', tmp_path)
+    monkeypatch.setattr(__import__('importlib').import_module('app'), 'EXPORTS_DIR', tmp_path / 'exports')
     return TestClient(app)
 
 
