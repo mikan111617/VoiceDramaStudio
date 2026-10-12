@@ -104,3 +104,26 @@ test('legacy dialogue audio is discoverable while ambience and unassigned files 
  assert.deepEqual(e.get("filteredLibraryAssets('ambience','波').map(a=>a.id)"),['sea']);
  assert.deepEqual(e.get("filteredLibraryAssets('other','').map(a=>a.id)"),['unknown']);
 });
+
+test('timeline dialogue selection scrolls the corresponding script line without rerendering',()=>{
+ const e=editor();
+ e.run(`
+  state.lines=[{id:'dialogue-1',sceneId:'s',speaker:'ナレーション',text:'選択する台詞'}];
+  state.clips[0].lineId='dialogue-1';
+  const activeIds=[];
+  const lineNode={dataset:{id:'dialogue-1'},classList:{toggle(name,active){if(name==='active'&&active)activeIds.push('dialogue-1')}},
+    getBoundingClientRect(){return {top:400,height:50}}};
+  const pane=$('editorContent');
+  pane.scrollTop=75;
+  pane.querySelectorAll=selector=>selector==='.script-line'?[lineNode]:[];
+  pane.getBoundingClientRect=()=>({top:100,height:200});
+  let scrollPosition=-1;
+  pane.scrollTo=({top})=>{scrollPosition=top};
+  window={matchMedia:()=>({matches:true})};
+  selectClip('a');
+ `);
+ assert.equal(e.get("scrollPosition"),300);
+ assert.deepEqual(e.get("activeIds"),['dialogue-1']);
+ e.run("selectClip('b')");
+ assert.equal(e.get("scrollPosition"),300); // BGM has no associated script line.
+});
