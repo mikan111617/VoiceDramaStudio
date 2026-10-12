@@ -689,8 +689,8 @@ async function importSharedAudio(id){
   await saveNow();
   const result=await req(`/api/projects/${state.id}/assets/import-shared/${encodeURIComponent(id)}`,json('POST',{expectedRevision:state.revision}));
   state=result.project;clearEditHistory();renderTimeline();renderInspector();
-  updateLibraryResults();
-  toast(result.alreadyImported?'この素材は登録済みです':'共通素材をこの作品の音声ライブラリに取り込みました');
+  librarySource='project';updateLibraryResults();
+  toast(result.alreadyImported?'この素材は登録済みです':'この作品の音声ライブラリに取り込みました。マルチトラックにドラッグして使えます');
  }catch(e){toast('共通素材の取り込みに失敗: '+e.message,true);if(buttonEl?.isConnected)buttonEl.disabled=false}
 }
 async function playSharedPreview(id){
