@@ -67,6 +67,7 @@ def test_wav_export_uses_selected_title_for_download(client):
     })
     assert response.status_code == 200, response.text
     assert response.json()['file'] == '第1話 予告編.wav'
+    assert response.json()['savedAs'] == '第1話 予告編.wav'
     downloaded = client.get(response.json()['url'])
     assert downloaded.status_code == 200
     assert 'filename*=' in downloaded.headers['content-disposition']
@@ -97,6 +98,7 @@ def test_mp3_export_embeds_title_artist_and_cover(client, tmp_path):
     })
     assert response.status_code == 200, response.text
     assert response.json()['file'] == '第1話 始まり.mp3'
+    assert response.json()['savedAs'] == '第1話 始まり.mp3'
     output = client.get(response.json()['url'])
     assert output.status_code == 200
     file = tmp_path / 'export.mp3'
@@ -111,7 +113,7 @@ def test_mp3_export_embeds_title_artist_and_cover(client, tmp_path):
                for stream in info['streams'])
 
 
-def test_shared_export_folder_is_readable_and_keeps_project_data(client):
+def test_shared_export_folder_uses_only_the_requested_title_and_confirms_overwrite(client):
     import importlib
     api = importlib.import_module('app')
     pid, sid = _project_with_audio(client)
@@ -120,23 +122,78 @@ def test_shared_export_folder_is_readable_and_keeps_project_data(client):
     })
     assert response.status_code == 200, response.text
     body = response.json()
+    assert body['savedAs'] == '第1話　事件編.wav'
+    assert body['file'] == '第1話　事件編.wav'
     output = api.EXPORTS_DIR / body['savedAs']
     assert output.is_file()
     assert body['saveDirectory'] == str(api.EXPORTS_DIR)
     assert output.parent == api.EXPORTS_DIR
-    assert '台本のタイトル' in output.name
-    assert '第1話' in output.name
-    assert 'シーン1' in output.name
-    assert body['savedAs'].endswith('.wav')
     assert not (core.workdir(pid) / 'exports').exists()
     assert client.get(body['url']).content == output.read_bytes()
-    # Repeating an export must create another file, not overwrite it.
-    again = client.post(f'/api/projects/{pid}/render', json={
+    old = output.read_bytes()
+    duplicate = client.post(f'/api/projects/{pid}/render', json={
         'sceneId': sid, 'format': 'wav', 'title': '第1話　事件編',
     })
-    assert again.status_code == 200, again.text
-    assert again.json()['savedAs'] != body['savedAs']
+    assert duplicate.status_code == 409
+    assert '同名ファイル' in duplicate.json()['detail']
+    assert output.read_bytes() == old
+    # A confirmed overwrite retains exactly the same requested filename.
+    replaced = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': '第1話　事件編',
+        'overwrite': True,
+    })
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()['savedAs'] == '第1話　事件編.wav'
     assert output.is_file()
+    assert not list(api.EXPORTS_DIR.glob('.render_*'))
+
+
+def test_export_preserves_existing_file_when_render_fails(client, monkeypatch):
+    import importlib
+    api = importlib.import_module('app')
+    pid, sid = _project_with_audio(client)
+    audio = api.EXPORTS_DIR / '既存の音声.wav'
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b'old contents')
+
+    def raise_after_writing(project, root, out, *args, **kwargs):
+        Path(out).write_bytes(b'partial mix')
+        raise RuntimeError('simulated audio failure')
+
+    monkeypatch.setattr(api, 'render_project', raise_after_writing)
+    response = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': '既存の音声', 'overwrite': True,
+    })
+    assert response.status_code == 400
+    assert audio.read_bytes() == b'old contents'
+    assert not list(api.EXPORTS_DIR.glob('.render_*'))
+    assert not api._EXPORT_IN_PROGRESS
+
+
+def test_export_title_with_extension_is_not_doubled_and_windows_reserved_names_fail(client):
+    pid, sid = _project_with_audio(client)
+    response = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': '第2話.wav',
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()['savedAs'] == '第2話.wav'
+    reserved = client.post(f'/api/projects/{pid}/render', json={
+        'sceneId': sid, 'format': 'wav', 'title': 'CON',
+    })
+    assert reserved.status_code == 400
+
+
+def test_shared_export_collision_between_projects_requires_confirmation(client):
+    project1, sid1 = _project_with_audio(client)
+    other = client.post('/api/projects', json={'title': '別の作品'}).json()
+    response = client.post(f'/api/projects/{project1}/render', json={
+        'sceneId': sid1, 'format': 'wav', 'title': '同じ作品名',
+    })
+    assert response.status_code == 200, response.text
+    collision = client.post(f'/api/projects/{other["id"]}/render', json={
+        'format': 'wav', 'title': '同じ作品名',
+    })
+    assert collision.status_code == 409
 
 
 def test_legacy_project_export_links_remain_downloadable(client):
