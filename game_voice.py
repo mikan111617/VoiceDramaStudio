@@ -1255,6 +1255,9 @@ def generation_groups(pid,ids):
         raise ValueError('仮登録中のKSがあります。先にボイスIDを一括確定してください')
     targets=[v for v in s['voices'] if v['voiceId'] in ids]
     plans=[]
+    linked_projects={}
+    linked_assets={}
+    local_assets={a['id']:a for a in s.get('voiceAssets',[])}
     for v in targets:
         sheet_id,_=_speaker_profile(s,v['speaker'])
         # Local game-specific cast overrides a VoiceDrama shared cast. Aliases
@@ -1268,25 +1271,28 @@ def generation_groups(pid,ids):
         if local is not None:
             cast=_validate_local_cast(local,s.get('voiceAssets',[]))
             engine=cast['engine'];model=cast['model']
-            assets={a['id']:a for a in s.get('voiceAssets',[])}
             refs=[]
             for aid in cast['refs']:
-                p=_game_ref_path(pid,assets[aid])
-                if not p.is_file():raise ValueError(f'{v["speaker"]}の参照音声ファイルがありません: {assets[aid]["name"]}')
+                p=_game_ref_path(pid,local_assets[aid])
+                if not p.is_file():raise ValueError(f'{v["speaker"]}の参照音声ファイルがありません: {local_assets[aid]["name"]}')
                 refs.append(str(p))
         else:
             binding=(s['bindings'].get(v['speaker'])
                      or (s['bindings'].get(sheet_id) if sheet_id else None))
             if not binding or not binding.get('castName'):
                 raise ValueError(f"キャストが未設定です: {v['speaker']}")
-            source=core.load_project(binding['projectId'])
+            project_id=binding['projectId']
+            if project_id not in linked_projects:
+                linked_projects[project_id]=core.load_project(project_id)
+                linked_assets[project_id]={a['id']:a for a in linked_projects[project_id]['assets']}
+            source=linked_projects[project_id]
             cast=next((x for x in source['voices'] if x['name']==binding['castName']),None)
             if cast is None:raise ValueError('キャストが見つかりません: '+v['speaker'])
             engine=cast.get('engine','irodori')
             model=cast.get('model') or ('Qwen/Qwen3-TTS-12Hz-1.7B-Base' if engine=='qwen' else 'Aratako/Irodori-TTS-v4.1-Small')
             refs=[]
             for aid in cast.get('refs',[]):
-                a=next((a for a in source['assets'] if a['id']==aid),None)
+                a=linked_assets[project_id].get(aid)
                 if a:refs.append(str(core.asset_path(source['id'],a)))
         if engine=='qwen' and cast.get('mode','clone')!='design' and not refs:
             raise ValueError(f"{v['speaker']}のQwen用参照音声が登録されていません")
@@ -1295,61 +1301,82 @@ def generation_groups(pid,ids):
 
 
 def generate_game_audio(pid,voice_ids,steps,job):
-    """Runs in background using the existing TTS worker and global environment."""
+    """Sequential bounded TTS batches; track whole-project progress without data loss."""
     try:
         import app as studio
-        if not isinstance(voice_ids,list) or not voice_ids or len(voice_ids)>500:
-            raise ValueError('生成対象は1〜500件です')
+        if not isinstance(voice_ids,list) or not 1<=len(voice_ids)<=10000:
+            raise ValueError('生成対象は1〜10000件です')
         with GAME_LOCK:
             groups=generation_groups(pid,set(voice_ids))
-        if not groups:raise ValueError('生成する台詞がありません')
-        with GAME_LOCK:
             current_state=_load(pid)
+        if not groups:raise ValueError('生成する台詞がありません')
         buckets=defaultdict(list)
         for v,engine,model,cast,refs in groups:
             buckets[(engine,model)].append((v,cast,refs))
         job['total']=len(groups)
-        for (engine,model),items in buckets.items():
+        batch_size=40
+        for (engine,model),all_items in buckets.items():
             if job.get('cancel'):break
             interpreter=studio.python_for(engine,None)
-            with tempfile.TemporaryDirectory(prefix='vds_game_tts_') as temp:
-                d=Path(temp)
-                request=[]
-                for v,cast,refs in items:
-                    pronunciation_text,prosody_notes=_speech_inputs(current_state,v)
-                    base_caption=v['caption'] or cast.get('description','')
-                    caption=(base_caption+'\n'+prosody_notes).strip() if prosody_notes else base_caption
-                    request.append({'id':v['voiceId'],'text':pronunciation_text,'caption':caption,
-                         'description':cast.get('description',''),'refs':refs,'mode':cast.get('mode','clone'),
-                         'language':cast.get('language','Japanese'),'ref_text':cast.get('refText',''),
-                         'num_steps':steps,'output':str(d/(v['voiceId']+'.wav')),
-                         'schedule':'linear','sway_coeff':-1.0})
-                job_file=d/'request.json';result_file=d/'result.json'
-                job_file.write_text(json.dumps({'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],
-                    'items':request},ensure_ascii=False),encoding='utf8')
-                job['message']=f'{model} で {len(items)}件生成中'
-                cp=subprocess.run([interpreter,str(core.ROOT/'tts_worker.py'),str(job_file),str(result_file)],
-                    cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=3600)
-                if not result_file.exists():raise RuntimeError('TTSの応答がありません: '+(cp.stderr+cp.stdout)[-1000:])
-                result=json.loads(result_file.read_text(encoding='utf8'))
-                if not result.get('ok'):raise RuntimeError(result.get('error','TTS失敗'))
-                for item in result['items']:
-                    if item.get('ok') and Path(item['output']).is_file():
-                        with GAME_LOCK:
-                            s=_load(pid)
-                            v=next((v for v in s['voices'] if v['voiceId']==item['id']),None)
-                            if v:
-                                rel=_game_audio_relative(v,'wav')
-                                dest=_folder(pid)/'audio'/rel
-                                dest.parent.mkdir(parents=True,exist_ok=True)
-                                shutil.copy2(item['output'],str(dest)+'.tmp')
-                                os.replace(str(dest)+'.tmp',dest)
-                                v['audio']=rel;v['stale']=False
-                                _save(pid,s,s['revision'])
-                    else:job['errors'].append({'id':item.get('id'),'error':item.get('error','生成失敗')})
-                    job['completed']+=1
-        job['status']='cancelled' if job.get('cancel') else 'done'
-        job['message']='音声生成が完了しました'
+            for offset in range(0,len(all_items),batch_size):
+                if job.get('cancel'):break
+                items=all_items[offset:offset+batch_size]
+                with tempfile.TemporaryDirectory(prefix='vds_game_tts_') as temp:
+                    d=Path(temp)
+                    request=[]
+                    for v,cast,refs in items:
+                        pronunciation_text,prosody_notes=_speech_inputs(current_state,v)
+                        base_caption=v['caption'] or cast.get('description','')
+                        caption=(base_caption+'\n'+prosody_notes).strip() if prosody_notes else base_caption
+                        request.append({'id':v['voiceId'],'text':pronunciation_text,'caption':caption,
+                             'description':cast.get('description',''),'refs':refs,'mode':cast.get('mode','clone'),
+                             'language':cast.get('language','Japanese'),'ref_text':cast.get('refText',''),
+                             'num_steps':steps,'output':str(d/(v['voiceId']+'.wav')),
+                             'schedule':'linear','sway_coeff':-1.0})
+                    job_file=d/'request.json';result_file=d/'result.json'
+                    job_file.write_text(json.dumps({'engine':engine,'model':model,
+                        'irodori_dir':core.load_global_settings()['irodori_dir'],
+                        'items':request},ensure_ascii=False),encoding='utf8')
+                    job['message']=f'{model}: {job["completed"]}/{job["total"]}件完了・次の{len(items)}件を生成中'
+                    cp=subprocess.run([interpreter,str(core.ROOT/'tts_worker.py'),str(job_file),str(result_file)],
+                        cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',
+                        errors='replace',timeout=3600)
+                    if not result_file.exists():
+                        raise RuntimeError('TTSの応答がありません: '+(cp.stderr+cp.stdout)[-1000:])
+                    result=json.loads(result_file.read_text(encoding='utf8'))
+                    if not result.get('ok'):raise RuntimeError(result.get('error','TTS失敗'))
+                    rows={row.get('id'):row for row in result.get('items',[])}
+                    for v,_,_ in items:
+                        item=rows.get(v['voiceId'])
+                        if item and item.get('ok') and Path(item.get('output','')).is_file():
+                            try:
+                                with GAME_LOCK:
+                                    state=_load(pid)
+                                    target=next((line for line in state['voices'] if line['voiceId']==v['voiceId']),None)
+                                    if target:
+                                        rel=_game_audio_relative(target,'wav')
+                                        dest=_folder(pid)/'audio'/rel
+                                        dest.parent.mkdir(parents=True,exist_ok=True)
+                                        staging=Path(str(dest)+'.tmp')
+                                        try:
+                                            shutil.copy2(item['output'],staging)
+                                            os.replace(staging,dest)
+                                        finally:
+                                            staging.unlink(missing_ok=True)
+                                        target['audio']=rel
+                                        # A changed script should remain marked as needing regeneration.
+                                        target['stale']=bool(target.get('ttsText')!=v.get('ttsText')
+                                            or target.get('caption')!=v.get('caption'))
+                                        _save(pid,state,state['revision'])
+                                    else:
+                                        job['errors'].append({'id':v['voiceId'],'error':'台詞が見つかりません'})
+                            except (OSError,ValueError,RuntimeError) as exc:
+                                job['errors'].append({'id':v['voiceId'],'error':str(exc)})
+                        else:
+                            job['errors'].append({'id':v['voiceId'],
+                                'error':item.get('error','生成結果がありません') if item else '生成結果がありません'})
+                        job['completed']+=1
+        job['status']='cancelled' if job.get('cancel') else ('done_with_errors' if job['errors'] else 'done')
+        job['message']='生成を停止しました' if job.get('cancel') else '音声生成が完了しました'
     except Exception as exc:
         job['status']='error';job['message']=str(exc)
-
