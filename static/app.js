@@ -588,6 +588,10 @@ async function renderAudio(){
    if(!['image/jpeg','image/png'].includes(file.type)||file.size>5*1024*1024||file.size===0){
     toast('ジャケット画像は5MB以下のJPEGまたはPNGを選択してください',true);picker.value='';if(!exporting)confirm.disabled=false;return;
    }
+   if($('exportFormat').value!=='mp3'){
+    $('exportFormat').value='mp3';
+    toast('ジャケット画像を埋め込むため、出力形式をMP3に切り替えました');
+   }
    confirm.disabled=true;
    const reader=new FileReader();
    reader.onload=()=>{
