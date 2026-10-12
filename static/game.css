@@ -127,3 +127,17 @@
 .voice-row{grid-template-columns:23px 70px 75px minmax(0,1fr) auto;gap:5px;padding:10px 8px}
 @media(min-width:901px){.shell{grid-template-columns:var(--game-side-width,290px) 8px minmax(300px,1fr) 8px var(--game-details-width,350px)}}
 @media(max-width:900px){.game-resizer.vertical{display:none}.details{height:700px}.details .production{flex-basis:var(--game-production-height,290px)}}
+
+/* Game-voice multi-file selection: selecting a file never changes its script. */
+.scenario-bulk-controls{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0 12px}
+.scenario-bulk-controls .small-label{line-height:1.5;white-space:normal}
+.scenario-bulk-controls input[type=checkbox],.scenario-select-row input[type=checkbox]{width:17px;height:17px;min-width:17px;accent-color:var(--gold)}
+.scenario-bulk-buttons{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:10px}
+.scenario-bulk-buttons button{white-space:normal;font-size:10px;padding:7px 5px}
+#clearAllVoiceMarks{grid-column:1 / -1}
+#totalGenerationSelection{display:block;margin:9px 0 0;color:var(--muted)}
+.scenario-select-row{display:flex;align-items:center;gap:8px;min-width:0}
+.scenario-select-row .scenario-btn{min-width:0;flex:1}
+.scenario-select-row .scenario-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.scenario-select-row .scenario-btn span:last-child{flex:none;white-space:nowrap}
+#cancelGameGeneration[hidden]{display:none!important}
