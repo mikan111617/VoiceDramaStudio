@@ -479,8 +479,10 @@ def mix(pid: str, body: MixRequest):
 @app.get('/api/projects/{pid}/exports/{filename}')
 def download_mix(pid: str, filename: str, name: str | None = None):
     # Support legacy mix_ files inside each project, alongside new shared exports.
-    legacy = bool(re.fullmatch(r'mix_[a-f0-9]{10}\\.(?:wav|mp3)', filename))
-    shared = bool(re.fullmatch(r'[^/\\\\\\x00-\\x1f]{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\\.(?:wav|mp3)', filename))
+    if '/' in filename or '\\' in filename or any(ord(c) < 32 for c in filename):
+        raise HTTPException(400, 'Invalid filename')
+    legacy = bool(re.fullmatch(r'mix_[a-f0-9]{10}\.(?:wav|mp3)', filename))
+    shared = bool(re.fullmatch(r'.{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\.(?:wav|mp3)', filename))
     if not (legacy or shared):
         raise HTTPException(400, 'Invalid filename')
     try:
