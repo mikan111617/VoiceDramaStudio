@@ -671,7 +671,7 @@ async function renderAudio(){
     catch(e){
      if(!e.message.includes('同名ファイルが既に存在します'))throw e;
      const filename=title.toLowerCase().endsWith('.'+format)?title:title+'.'+format;
-     if(!confirm(`「${filename}」は保存先に既にあります。上書きしますか？`)){
+     if(!window.confirm(`「${filename}」は保存先に既にあります。上書きしますか？`)){
       exporting=false;confirm.disabled=false;confirm.textContent='書き出す';return;
      }
      result=await send(true);
