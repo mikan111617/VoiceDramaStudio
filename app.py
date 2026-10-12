@@ -12,7 +12,6 @@ import sys
 import tempfile
 import threading
 import uuid
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from starlette.background import BackgroundTask
@@ -34,6 +33,8 @@ THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
 # Shared, human-readable audio exports live outside opaque workspace project IDs.
 EXPORTS_DIR = core.ROOT / 'exports'
+_EXPORT_LOCK = threading.Lock()
+_EXPORT_IN_PROGRESS = set()
 
 class ProjectCreate(BaseModel):
     title:str="無題の作品"
@@ -434,6 +435,7 @@ class MixRequest(BaseModel):
     title: str | None = None
     artist: str | None = None
     coverData: str | None = None
+    overwrite: bool = False
 
 
 def _export_metadata_text(value, label):
@@ -466,22 +468,21 @@ def _decode_export_cover(data):
 
 
 def _export_download_name(title, format_name):
-    stem = ''.join(' ' if ord(c) < 32 or c in '\\/:*?"<>|' else c for c in title)
-    stem = stem.strip(' .')[:100].strip(' .') or 'voice_drama'
+    """Use only the user-specified name and requested audio extension."""
+    stem = str(title).strip()
+    if stem.lower().endswith('.' + format_name):
+        stem = stem[:-(len(format_name) + 1)]
+    stem = ''.join(' ' if ord(c) < 32 or ord(c) == 127 or c in '\\/:*?"<>|' else c
+                   for c in stem)
+    stem = stem.strip(' .')
+    if not stem:
+        raise ValueError('作品タイトルを入力してください')
+    if stem.upper().split('.')[0] in {
+            'CON', 'PRN', 'AUX', 'NUL',
+            *[f'COM{i}' for i in range(1, 10)],
+            *[f'LPT{i}' for i in range(1, 10)]}:
+        raise ValueError('Windowsで使用できないファイル名です')
     return f'{stem}.{format_name}'
-
-
-def _export_storage_name(project_title, title, scene_title, format_name):
-    """An identifiable, collision-resistant name for the shared exports folder."""
-    pieces = []
-    for text, limit in ((project_title, 52), (title, 52), (scene_title, 32)):
-        label = _export_download_name(str(text or ''), format_name).rsplit('.', 1)[0]
-        label = label[:limit].strip(' ._')
-        if label and label not in pieces and (label != 'voice_drama' or text):
-            pieces.append(label)
-    prefix = '_'.join(pieces) or 'voice_drama'
-    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    return f'{prefix}_{stamp}_{uuid.uuid4().hex[:10]}.{format_name}'
 
 
 @app.post('/api/projects/{pid}/render')
@@ -498,24 +499,32 @@ def mix(pid: str, body: MixRequest):
         cover, cover_ext = _decode_export_cover(body.coverData)
         if cover and body.format != 'mp3':
             raise ValueError('ジャケット画像を埋め込むにはMP3形式を選択してください')
-        scene_title = ''
-        if body.sceneId is not None:
-            scene = next((scene for scene in s['scenes'] if scene['id'] == body.sceneId), None)
-            if scene is None:
-                raise ValueError('出力するシーンが見つかりません')
-            scene_title = scene.get('name', '')
+        if body.sceneId is not None and not any(sc['id'] == body.sceneId for sc in s['scenes']):
+            raise ValueError('出力するシーンが見つかりません')
+        filename = _export_download_name(title, body.format)
         EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        filename = _export_storage_name(s.get('title', ''), title, scene_title, body.format)
         out = EXPORTS_DIR / filename
+        # Reserve the output name without holding the project data lock while mixing.
+        with _EXPORT_LOCK:
+            if filename in _EXPORT_IN_PROGRESS:
+                raise HTTPException(409, '同名の音声は現在書き出し中です。完了後にお試しください。')
+            if out.exists() and not body.overwrite:
+                raise HTTPException(409, '同名ファイルが既に存在します。上書きしますか？')
+            _EXPORT_IN_PROGRESS.add(filename)
+        # Never render directly onto a pre-existing audio file. Replace it only
+        # after mixdown succeeded, preserving the old copy on any render failure.
+        temporary = EXPORTS_DIR / ('.render_' + uuid.uuid4().hex + '.' + body.format)
         try:
-            result = render_project(s, core.workdir(pid), out, body.format, body.sceneId,
+            result = render_project(s, core.workdir(pid), temporary, body.format, body.sceneId,
                                     title=title, artist=artist, cover_bytes=cover, cover_ext=cover_ext)
-        except Exception:
-            out.unlink(missing_ok=True)
-            raise
+            os.replace(temporary, out)
+        finally:
+            temporary.unlink(missing_ok=True)
+            with _EXPORT_LOCK:
+                _EXPORT_IN_PROGRESS.discard(filename)
         return {
             'url': f'/api/projects/{pid}/exports/{quote(out.name, safe="")}?name={quote(title, safe="")}',
-            'file': _export_download_name(title, body.format),
+            'file': filename,
             'savedAs': out.name,
             'saveDirectory': str(EXPORTS_DIR),
             'info': result,
@@ -526,18 +535,23 @@ def mix(pid: str, body: MixRequest):
 
 @app.get('/api/projects/{pid}/exports/{filename}')
 def download_mix(pid: str, filename: str, name: str | None = None):
-    # Support legacy mix_ files inside each project, alongside new shared exports.
-    if '/' in filename or '\\' in filename or any(ord(c) < 32 for c in filename):
+    # Legacy per-project mix_ files and older named exports remain downloadable.
+    if '/' in filename or '\\' in filename or any(ord(c) < 32 or ord(c) == 127 for c in filename):
         raise HTTPException(400, 'Invalid filename')
     legacy = bool(re.fullmatch(r'mix_[a-f0-9]{10}\.(?:wav|mp3)', filename))
-    shared = bool(re.fullmatch(r'.{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\.(?:wav|mp3)', filename))
-    if not (legacy or shared):
+    previously_named = bool(re.fullmatch(
+        r'.{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\.(?:wav|mp3)', filename))
+    format_name = filename.rsplit('.', 1)[-1]
+    named = (format_name in ('wav', 'mp3') and
+             len(filename) <= 200 and
+             _export_download_name(filename, format_name) == filename)
+    if not (legacy or previously_named or named):
         raise HTTPException(400, 'Invalid filename')
     try:
-        # Validate the project ID even when reading from the shared directory.
         project_dir = core.workdir(pid)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    # For old mix_* files, use their original project-local location.
     p = (project_dir / 'exports' / filename) if legacy else (EXPORTS_DIR / filename)
     if not p.is_file():
         raise HTTPException(404, 'Not found')
