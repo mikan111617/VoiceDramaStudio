@@ -895,7 +895,7 @@ function handleGlobalClick(e){const target=e.target;
   librarySource=sourceChoice.dataset.librarySource;
   updateLibraryResults();return;
  }
- if(target.id==='shareAllLibraryBtn')return shareLibraryAssets(state.assets.filter(a=>a.kind===libraryTab).map(a=>a.id));
+ if(target.id==='shareAllLibraryBtn')return shareLibraryAssets(state.assets.filter(a=>SHAREABLE_LIBRARY_KINDS.has(a.kind)).map(a=>a.id));
  const sharing=target.closest('[data-share-asset]');if(sharing)return shareLibraryAssets([sharing.dataset.shareAsset]);
  const importing=target.closest('[data-import-shared]');if(importing)return importSharedAudio(importing.dataset.importShared);
  const sharedPreview=target.closest('[data-preview-shared]');if(sharedPreview)return playSharedPreview(sharedPreview.dataset.previewShared);
