@@ -68,52 +68,61 @@ def render_project(s,project_root,out_path,format_name='wav',scene_id=None,*,tit
         tmp=Path(folder)
         pcm_cache={}
         mm=np.memmap(tmp/'mix.raw',mode='w+',dtype='float32',shape=(length,2))
-        mm[:]=0
-        for clip in clips:
-            asset=asset_map.get(clip.get('assetId'))
-            if not asset:continue
-            aid=asset['id']
-            if aid not in pcm_cache:
-                f=tmp/(aid+'.wav')
-                to_pcm(asset_path(s['id'], asset), f)
-                pcm_cache[aid]=f
-            with sf.SoundFile(str(pcm_cache[aid])) as wav:
-                src_length=len(wav)
-                trim_start=max(0,int(float(clip.get('trimStart',0))*SR))
-                trim_start=min(trim_start,src_length)
-                trim_end=max(trim_start,src_length-int(float(clip.get('trimEnd',0))*SR))
-                available=trim_end-trim_start
-                if available<=0:continue
-                start=max(0,int(float(clip.get('start',0))*SR))
-                clip_samples=max(0,int(float(clip.get('duration',0))*SR))
-                clip_samples=min(clip_samples,length-start)
-                gain=max(0.0,min(8.0,float(clip.get('gain',1))))
-                fade_in=max(0,int(float(clip.get('fadeIn',0))*SR))
-                fade_out=max(0,int(float(clip.get('fadeOut',0))*SR))
-                wrote=0
-                while wrote<clip_samples:
-                    if wrote>=available and not clip.get('loop'):break
-                    offset=(wrote%available) if clip.get('loop') else wrote
-                    count=min(131072,clip_samples-wrote,available-offset)
-                    wav.seek(trim_start+offset)
-                    audio=wav.read(count,dtype='float32',always_2d=True)
-                    if len(audio)==0:break
-                    n=len(audio)
-                    audio*=gain
-                    if fade_in or fade_out:
-                        pos=np.arange(wrote,wrote+n)
-                        if fade_in:audio*=np.minimum(1,np.maximum(0,pos/fade_in))[:,None]
-                        if fade_out:audio*=np.minimum(1,np.maximum(0,(clip_samples-pos)/fade_out))[:,None]
-                    mm[start+wrote:start+wrote+n]+=audio
-                    wrote+=n
-        peak=0.0
-        for i in range(0,length,SR*10):
-            chunk=np.asarray(mm[i:i+SR*10]);peak=max(peak,float(np.abs(chunk).max(initial=0)))
-        scale=min(1.0,0.98/peak) if peak>0 else 1.0
-        wav_out=tmp/'complete.wav' if format_name=='mp3' else out_path
-        with sf.SoundFile(str(wav_out),mode='w',samplerate=SR,channels=2,format='WAV',subtype='PCM_16') as f:
-            for i in range(0,length,SR*10):f.write(np.asarray(mm[i:i+SR*10])*scale)
-        del mm
+        try:
+            mm[:]=0
+            for clip in clips:
+                asset=asset_map.get(clip.get('assetId'))
+                if not asset:continue
+                aid=asset['id']
+                if aid not in pcm_cache:
+                    f=tmp/(aid+'.wav')
+                    to_pcm(asset_path(s['id'], asset), f)
+                    pcm_cache[aid]=f
+                with sf.SoundFile(str(pcm_cache[aid])) as wav:
+                    src_length=len(wav)
+                    trim_start=max(0,int(float(clip.get('trimStart',0))*SR))
+                    trim_start=min(trim_start,src_length)
+                    trim_end=max(trim_start,src_length-int(float(clip.get('trimEnd',0))*SR))
+                    available=trim_end-trim_start
+                    if available<=0:continue
+                    start=max(0,int(float(clip.get('start',0))*SR))
+                    clip_samples=max(0,int(float(clip.get('duration',0))*SR))
+                    clip_samples=min(clip_samples,length-start)
+                    gain=max(0.0,min(8.0,float(clip.get('gain',1))))
+                    fade_in=max(0,int(float(clip.get('fadeIn',0))*SR))
+                    fade_out=max(0,int(float(clip.get('fadeOut',0))*SR))
+                    wrote=0
+                    while wrote<clip_samples:
+                        if wrote>=available and not clip.get('loop'):break
+                        offset=(wrote%available) if clip.get('loop') else wrote
+                        count=min(131072,clip_samples-wrote,available-offset)
+                        wav.seek(trim_start+offset)
+                        audio=wav.read(count,dtype='float32',always_2d=True)
+                        if len(audio)==0:break
+                        n=len(audio)
+                        audio*=gain
+                        if fade_in or fade_out:
+                            pos=np.arange(wrote,wrote+n)
+                            if fade_in:audio*=np.minimum(1,np.maximum(0,pos/fade_in))[:,None]
+                            if fade_out:audio*=np.minimum(1,np.maximum(0,(clip_samples-pos)/fade_out))[:,None]
+                        mm[start+wrote:start+wrote+n]+=audio
+                        wrote+=n
+            peak=0.0
+            for i in range(0,length,SR*10):
+                peak=max(peak,float(np.abs(mm[i:i+SR*10]).max(initial=0)))
+            scale=min(1.0,0.98/peak) if peak>0 else 1.0
+            wav_out=tmp/'complete.wav' if format_name=='mp3' else out_path
+            with sf.SoundFile(str(wav_out),mode='w',samplerate=SR,channels=2,format='WAV',subtype='PCM_16') as f:
+                for i in range(0,length,SR*10):f.write(np.asarray(mm[i:i+SR*10])*scale)
+        finally:
+            # Windows will refuse TemporaryDirectory cleanup while mix.raw is mapped.
+            # All NumPy slices above are temporary: close the mapped file before cleanup,
+            # even when decode, mixing or WAV/MP3 preparation fails.
+            try:
+                mm.flush()
+            finally:
+                mm._mmap.close()
+                del mm
         if format_name=='mp3':
             if not ffmpeg_bin():raise RuntimeError('MP3書き出しにはFFmpegが必要です')
             command=[ffmpeg_bin(),'-hide_banner','-loglevel','error','-y','-i',str(wav_out)]
