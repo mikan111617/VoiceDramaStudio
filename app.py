@@ -504,13 +504,14 @@ def mix(pid: str, body: MixRequest):
         filename = _export_download_name(title, body.format)
         EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
         out = EXPORTS_DIR / filename
+        key = filename.casefold()  # Windows filenames are case-insensitive.
         # Reserve the output name without holding the project data lock while mixing.
         with _EXPORT_LOCK:
-            if filename in _EXPORT_IN_PROGRESS:
+            if key in _EXPORT_IN_PROGRESS:
                 raise HTTPException(409, '同名の音声は現在書き出し中です。完了後にお試しください。')
             if out.exists() and not body.overwrite:
                 raise HTTPException(409, '同名ファイルが既に存在します。上書きしますか？')
-            _EXPORT_IN_PROGRESS.add(filename)
+            _EXPORT_IN_PROGRESS.add(key)
         # Never render directly onto a pre-existing audio file. Replace it only
         # after mixdown succeeded, preserving the old copy on any render failure.
         temporary = EXPORTS_DIR / ('.render_' + uuid.uuid4().hex + '.' + body.format)
@@ -521,7 +522,7 @@ def mix(pid: str, body: MixRequest):
         finally:
             temporary.unlink(missing_ok=True)
             with _EXPORT_LOCK:
-                _EXPORT_IN_PROGRESS.discard(filename)
+                _EXPORT_IN_PROGRESS.discard(key)
         return {
             'url': f'/api/projects/{pid}/exports/{quote(out.name, safe="")}?name={quote(title, safe="")}',
             'file': filename,
@@ -542,9 +543,12 @@ def download_mix(pid: str, filename: str, name: str | None = None):
     previously_named = bool(re.fullmatch(
         r'.{1,220}_[0-9]{8}-[0-9]{6}_[a-f0-9]{10}\.(?:wav|mp3)', filename))
     format_name = filename.rsplit('.', 1)[-1]
-    named = (format_name in ('wav', 'mp3') and
-             len(filename) <= 200 and
-             _export_download_name(filename, format_name) == filename)
+    named = False
+    if format_name in ('wav', 'mp3') and len(filename) <= 200:
+        try:
+            named = _export_download_name(filename, format_name) == filename
+        except ValueError:
+            pass
     if not (legacy or previously_named or named):
         raise HTTPException(400, 'Invalid filename')
     try:
