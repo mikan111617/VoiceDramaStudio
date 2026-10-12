@@ -99,7 +99,8 @@ function updateGenerationSelectionInfo(){
  const btn=$('generateSelected');if(btn&&!activeGameGeneration)btn.disabled=!total;
 }
 function markScenario(key,checked){
- for(const v of candidatesForScenario(key)){if(checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}
+ if(checked){for(const v of candidatesForScenario(key))marked.add(v.voiceId)}
+ else{for(const v of voicesOf(key))marked.delete(v.voiceId)}
  renderScenarios();renderVoiceRows();
 }
 function markAllScenarios(mode){
@@ -439,6 +440,7 @@ async function startAnalysis(){
  if(!game)return;
  const ids=[...marked].filter(id=>game.voices.some(v=>v.voiceId===id));
  if(!ids.length)return message('解析する台詞をチェックしてください',true);
+ if(ids.length>200)return message('演技指示の一括解析は1回200件までです。音声生成とは上限が異なります',true);
  const model=$('ollamaModel').value.trim();if(!model)return message('Ollamaのモデル名を入力してください',true);
  if(!confirm(`${ids.length}件の演技指示をOllamaで自動生成します。\n既に入力したキャプションも更新されます。\n原文は変更されません。`))return;
  try{const job=await request(`/api/game/projects/${game.id}/analyze`,json('POST',{voiceIds:ids,model}));message('Ollamaで演技指示を解析中です');$('analyzeSelected').disabled=true;poll(job.id)}catch(e){message('Ollamaの解析を開始できません: '+e.message,true)}
