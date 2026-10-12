@@ -82,6 +82,26 @@ def test_excel_roundtrip_preserves_ids_and_stale_audio(client):
     assert len(r.json()['project']['lines'])==2
 
 
+@pytest.mark.parametrize("header", ["キャラ名", "キャラクター名", "話者", "役名"])
+def test_excel_speaker_header_aliases_do_not_turn_everyone_into_narration(client, header):
+    p=project(client)
+    wb=openpyxl.Workbook()
+    ws=wb.active
+    ws.append([header, "セリフ", "キャプション"])
+    ws.append(["愛理", "おかえり、お姉ちゃん。", "普段どおりに迎える"])
+    ws.append(["真歩流", "ただいま、愛理！", "元気よく返す"])
+    data=io.BytesIO()
+    wb.save(data)
+    response=client.post(f'/api/projects/{p["id"]}/excel/import',
+        files={'file':('pixelartpark_voicedrama.xlsx',data.getvalue(),
+             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+    assert response.status_code==200,response.text
+    lines=response.json()['project']['lines']
+    assert [line['speaker'] for line in lines]==["愛理", "真歩流"]
+    assert [line['caption'] for line in lines]==["普段どおりに迎える", "元気よく返す"]
+    assert not any(line['speaker']=="ナレーション" for line in lines)
+
+
 def test_audio_asset_security_and_revision_conflict(client):
     s=project(client);pid=s['id']
     r=client.post(f'/api/projects/{pid}/assets',files={'file':('notes.txt',b'audio','text/plain')},data={'kind':'sfx'})
