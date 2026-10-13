@@ -1278,7 +1278,7 @@ def test_pronunciation_ui_has_import_edit_tabs_and_preview():
 def test_mp3_game_export_converts_existing_wav_and_updates_voice_map(client, monkeypatch, explicit_format):
     """Export MP3 from previously generated WAV without changing stored source files."""
     s = new_game(client)
-    s = ks_file(client, s, '#mahoru\\n[voice id="v00001"]\\nこんにちは。[p]\\n').json()
+    s = ks_file(client, s, '#mahoru\n[voice id="v00001"]\nこんにちは。[p]\n').json()
     v = s['voices'][0]
     old_rel = game._game_audio_relative(v, 'wav')
     source = game._folder(s['id']) / 'audio' / old_rel
@@ -1333,7 +1333,7 @@ def test_mp3_game_export_converts_existing_wav_and_updates_voice_map(client, mon
 
 def test_game_export_rejects_unsupported_format_without_changing_project(client):
     s = new_game(client)
-    s = ks_file(client, s, '#mahoru\\nこんにちは。[p]\\n').json()
+    s = ks_file(client, s, '#mahoru\nこんにちは。[p]\n').json()
     invalid = client.put(f'/api/game/projects/{s["id"]}', json={
         'expectedRevision': s['revision'], 'changes': {'format': 'ogg'},
     })
