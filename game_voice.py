@@ -30,7 +30,7 @@ VOICE_RE = re.compile(r'^\s*\[voice\s+[^\]]*\bid="([^"]+)"[^\]]*\]\s*$', re.I)
 VOICE_OLD_RE = re.compile(r'^\s*;\s*@voice\s+id="([^"]+)"', re.I)
 ID_RE = re.compile(r'^v([0-9]+)$', re.I)
 SAFE_KEY = re.compile(r'^[\w-]+$', re.UNICODE)
-AUDIO_FORMATS = ('.wav', '.mp3')
+AUDIO_FORMATS = ('wav', 'mp3')
 KS_MAX_BYTES = 20 * 1024 * 1024  # Up to 20 MiB per source file.
 KS_TOTAL_MAX_BYTES = 60 * 1024 * 1024  # Prevent oversized multi-file batches.
 
@@ -899,8 +899,10 @@ def update_game(pid,changes,revision):
             if not title or len(title)>120:raise ValueError('作品名が正しくありません')
             s['title']=title
         if 'format' in changes:
-            if changes['format'] not in AUDIO_FORMATS:raise ValueError('音声形式はwavかmp3です')
-            s['format']=changes['format']
+            # The browser sends 'wav'/'mp3' without a leading dot.
+            output_format = str(changes['format']).lower().lstrip('.')
+            if output_format not in AUDIO_FORMATS:raise ValueError('音声形式はwavかmp3です')
+            s['format']=output_format
         if 'pronunciationDictionary' in changes or 'prosodyDictionary' in changes:
             before=copy.deepcopy(s)
             if 'pronunciationDictionary' in changes:
@@ -1021,21 +1023,21 @@ def _quoted_script(s,scenario):
     return text.encode(scenario['encoding'])
 
 
-def make_export_zip(pid,destination):
+def make_export_zip(pid,destination,format_override=None):
     with GAME_LOCK:
         s=_load(pid)
         if s.get('pendingKS'):
             raise ValueError('仮登録中のKSがあります。先にボイスIDを一括確定してください')
         if not s['scenarios']:raise ValueError('シナリオを取り込んでください')
-        fmt=s.get('format','wav').lstrip('.')
-        if fmt not in ('wav','mp3'):raise ValueError('不正な音声形式です')
+        fmt=str(format_override if format_override is not None else s.get('format','wav')).lower().lstrip('.')
+        if fmt not in AUDIO_FORMATS:raise ValueError('不正な音声形式です')
         scenario_data={sc['key']:sc for sc in s['scenarios']}
         if len(set(v['voiceId'] for v in s['voices']))!=len(s['voices']):
             raise ValueError('ボイスIDが重複しています')
         maps={};files=[];missing=[]
         for v in s['voices']:
             rel=_game_audio_relative(v,fmt)
-            # KS game runtime accesses sound/voice/<speaker>/<scenario>/<id>.wav.
+            # Game maps always reference the chosen export format, not the source WAV.
             scenario=scenario_data.get(v['scenario'],{})
             prefix=scenario.get('outputPrefix') if v.get('sourceId') else s.get('voicePrefix','voice')
             prefix=_clean_name(prefix or 'voice')
@@ -1070,7 +1072,7 @@ def make_export_zip(pid,destination):
                         if cp.returncode!=0 or not output.is_file():
                             raise ValueError('MP3出力にはFFmpegが必要です: '+cp.stderr[-200:])
                         z.write(output,'audio/'+rel)
-        return {'total':len(s['voices']),'audio':len(files),'missing':len(missing)}
+        return {'total':len(s['voices']),'audio':len(files),'missing':len(missing),'format':fmt}
 
 
 # Game-specific voice configurations share the VoiceDrama TTS worker and
