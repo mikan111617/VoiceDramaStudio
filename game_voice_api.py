@@ -252,15 +252,16 @@ def game_audio(gid:str,vid:str):
     return FileResponse(p,media_type='audio/wav',filename=vid+'.wav',content_disposition_type='inline')
 
 @router.get('/api/game/projects/{gid}/export.zip')
-def export_game(gid:str):
+def export_game(gid:str, format: str | None = None):
     fd,path=tempfile.mkstemp(prefix='vds_game_export_',suffix='.zip')
     import os
     os.close(fd)
     path=Path(path)
     try:
-        result=_errors(game.make_export_zip,gid,path)
+        result=_errors(game.make_export_zip,gid,path,format_override=format)
         return FileResponse(path,filename='game_voice_export.zip',media_type='application/zip',
-                            headers={'X-Voice-Total':str(result['total']),'X-Voice-Missing':str(result['missing'])},
+                            headers={'X-Voice-Total':str(result['total']),'X-Voice-Missing':str(result['missing']),
+                                     'X-Voice-Format':result['format']},
                             background=BackgroundTask(lambda: path.unlink(missing_ok=True)))
     except Exception:
         path.unlink(missing_ok=True)
