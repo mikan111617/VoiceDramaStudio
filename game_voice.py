@@ -990,6 +990,36 @@ def _current_audio_path(pid,voice):
     return actual
 
 
+def audit_game_audio(pid):
+    """Report physical file problems without modifying the project or audio."""
+    with GAME_LOCK:
+        state=_load(pid)
+        result={'total':len(state['voices']), 'ready':0, 'stale':0,
+                'unassigned':0, 'missingFile':0, 'missingIds':[], 'issues':[]}
+        for voice in state['voices']:
+            if not voice.get('audio'):
+                result['unassigned']+=1
+                continue
+            try:
+                filepath=_current_audio_path(pid,voice)
+                exists=bool(filepath and filepath.is_file())
+                reason='音声ファイルが保存先に存在しません'
+            except (ValueError,OSError) as exc:
+                exists=False
+                reason=str(exc)
+            if not exists:
+                result['missingFile']+=1
+                result['missingIds'].append(voice['voiceId'])
+                result['issues'].append({'voiceId':voice['voiceId'],
+                    'scenario':voice['scenario'], 'speaker':voice['speaker'],
+                    'audio':voice.get('audio',''), 'reason':reason})
+            elif voice.get('stale'):
+                result['stale']+=1
+            else:
+                result['ready']+=1
+        return result
+
+
 def _quoted_script(s,scenario):
     content=scenario['content'];lines=content.splitlines()
     voices=sorted([v for v in s['voices'] if v['scenario']==scenario['key']],key=lambda v:v['sourceLine'])
@@ -1371,13 +1401,24 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                         'irodori_dir':core.load_global_settings()['irodori_dir'],
                         'items':request},ensure_ascii=False),encoding='utf8')
                     job['message']=f'{model}: {job["completed"]}/{job["total"]}件完了・次の{len(items)}件を生成中'
-                    cp=subprocess.run([interpreter,str(core.ROOT/'tts_worker.py'),str(job_file),str(result_file)],
-                        cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',
-                        errors='replace',timeout=3600)
-                    if not result_file.exists():
-                        raise RuntimeError('TTSの応答がありません: '+(cp.stderr+cp.stdout)[-1000:])
-                    result=json.loads(result_file.read_text(encoding='utf8'))
-                    if not result.get('ok'):raise RuntimeError(result.get('error','TTS失敗'))
+                    # One crashed worker batch must not abort thousands of
+                    # remaining lines. Record why these lines failed and carry on.
+                    try:
+                        cp=subprocess.run([interpreter,str(core.ROOT/'tts_worker.py'),str(job_file),str(result_file)],
+                            cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',
+                            errors='replace',timeout=3600)
+                        if not result_file.exists():
+                            raise RuntimeError('TTSの応答がありません: '+(cp.stderr+cp.stdout)[-1200:])
+                        result=json.loads(result_file.read_text(encoding='utf8'))
+                        if not result.get('ok'):
+                            raise RuntimeError(result.get('error','TTS失敗'))
+                    except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as exc:
+                        error=f'{model}: {type(exc).__name__}: {str(exc)[-850:]}'
+                        for v,_,_ in items:
+                            job['errors'].append({'id':v['voiceId'],'error':error})
+                        job['completed']+=len(items)
+                        job['message']=f'バッチ失敗（{len(items)}件）: {error[:140]}'
+                        continue
                     rows={row.get('id'):row for row in result.get('items',[])}
                     for v,_,_ in items:
                         item=rows.get(v['voiceId'])
@@ -1416,7 +1457,9 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                             job['errors'].append({'id':v['voiceId'],
                                 'error':item.get('error','生成結果がありません') if item else '生成結果がありません'})
                         job['completed']+=1
+                    job['message']=f'{job["completed"]}/{job["total"]}件処理・失敗{len(job["errors"])}件'
         job['status']='cancelled' if job.get('cancel') else ('done_with_errors' if job['errors'] else 'done')
-        job['message']='生成を停止しました' if job.get('cancel') else '音声生成が完了しました'
+        job['message']=('生成を停止しました' if job.get('cancel') else
+                        ('音声生成は終了しましたが失敗があります' if job['errors'] else '音声生成が完了しました'))
     except Exception as exc:
         job['status']='error';job['message']=str(exc)
