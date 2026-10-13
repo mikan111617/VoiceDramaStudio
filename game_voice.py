@@ -990,6 +990,14 @@ def _current_audio_path(pid,voice):
     return actual
 
 
+def get_last_game_generation(pid):
+    """Return the persisted last batch-generation report (read-only)."""
+    with GAME_LOCK:
+        _load(pid)
+        report=_folder(pid)/'last_generation.json'
+        return json.loads(report.read_text(encoding='utf8')) if report.is_file() else None
+
+
 def audit_game_audio(pid):
     """Report physical file problems without modifying the project or audio."""
     with GAME_LOCK:
@@ -1463,3 +1471,20 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                         ('音声生成は終了しましたが失敗があります' if job['errors'] else '音声生成が完了しました'))
     except Exception as exc:
         job['status']='error';job['message']=str(exc)
+    finally:
+        # Preserve errors from a long generation even after restarting the app.
+        # This report never modifies an existing audio take.
+        try:
+            with GAME_LOCK:
+                path=_folder(pid)/'last_generation.json'
+                path.parent.mkdir(parents=True,exist_ok=True)
+                staged=path.with_name('.last_generation_'+uuid.uuid4().hex+'.tmp')
+                report={k:job.get(k) for k in
+                        ('id','projectId','status','message','completed','total','format','errors')}
+                try:
+                    staged.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
+                    os.replace(staged,path)
+                finally:
+                    staged.unlink(missing_ok=True)
+        except (OSError,ValueError):
+            pass
