@@ -1023,6 +1023,35 @@ def _quoted_script(s,scenario):
     return text.encode(scenario['encoding'])
 
 
+def transcode_game_audio(source, output, fmt):
+    """Convert a finished audio file to the requested format (no in-place writes)."""
+    fmt = str(fmt).lower().lstrip('.')
+    if fmt not in AUDIO_FORMATS:
+        raise ValueError('音声形式はWAVまたはMP3を指定してください')
+    source, output = Path(source), Path(output)
+    if output.suffix.lower() != '.' + fmt:
+        raise ValueError('変換後のファイル拡張子が出力形式と一致しません')
+    if source.resolve() == output.resolve():
+        raise ValueError('元の音声ファイルを直接上書きできません')
+    args = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+            '-i', str(source), '-map', '0:a:0', '-vn']
+    if fmt == 'mp3':
+        args += ['-codec:a', 'libmp3lame', '-b:a', '128k']
+    else:
+        args += ['-codec:a', 'pcm_s16le']
+    args.append(str(output))
+    try:
+        cp = subprocess.run(args, capture_output=True, text=True,
+                            encoding='utf-8', errors='replace', timeout=180)
+    except FileNotFoundError as exc:
+        raise ValueError('MP3/WAV変換にはFFmpegが必要です') from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('音声変換がタイムアウトしました') from exc
+    if cp.returncode or not output.is_file() or output.stat().st_size == 0:
+        raise ValueError('音声形式の変換に失敗しました: ' + (cp.stderr or 'FFmpegエラー')[-400:])
+    return output
+
+
 def make_export_zip(pid,destination,format_override=None):
     with GAME_LOCK:
         s=_load(pid)
@@ -1063,14 +1092,12 @@ def make_export_zip(pid,destination,format_override=None):
             z.writestr('voice_map.json',json.dumps(maps,ensure_ascii=False,indent=2))
             z.writestr('missing_voices.json',json.dumps(missing,ensure_ascii=False,indent=2))
             for p,rel,vid in files:
-                if fmt=='wav':
+                if p.suffix.lower() == '.' + fmt:
                     z.write(p,'audio/'+rel)
                 else:
-                    with tempfile.TemporaryDirectory(prefix='vds_game_mp3_') as temp:
-                        output=Path(temp)/f'{vid}.mp3'
-                        cp=subprocess.run(['ffmpeg','-v','error','-y','-i',str(p),'-codec:a','libmp3lame','-b:a','128k',str(output)],capture_output=True,text=True,timeout=180)
-                        if cp.returncode!=0 or not output.is_file():
-                            raise ValueError('MP3出力にはFFmpegが必要です: '+cp.stderr[-200:])
+                    with tempfile.TemporaryDirectory(prefix='vds_game_convert_') as temp:
+                        output=Path(temp)/f'{vid}.{fmt}'
+                        transcode_game_audio(p,output,fmt)
                         z.write(output,'audio/'+rel)
         return {'total':len(s['voices']),'audio':len(files),'missing':len(missing),'format':fmt}
 
@@ -1302,7 +1329,7 @@ def generation_groups(pid,ids):
     return plans
 
 
-def generate_game_audio(pid,voice_ids,steps,job):
+def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
     """Sequential bounded TTS batches; track whole-project progress without data loss."""
     try:
         import app as studio
@@ -1311,6 +1338,10 @@ def generate_game_audio(pid,voice_ids,steps,job):
         with GAME_LOCK:
             groups=generation_groups(pid,set(voice_ids))
             current_state=_load(pid)
+        fmt=str(output_format if output_format is not None else current_state.get('format','wav')).lower().lstrip('.')
+        if fmt not in AUDIO_FORMATS:
+            raise ValueError('音声形式はWAVまたはMP3を指定してください')
+        job['format']=fmt
         if not groups:raise ValueError('生成する台詞がありません')
         buckets=defaultdict(list)
         for v,engine,model,cast,refs in groups:
@@ -1356,12 +1387,19 @@ def generate_game_audio(pid,voice_ids,steps,job):
                                     state=_load(pid)
                                     target=next((line for line in state['voices'] if line['voiceId']==v['voiceId']),None)
                                     if target:
-                                        rel=_game_audio_relative(target,'wav')
+                                        # TTS always returns WAV. Convert to MP3 only if
+                                        # requested; publish the complete file atomically.
+                                        generated=Path(item['output'])
+                                        if fmt=='mp3':
+                                            converted=d/(v['voiceId']+'.mp3')
+                                            transcode_game_audio(generated,converted,'mp3')
+                                            generated=converted
+                                        rel=_game_audio_relative(target,fmt)
                                         dest=_folder(pid)/'audio'/rel
                                         dest.parent.mkdir(parents=True,exist_ok=True)
-                                        staging=Path(str(dest)+'.tmp')
+                                        staging=dest.with_name('.'+uuid.uuid4().hex+'.'+fmt)
                                         try:
-                                            shutil.copy2(item['output'],staging)
+                                            shutil.copy2(generated,staging)
                                             os.replace(staging,dest)
                                         finally:
                                             staging.unlink(missing_ok=True)
