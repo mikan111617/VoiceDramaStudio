@@ -410,7 +410,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -466,7 +466,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -649,7 +649,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -714,7 +714,7 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=0315' in html and 'game.css?v=0313' in html
+    assert 'game.js?v=0316' in html and 'game.css?v=0313' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -928,7 +928,7 @@ def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client)
     js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
     assert 'stage-ks?expectedRevision=' in js
     assert '/finalize-ks' in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 def test_stage_blocks_early_generation_and_export(client):
@@ -1101,7 +1101,7 @@ def test_game_cast_editor_has_same_model_ref_and_design_controls():
     assert 'gameRefPicker' in html and 'ゲーム音声専用の声設定' in html
     for term in ('data-cast-source','data-local-field','data-ref-upload','data-ref-play','data-ref-delete','data-ref-design','voiceModels','renderLocalCastEditor'):
         assert term in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 
@@ -1271,7 +1271,7 @@ def test_pronunciation_ui_has_import_edit_tabs_and_preview():
     for term in ('function renderDictionaries','function speechPreview','function setupDictionaryControls',
                   'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText'):
         assert term in js
-    assert 'game.js?v=0315' in html
+    assert 'game.js?v=0316' in html
 
 
 @pytest.mark.parametrize("explicit_format", [False, True])
@@ -1342,3 +1342,110 @@ def test_game_export_rejects_unsupported_format_without_changing_project(client)
     assert invalid_zip.status_code == 400
     assert game.get_game(s['id'])['format'] == 'wav'
 
+
+def test_mp3_generation_stores_mp3_and_individual_download_uses_mp3(client, monkeypatch):
+    """The format chosen for generation must reach storage, preview, download and ZIP."""
+    import app as studio
+    state = new_game(client)
+    state = ks_file(client, state, '#mahoru\n[voice id="v01234"]\nこんにちは。[p]\n').json()
+    vid = state['voices'][0]['voiceId']
+    monkeypatch.setattr(studio, 'python_for', lambda *_: sys.executable)
+    monkeypatch.setattr(game, 'generation_groups', lambda pid, ids: [
+        (v, 'irodori', 'mock-tts', {'description':'', 'mode':'design'}, [])
+        for v in game.get_game(pid)['voices'] if v['voiceId'] in ids
+    ])
+    class OK:
+        returncode = 0
+        stderr = ''
+        stdout = ''
+    ffmpeg_calls = []
+    def fake_process(args, **kwargs):
+        if str(args[1]).endswith('tts_worker.py'):
+            params = json.loads(Path(args[2]).read_text(encoding='utf8'))
+            items = params['items']
+            for item in items:
+                Path(item['output']).write_bytes(short_wav())
+            Path(args[3]).write_text(json.dumps({'ok':True,'items':[
+                {'id':v['id'],'ok':True,'output':v['output']} for v in items]}),encoding='utf8')
+        else:
+            ffmpeg_calls.append(args)
+            assert 'libmp3lame' in args
+            assert '-b:a' in args
+            Path(args[-1]).write_bytes(b'ID3' + b'voice-data')
+        return OK()
+
+    monkeypatch.setattr(game.subprocess, 'run', fake_process)
+    job = {'status':'running','message':'','completed':0,'total':0,'errors':[]}
+    game.generate_game_audio(state['id'], [vid], 40, job, 'mp3')
+    assert job['status'] == 'done', job
+    assert job['format'] == 'mp3'
+    assert len(ffmpeg_calls) == 1
+    saved = game.get_game(state['id'])['voices'][0]
+    assert saved['audio'] == 'mahoru/scene1/v01234.mp3'
+    audio_path = game._current_audio_path(state['id'], saved)
+    assert audio_path.read_bytes() == b'ID3voice-data'
+    preview = client.get(f'/api/game/projects/{state["id"]}/audio/{vid}')
+    assert preview.status_code == 200
+    assert preview.headers['content-type'].startswith('audio/mpeg')
+    assert preview.content == b'ID3voice-data'
+    one = client.get(f'/api/game/projects/{state["id"]}/audio/{vid}/download?format=mp3')
+    assert one.status_code == 200
+    assert one.headers['content-type'].startswith('audio/mpeg')
+    assert 'v01234.mp3' in one.headers['content-disposition']
+    assert one.content == b'ID3voice-data'
+    result = client.get(f'/api/game/projects/{state["id"]}/export.zip?format=mp3')
+    assert result.status_code == 200, result.text[:200]
+    with ZipFile(io.BytesIO(result.content)) as archive:
+        assert 'audio/mahoru/scene1/v01234.mp3' in archive.namelist()
+        assert archive.read('audio/mahoru/scene1/v01234.mp3') == b'ID3voice-data'
+        assert json.loads(archive.read('voice_maps/scene1.json'))[vid] == (
+            'voice/mahoru/scene1/v01234.mp3')
+    assert len(ffmpeg_calls) == 1  # ZIP reuses the already-encoded MP3.
+
+
+def test_individual_download_transcodes_old_wav_without_recreating_voice(client, monkeypatch):
+    state = new_game(client)
+    state = ks_file(client, state, '#airi\n[voice id="v00077"]\nおはよう。[p]\n').json()
+    vid = state['voices'][0]['voiceId']
+    state['voices'][0]['audio'] = 'airi/scene1/v00077.wav'
+    source = game._folder(state['id']) / 'audio' / state['voices'][0]['audio']
+    source.parent.mkdir(parents=True, exist_ok=True)
+    original = short_wav()
+    source.write_bytes(original)
+    game._write(state['id'], state)
+    conversions = []
+    def fake_transcode(inp, out, fmt):
+        assert inp == source and fmt == 'mp3'
+        conversions.append((str(inp), str(out)))
+        Path(out).write_bytes(b'ID3older-voice')
+    monkeypatch.setattr(game, 'transcode_game_audio', fake_transcode)
+    r = client.get(f'/api/game/projects/{state["id"]}/audio/{vid}/download?format=mp3')
+    assert r.status_code == 200, r.text[:200]
+    assert r.content == b'ID3older-voice'
+    assert r.headers['content-type'].startswith('audio/mpeg')
+    assert 'v00077.mp3' in r.headers['content-disposition']
+    assert len(conversions) == 1
+    assert source.read_bytes() == original
+    # Older voice remains a WAV internally, so existing project references work.
+    assert game.get_game(state['id'])['voices'][0]['audio'] == 'airi/scene1/v00077.wav'
+    assert client.get(f'/api/game/projects/{state["id"]}/audio/{vid}').headers['content-type'].startswith('audio/wav')
+
+
+def test_game_generation_format_api_is_forwarded_to_worker(client, monkeypatch):
+    import game_voice_api as api
+    state = new_game(client)
+    state = ks_file(client, state, '#mahoru\n[voice id="v00001"]\nこんにちは。[p]\n').json()
+    vid = state['voices'][0]['voiceId']
+    monkeypatch.setattr(game, 'generation_groups', lambda pid, ids: [1])
+    submissions = []
+    monkeypatch.setattr(api.executor, 'submit', lambda *args: submissions.append(args))
+    response = client.post(f'/api/game/projects/{state["id"]}/generate',
+                           json={'voiceIds':[vid],'numSteps':40,'format':'mp3'})
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job['format'] == 'mp3'
+    assert submissions[0][-1] == 'mp3'
+    game.GAME_JOBS.pop(job['id'], None)
+    bad = client.post(f'/api/game/projects/{state["id"]}/generate',
+                      json={'voiceIds':[vid],'format':'flac'})
+    assert bad.status_code == 400
