@@ -31,7 +31,7 @@ macOS/Linuxでは `./start_unix.sh` でも起動可能ですが、TTS側のPytho
 
 ## WAV → MP3 一括変換ツール（Windows GUI）
 
-**すでに生成したWAVをTTSで作り直す必要はありません。** 「ゲーム音声」の出力形式を「MP3」にして「ゲーム用ZIP」を押すと、出力時にFFmpegで自動変換されます。WAVで音声生成したあとでも利用可能です。
+**すでに生成したWAVをTTSで作り直す必要はありません。** 「ゲーム音声」の **「ゲーム用ZIPの音声形式」** を「MP3」にして「ゲーム用ZIP」を押すと、出力時にFFmpegで自動変換されます。WAVで音声生成したあとでも利用可能です。生成直後の試聴と `workspace/game_voice/g_.../audio/` の音声は常にWAVのままです。**MP3になるのはダウンロードしたZIP内の `audio/` と、対応する `voice_maps/*.json` の参照先です。** ZIPのファイル名 `game_voice_export.zip` はどちらの形式でも同じです。
 
 個別のフォルダに保存済みのWAVを大量に変換したい場合は、ルートの **`batch_wav_to_mp3.bat` をダブルクリック**してGUIを起動してください。追加のPythonライブラリは不要ですが、**FFmpegが必要**です（PATHに`ffmpeg`を追加、または`ffmpeg.exe`を`batch_wav_to_mp3.py`と同じ場所に配置）。
 
