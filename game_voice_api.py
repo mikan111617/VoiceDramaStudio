@@ -233,6 +233,11 @@ def generate(gid:str,body:GameGenerate):
     executor.submit(game.generate_game_audio,gid,body.voiceIds,body.numSteps,job,output_format)
     return job
 
+@router.get('/api/game/projects/{gid}/generate/last')
+def last_generation(gid: str):
+    return _errors(game.get_last_game_generation,gid)
+
+
 @router.get('/api/game/projects/{gid}/generate/active')
 def current_generation(gid: str):
     _errors(game.get_game,gid)
