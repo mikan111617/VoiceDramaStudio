@@ -26,6 +26,7 @@ class ChangeGame(BaseModel):
 class GameGenerate(BaseModel):
     voiceIds: list[str]
     numSteps: int=40
+    format: str | None = None
 
 
 def _errors(func,*args,**kwargs):
@@ -211,6 +212,8 @@ def generate(gid:str,body:GameGenerate):
     if not 1<=len(body.voiceIds)<=10000 or len(set(body.voiceIds))!=len(body.voiceIds):
         raise HTTPException(400,'生成するボイスを1〜10000件選択してください')
     if not 1<=body.numSteps<=80:raise HTTPException(400,'ステップ数は1〜80です')
+    if body.format is not None and body.format not in game.AUDIO_FORMATS:
+        raise HTTPException(400,'生成形式はWAVまたはMP3を指定してください')
     state=_errors(game.get_game,gid)
     known={v['voiceId'] for v in state['voices']}
     if not set(body.voiceIds).issubset(known):raise HTTPException(400,'不明なボイスIDがあります')
@@ -219,9 +222,10 @@ def generate(gid:str,body:GameGenerate):
         raise HTTPException(409,'このプロジェクトでは既に音声生成中です')
     _errors(game.generation_groups,gid,set(body.voiceIds))
     jid='gj_'+uuid.uuid4().hex[:16]
-    job={'id':jid,'projectId':gid,'status':'running','message':'生成の準備中','completed':0,'total':len(body.voiceIds),'errors':[]}
+    output_format=body.format or str(state.get('format','wav')).lstrip('.')
+    job={'id':jid,'projectId':gid,'status':'running','message':'生成の準備中','completed':0,'total':len(body.voiceIds),'errors':[],'format':output_format}
     game.GAME_JOBS[jid]=job
-    executor.submit(game.generate_game_audio,gid,body.voiceIds,body.numSteps,job)
+    executor.submit(game.generate_game_audio,gid,body.voiceIds,body.numSteps,job,output_format)
     return job
 
 @router.get('/api/game/projects/{gid}/generate/active')
@@ -249,7 +253,40 @@ def game_audio(gid:str,vid:str):
     if not v or not v.get('audio'):raise HTTPException(404,'生成済み音声がありません')
     p=_errors(game._current_audio_path,gid,v)
     if not p or not p.is_file():raise HTTPException(404,'音声ファイルが見つかりません')
-    return FileResponse(p,media_type='audio/wav',filename=vid+'.wav',content_disposition_type='inline')
+    fmt=p.suffix.lower().lstrip('.')
+    return FileResponse(p,media_type='audio/mpeg' if fmt=='mp3' else 'audio/wav',
+                        filename=vid+'.'+fmt,content_disposition_type='inline')
+
+
+@router.get('/api/game/projects/{gid}/audio/{vid}/download')
+def download_game_audio(gid: str, vid: str, format: str | None = None):
+    """Download one line in the requested format, including legacy saved WAVs."""
+    state=_errors(game.get_game,gid)
+    v=next((x for x in state['voices'] if x['voiceId']==vid),None)
+    if not v or not v.get('audio'):
+        raise HTTPException(404,'生成済み音声がありません')
+    source=_errors(game._current_audio_path,gid,v)
+    if not source or not source.is_file():
+        raise HTTPException(404,'音声ファイルが見つかりません')
+    fmt=str(format if format is not None else state.get('format','wav')).lower().lstrip('.')
+    if fmt not in game.AUDIO_FORMATS:
+        raise HTTPException(400,'ダウンロード形式はWAVまたはMP3を選んでください')
+    filename=Path(game._game_audio_relative(v,fmt)).name
+    mime='audio/mpeg' if fmt=='mp3' else 'audio/wav'
+    if source.suffix.lower()=='.'+fmt:
+        return FileResponse(source,media_type=mime,filename=filename)
+    fd,name=tempfile.mkstemp(prefix='vds_voice_download_',suffix='.'+fmt)
+    import os
+    os.close(fd)
+    output=Path(name)
+    output.unlink(missing_ok=True)
+    try:
+        _errors(game.transcode_game_audio,source,output,fmt)
+        return FileResponse(output,media_type=mime,filename=filename,
+                            background=BackgroundTask(lambda: output.unlink(missing_ok=True)))
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
 
 @router.get('/api/game/projects/{gid}/export.zip')
 def export_game(gid:str, format: str | None = None):
