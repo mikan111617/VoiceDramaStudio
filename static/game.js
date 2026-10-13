@@ -18,6 +18,15 @@ async function refreshAudioHealth(pid){
  if(game?.id===pid)missingAudioIds=new Set(health.missingIds||[]);
  return health;
 }
+function renderGenerationIssues(job,previous=false){
+ const errors=job?.errors||[];
+ $('generationIssues').hidden=!errors.length&&job?.status!=='error';
+ $('generationIssueLog').textContent=
+   (previous?'前回の生成結果：\n':'')+
+   (errors.length?errors.slice(0,40).map(e=>`${e.id||'バッチ'}: ${e.error||'原因不明'}`).join('\n')+
+     (errors.length>40?`\nほか ${errors.length-40}件`:''):
+     (job?.status==='error'?job.message:''));
+}
 function renderAudioHealth(){
  const note=$('audioHealthNotice');
  if(!note)return;
@@ -62,6 +71,9 @@ async function openGame(id){
    activeGameGeneration={jobId:ongoing.id,pid:id};
    $('generateSelected').disabled=true;$('cancelGameGeneration').hidden=false;
    poll(ongoing.id,id);
+  }else if(game?.id===id){
+   const previous=await request('/api/game/projects/'+encodeURIComponent(id)+'/generate/last');
+   renderGenerationIssues(previous,true);
   }
  }catch(e){message(e.message,true)}
 }
@@ -410,6 +422,7 @@ async function startGeneration(){
   const pid=game.id;
   const job=await request(`/api/game/projects/${pid}/generate`,json('POST',{voiceIds:ids,numSteps:steps,format:outputFormat}));
   activeGameGeneration={jobId:job.id,pid};
+  $('generationIssues').hidden=true;
   message(`${ids.length}件の${outputFormat.toUpperCase()}音声生成を開始しました`);
   $('generateSelected').disabled=true;$('cancelGameGeneration').hidden=false;
   poll(job.id,pid);
@@ -429,12 +442,7 @@ function poll(id,pid=game?.id){
    const job=await request('/api/game/jobs/'+id);
    $('jobStatus').textContent=`${job.message} — ${job.completed}/${job.total||0} 件${job.errors?.length?' · エラー'+job.errors.length:''}`;
    $('progressBar').style.width=job.total?Math.round(job.completed/job.total*100)+'%':'0%';
-   const errors=job.errors||[];
-   $('generationIssues').hidden=!errors.length&&job.status!=='error';
-   $('generationIssueLog').textContent=errors.length?
-     errors.slice(0,40).map(e=>`${e.id||'バッチ'}: ${e.error||'原因不明'}`).join('\n')+
-     (errors.length>40?`\nほか ${errors.length-40}件（画面内は先頭40件のみ表示）`:''):
-     (job.status==='error'?job.message:'');
+   renderGenerationIssues(job);
    if(job.status!=='running'){
     clearInterval(pollTimer);
     if(activeGameGeneration?.jobId===id){activeGameGeneration=null;$('cancelGameGeneration').hidden=true}
