@@ -120,3 +120,61 @@ def test_large_generation_api_exposes_active_job_and_prevents_overlap(client,mon
     game.GAME_JOBS[job['id']]['status']='done'
     assert client.get(f'/api/game/projects/{state["id"]}/generate/active').json() is None
     game.GAME_JOBS.pop(job['id'],None)
+
+
+def test_game_audio_health_separates_missing_files_from_stale_audio(client):
+    state=_bulk_game(4)
+    pid=state['id']
+    root=game._folder(pid)/'audio'
+    for i in (0,1):
+        item=state['voices'][i]
+        item['audio']=f'actor/{item["scenario"]}/{item["voiceId"]}.wav'
+        path=root/item['audio']
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(b'test audio')
+    state['voices'][1]['stale']=True
+    # Third line claims an audio take that was removed; fourth is ungenerated.
+    state['voices'][2]['audio']='actor/scene2/v00002.wav'
+    game._write(pid,state)
+    health=client.get(f'/api/game/projects/{pid}/audio-health')
+    assert health.status_code==200,health.text
+    body=health.json()
+    assert body['total']==4
+    assert body['ready']==1
+    assert body['stale']==1
+    assert body['missingFile']==1
+    assert body['unassigned']==1
+    assert body['missingIds']==['v00002']
+    assert body['issues'][0]['scenario']=='scene2'
+    # The audit is read-only; neither the project nor the files are modified.
+    assert game.get_game(pid)['voices']==state['voices']
+    assert (root/state['voices'][0]['audio']).is_file()
+
+
+def test_bulk_generation_continues_after_subprocess_batch_crashes(client,monkeypatch):
+    state=_bulk_game(85)
+    successes=[]
+    _stub_tts(monkeypatch,successes)
+    success_runner=game.subprocess.run
+    failures=[]
+    class Broken:
+        returncode=1
+        stdout=''
+        stderr='CUDA out of memory (simulated)'
+    def fail_first_batch(args,**kwargs):
+        if not failures:
+            failures.append(True)
+            return Broken() # No result JSON is written for this batch
+        return success_runner(args,**kwargs)
+    monkeypatch.setattr(game.subprocess,'run',fail_first_batch)
+    job={'status':'running','total':0,'completed':0,'errors':[],'message':''}
+    game.generate_game_audio(state['id'],[v['voiceId'] for v in state['voices']],40,job)
+    assert job['status']=='done_with_errors',job
+    assert job['total']==job['completed']==85
+    assert len(job['errors'])==40
+    assert all('CUDA out of memory' in e['error'] for e in job['errors'])
+    assert [len(x) for x in successes]==[40,5]
+    after=game.get_game(state['id'])
+    assert sum(bool(v['audio']) for v in after['voices'])==45
+    assert sum(not bool(v['audio']) for v in after['voices'])==40
+
