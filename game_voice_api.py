@@ -207,6 +207,11 @@ def analyze(gid:str,body:GameAnalyze):
     executor.submit(game.analyze_captions,gid,body.voiceIds,body.model,job)
     return job
 
+@router.get('/api/game/projects/{gid}/audio-health')
+def game_audio_health(gid: str):
+    return _errors(game.audit_game_audio,gid)
+
+
 @router.post('/api/game/projects/{gid}/generate')
 def generate(gid:str,body:GameGenerate):
     if not 1<=len(body.voiceIds)<=10000 or len(set(body.voiceIds))!=len(body.voiceIds):
