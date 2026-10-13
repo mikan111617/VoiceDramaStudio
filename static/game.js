@@ -14,9 +14,15 @@ function voicesOf(scen=scenarioKey){return (game?.voices||[]).filter(v=>v.scenar
 function selectedVoice(){return game?.voices.find(v=>v.voiceId===focusedVoice)}
 function displayStatus(v){return missingAudioIds.has(v.voiceId)?'音声ファイルなし':v.stale?'要再生成':v.audio?'生成済み':'未生成'}
 async function refreshAudioHealth(pid){
- const health=await request('/api/game/projects/'+encodeURIComponent(pid)+'/audio-health');
- if(game?.id===pid)missingAudioIds=new Set(health.missingIds||[]);
- return health;
+ try{
+  const health=await request('/api/game/projects/'+encodeURIComponent(pid)+'/audio-health');
+  if(game?.id===pid)missingAudioIds=new Set(health.missingIds||[]);
+  return health;
+ }catch(e){
+  // Audio auditing must not prevent the project editor from opening.
+  if(game?.id===pid){missingAudioIds=new Set();message('音声ファイル確認に失敗しました: '+e.message,true)}
+  return null;
+ }
 }
 function renderGenerationIssues(job,previous=false){
  const errors=job?.errors||[];
