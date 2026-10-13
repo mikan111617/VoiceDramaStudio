@@ -410,7 +410,7 @@ def test_caption_csv_ui_has_export_import_and_copy_prompt():
     assert '/captions/preview' in js and '/captions/import' in js
     assert 'navigator.clipboard.writeText' in js
     assert '/captions.csv' in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
 
 
 def test_ks_reimport_keeps_explicit_ids_when_speakers_reordered_and_text_changed(client):
@@ -466,7 +466,7 @@ def test_game_ks_ui_shows_persistent_import_error_and_larger_limit():
     assert 'id="importError"' in html
     assert 'showImportError(e.message)' in js
     assert '20*1024*1024' in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
 
 
 def test_ks_reserves_explicit_id_before_reusing_old_id(client):
@@ -649,7 +649,7 @@ def test_game_sheet_filter_ui_status_and_noncharacter_count():
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert 'id="speakerFilterInfo"' in html
     assert 'ignoredSpeakers' in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
 
 
 def test_reference_character_ids_and_aliases_from_legacy_pipeline(client):
@@ -714,7 +714,7 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'for(const item of castRoster())' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
-    assert 'game.js?v=0314' in html and 'game.css?v=0313' in html
+    assert 'game.js?v=0315' in html and 'game.css?v=0313' in html
 
 
 def test_sheet_update_recovers_previously_filtered_ks_aliases_without_reimport(client):
@@ -928,7 +928,7 @@ def test_stage_ui_and_api_are_available_without_changing_legacy_endpoint(client)
     js=(Path(__file__).resolve().parents[1]/'static'/'game.js').read_text('utf-8')
     assert 'stage-ks?expectedRevision=' in js
     assert '/finalize-ks' in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
 
 
 def test_stage_blocks_early_generation_and_export(client):
@@ -1101,7 +1101,7 @@ def test_game_cast_editor_has_same_model_ref_and_design_controls():
     assert 'gameRefPicker' in html and 'ゲーム音声専用の声設定' in html
     for term in ('data-cast-source','data-local-field','data-ref-upload','data-ref-play','data-ref-delete','data-ref-design','voiceModels','renderLocalCastEditor'):
         assert term in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
 
 
 
@@ -1271,4 +1271,74 @@ def test_pronunciation_ui_has_import_edit_tabs_and_preview():
     for term in ('function renderDictionaries','function speechPreview','function setupDictionaryControls',
                   'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText'):
         assert term in js
-    assert 'game.js?v=0314' in html
+    assert 'game.js?v=0315' in html
+
+
+@pytest.mark.parametrize("explicit_format", [False, True])
+def test_mp3_game_export_converts_existing_wav_and_updates_voice_map(client, monkeypatch, explicit_format):
+    """Export MP3 from previously generated WAV without changing stored source files."""
+    s = new_game(client)
+    s = ks_file(client, s, '#mahoru\\n[voice id="v00001"]\\nこんにちは。[p]\\n').json()
+    v = s['voices'][0]
+    old_rel = game._game_audio_relative(v, 'wav')
+    source = game._folder(s['id']) / 'audio' / old_rel
+    source.parent.mkdir(parents=True, exist_ok=True)
+    original = short_wav()
+    source.write_bytes(original)
+    v['audio'] = old_rel
+    v['stale'] = False
+    game._write(s['id'], s)
+
+    if not explicit_format:
+        change = client.put(f'/api/game/projects/{s["id"]}', json={
+            'expectedRevision': s['revision'], 'changes': {'format': 'mp3'},
+        })
+        assert change.status_code == 200, change.text
+        assert change.json()['format'] == 'mp3'
+        assert client.get(f'/api/game/projects/{s["id"]}').json()['format'] == 'mp3'
+    else:
+        assert game.get_game(s['id'])['format'] == 'wav'
+
+    ffmpeg_calls = []
+
+    class Encoded:
+        returncode = 0
+        stderr = ''
+
+    def fake_ffmpeg(args, **kwargs):
+        assert 'libmp3lame' in args
+        assert Path(args[-1]).suffix == '.mp3'
+        assert Path(args[args.index('-i') + 1]) == source
+        ffmpeg_calls.append(args)
+        Path(args[-1]).write_bytes(b'ID3' + bytes(64))
+        return Encoded()
+
+    monkeypatch.setattr(game.subprocess, 'run', fake_ffmpeg)
+    query = '?format=mp3' if explicit_format else ''
+    result = client.get(f'/api/game/projects/{s["id"]}/export.zip' + query)
+    assert result.status_code == 200, result.text[:200]
+    assert result.headers['x-voice-format'] == 'mp3'
+    with ZipFile(io.BytesIO(result.content)) as bundle:
+        media = 'audio/' + old_rel[:-4] + '.mp3'
+        assert media in bundle.namelist()
+        assert bundle.read(media).startswith(b'ID3')
+        assert 'audio/' + old_rel not in bundle.namelist()
+        assert json.loads(bundle.read('voice_maps/scene1.json'))[v['voiceId']] == (
+            'voice/' + old_rel[:-4] + '.mp3')
+        assert json.loads(bundle.read('missing_voices.json')) == []
+    assert len(ffmpeg_calls) == 1
+    assert source.read_bytes() == original
+    assert game.get_game(s['id'])['voices'][0]['audio'] == old_rel
+
+
+def test_game_export_rejects_unsupported_format_without_changing_project(client):
+    s = new_game(client)
+    s = ks_file(client, s, '#mahoru\\nこんにちは。[p]\\n').json()
+    invalid = client.put(f'/api/game/projects/{s["id"]}', json={
+        'expectedRevision': s['revision'], 'changes': {'format': 'ogg'},
+    })
+    assert invalid.status_code == 400
+    invalid_zip = client.get(f'/api/game/projects/{s["id"]}/export.zip?format=ogg')
+    assert invalid_zip.status_code == 400
+    assert game.get_game(s['id'])['format'] == 'wav'
+
