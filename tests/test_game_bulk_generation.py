@@ -177,4 +177,11 @@ def test_bulk_generation_continues_after_subprocess_batch_crashes(client,monkeyp
     after=game.get_game(state['id'])
     assert sum(bool(v['audio']) for v in after['voices'])==45
     assert sum(not bool(v['audio']) for v in after['voices'])==40
+    report=client.get(f'/api/game/projects/{state["id"]}/generate/last')
+    assert report.status_code==200, report.text
+    payload=report.json()
+    assert payload['status']=='done_with_errors'
+    assert payload['completed']==85
+    assert len(payload['errors'])==40
+    assert game.get_last_game_generation(state['id'])==payload
 
