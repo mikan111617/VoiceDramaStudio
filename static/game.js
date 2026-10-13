@@ -480,7 +480,18 @@ async function importCaptionCsv(){
  }catch(e){busy('保存エラー');message('CSVを取り込めません: '+e.message,true)}
  finally{$('captionPicker').value=''}
 }
-function downloadZip(){if((game?.pendingKS||[]).length)return message('先に「全KSのボイスIDを一括確定」してください',true);if(!game||!game.scenarios.length)return message('シナリオがありません',true);const link=document.createElement('a');link.href=`/api/game/projects/${game.id}/export.zip`;link.download='game_voice_export.zip';document.body.appendChild(link);link.click();link.remove();message('ゲーム用ZIPを準備しています。未生成音声は missing_voices.json に記録されます。')}
+function downloadZip(){
+ if((game?.pendingKS||[]).length)return message('先に「全KSのボイスIDを一括確定」してください',true);
+ if(!game||!game.scenarios.length)return message('シナリオがありません',true);
+ // Always send the visible selection with this export request. A user may
+ // click export before the asynchronous project-setting save has completed.
+ const fmt=$('exportFormat').value;
+ if(!['wav','mp3'].includes(fmt))return message('書き出し形式が正しくありません',true);
+ const link=document.createElement('a');
+ link.href=`/api/game/projects/${game.id}/export.zip?format=${encodeURIComponent(fmt)}`;
+ link.download='game_voice_export.zip';document.body.appendChild(link);link.click();link.remove();
+ message(`${fmt.toUpperCase()}形式でゲーム用ZIPを書き出しています。${fmt==='mp3'?' 音声の変換には時間がかかります。':''} 生成済みの元WAVは変更されません。`);
+}
 function wire(){$('newProject').onclick=()=>createNew();$('finalizeKs').onclick=finalizeKs;$('projectList').onchange=e=>openGame(e.target.value);for(const [button,picker,kind] of [['importKs','ksPicker','ks'],['importJson','jsonPicker','json'],['importState','statePicker','state'],['importSheet','sheetPicker','sheet'],['importStory','storyPicker','story']]){$(button).onclick=()=>(game?$(picker).click():message('プロジェクトを作成してください',true));$(picker).onchange=()=>uploadFiles($(picker),kind)}$('scenarioList').onclick=e=>{const b=e.target.closest('[data-scenario]');if(b)showScenario(b.dataset.scenario)};
  $('scenarioList').onchange=e=>{if(e.target.matches('[data-mark-scenario]'))markScenario(e.target.dataset.markScenario,e.target.checked)};
  $('includeGeneratedVoices').onchange=e=>{includeReady=e.target.checked;renderScenarios()};
