@@ -386,9 +386,9 @@ function renderTimeline(){
   html+=`<div class="tl-row"><div class="tl-label"><b>${esc(track.name)}</b><small>${these.length} clips</small><button class="track-select-button" data-select-track-below="${esc(track.id)}" title="このトラックと下の全トラックのクリップを選択">以降を全選択</button></div><div class="tl-lane" data-drop-track="${esc(track.id)}" title="音声をここへドロップして配置" style="width:${width}px;--fiveSec:${major}px;--oneSec:${minor}px" data-lane="${esc(track.id)}">`;
   for(const c of these){
    const a=asset(c.assetId);if(!a)continue;
-   const w=Math.max(14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);
+   const w=Math.max(pxPerSec<4?2:pxPerSec<12?6:14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);
    const label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;
-   html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span><div class="clip-handle" data-resize="1"></div></div>`;
+   html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span>${w>=20?\`<div class="clip-handle" data-resize="1"></div>\`:''}</div>`;
   }
   html+='</div></div>';
  }
@@ -967,7 +967,7 @@ function dragMove(e){
  const clips=new Map(activeClips().map(item=>[item.id,item]));
  for(const id of drag.resize?[drag.id]:drag.originals.keys()){
   const item=clips.get(id),el=elements.get(id);
-  if(item&&el){el.style.left=item.start*pxPerSec+'px';el.style.width=Math.max(14,item.duration*pxPerSec)+'px'}
+  if(item&&el){el.style.left=item.start*pxPerSec+'px';el.style.width=Math.max(pxPerSec<4?2:pxPerSec<12?6:14,item.duration*pxPerSec)+'px'}
  }
 }
 function dragEnd(e){
