@@ -24,6 +24,22 @@ async function refreshAudioHealth(pid){
   return null;
  }
 }
+function generationCounts(job){
+ const processed=Number(job?.completed)||0,total=Number(job?.total)||0;
+ const failed=Number.isInteger(job?.failed)?job.failed:(job?.errors?.length||0);
+ const succeeded=Number.isInteger(job?.succeeded)?job.succeeded:Math.max(0,processed-failed);
+ const unprocessed=Number.isInteger(job?.unprocessed)&&job?.status!=='running'?job.unprocessed:Math.max(0,total-processed);
+ return {total,processed,failed,succeeded,unprocessed};
+}
+function renderGenerationSummary(job,previous=false){
+ const summary=$('generationSummary');
+ if(!summary)return;
+ if(!job){summary.hidden=true;summary.textContent='';return}
+ const {total,processed,failed,succeeded,unprocessed}=generationCounts(job);
+ const title=previous?'前回の生成結果':job.status!=='running'?'最終生成結果':'生成状況';
+ summary.hidden=false;
+ summary.textContent=`${title}：成功 ${succeeded}件 / 失敗 ${failed}件 / 未処理 ${unprocessed}件（指定 ${total}件・処理済み ${processed}件）`;
+}
 function renderGenerationIssues(job,previous=false){
  const errors=job?.errors||[];
  $('generationIssues').hidden=!errors.length&&job?.status!=='error';
@@ -80,6 +96,7 @@ async function openGame(id){
   }else if(game?.id===id){
    const previous=await request('/api/game/projects/'+encodeURIComponent(id)+'/generate/last');
    renderGenerationIssues(previous,true);
+   renderGenerationSummary(previous,true);
   }
  }catch(e){message(e.message,true)}
 }
@@ -297,7 +314,7 @@ function setupDictionaryControls(){
    saveDictionary('prosody',key,form).then(()=>{if(game?.prosodyDictionary?.[key])form.reset()});
  };
 }
-function renderInspector(){const wrap=$('inspector');const v=selectedVoice();if(!v){wrap.innerHTML='<div class="empty">台詞をクリックすると、演技指示を編集したり生成音声を試聴できます。</div>';return}const profile=resolveSheetProfile(v.speaker)?.profile;wrap.innerHTML=`<h2 class="voice-inspector-title">${esc(v.speaker)}</h2><div class="keypair"><span class="tag">${esc(v.voiceId)}</span><span class="muted">${esc(v.scenario)} ${v.sourceLine?'· line '+v.sourceLine:''}</span></div>${v.sourceId?`<div class="note">ゲーム内ID: <b>${esc(v.sourceId)}</b></div>`:''}<div class="field"><label>元の台詞（シナリオ上の文章）</label><div class="note">${esc(v.text)}</div></div><div class="field"><label>読み上げテキスト（ゲーム原文は変更しません）</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div><div class="pronunciation-preview"><strong>辞書適用後の読み上げ（生成時のみ）</strong><div id="speechPreviewText" class="pronunciation-text">${esc(speechPreview(v.ttsText).spoken)}</div><div id="speechPreviewInstructions" class="pronunciation-note">${speechPreview(v.ttsText).instructions.length?esc('発音指示: '+speechPreview(v.ttsText).instructions.join(' / ')):'発音指示なし'}</div></div><div class="field"><label>演技指示・キャプション（任意）</label><textarea id="caption">${esc(v.caption||'')}</textarea></div><div class="game-voice-edit-actions"><button class="outline" id="saveLine" type="button">この台詞の設定を保存</button><button class="primary" id="generateLine" type="button">✦ このセリフを生成（変更を保存して生成）</button></div>${v.audio?(missingAudioIds.has(v.voiceId)?`<div class="note">登録された音声ファイルが保存先にありません。選択して再生成してください。</div>`:`<div class="field"><label>生成済み音声 ${v.stale?'（編集後・旧テイク）':''}</label><audio class="audio" controls preload="none" src="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}"></audio><a class="outline" style="display:inline-block;margin-top:8px;padding:8px 12px;text-decoration:none" href="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}/download?format=${encodeURIComponent($('exportFormat').value)}">↓ ${$('exportFormat').value.toUpperCase()}をダウンロード</a></div>`):''}${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>（${esc(profile.reading||'')}）<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;}
+function renderInspector(){const wrap=$('inspector');const v=selectedVoice();if(!v){wrap.innerHTML='<div class="empty">台詞をクリックすると、演技指示を編集したり生成音声を試聴できます。</div>';return}const profile=resolveSheetProfile(v.speaker)?.profile;wrap.innerHTML=`<h2 class="voice-inspector-title">${esc(v.speaker)}</h2><div class="keypair"><span class="tag">${esc(v.voiceId)}</span><span class="muted">${esc(v.scenario)} ${v.sourceLine?'· line '+v.sourceLine:''}</span></div>${v.sourceId?`<div class="note">ゲーム内ID: <b>${esc(v.sourceId)}</b></div>`:''}<div class="field"><label>元の台詞（シナリオ上の文章）</label><div class="note">${esc(v.text)}</div></div><div class="field"><label>読み上げテキスト（ゲーム原文は変更しません）</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div><div class="pronunciation-preview"><strong>辞書適用後の読み上げ（生成時のみ）</strong><div id="speechPreviewText" class="pronunciation-text">${esc(speechPreview(v.ttsText).spoken)}</div><div id="speechPreviewInstructions" class="pronunciation-note">${speechPreview(v.ttsText).instructions.length?esc('発音指示: '+speechPreview(v.ttsText).instructions.join(' / ')):'発音指示なし'}</div></div><div class="field"><label>演技指示・キャプション（任意）</label><textarea id="caption">${esc(v.caption||'')}</textarea></div><div class="game-voice-edit-actions"><button class="outline" id="saveLine" type="button">この台詞の設定を保存</button><button class="primary" id="generateLine" type="button">✦ このセリフを生成（変更を保存して生成）</button></div>${v.audio?(missingAudioIds.has(v.voiceId)?`<div class="note">登録された音声ファイルが保存先にありません。選択して再生成してください。</div>`:`<div class="field"><label>生成済み音声 ${v.stale?'（編集後・旧テイク）':''}</label><audio class="audio" controls preload="none" src="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}?revision=${encodeURIComponent(game.revision)}"></audio><a class="outline" style="display:inline-block;margin-top:8px;padding:8px 12px;text-decoration:none" href="/api/game/projects/${game.id}/audio/${encodeURIComponent(v.voiceId)}/download?format=${encodeURIComponent($('exportFormat').value)}">↓ ${$('exportFormat').value.toUpperCase()}をダウンロード</a></div>`):''}${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>（${esc(profile.reading||'')}）<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;}
 // Same model choices and parameters as VoiceDrama Studio's cast editor.
 const voiceModels={
  irodori:[['Aratako/Irodori-TTS-v4.1-Small','Irodori v4.1 Small'],['Aratako/Irodori-TTS-v4-Large','Irodori v4 Large'],['Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only','Irodori Large INT8'],['Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only','Irodori Large INT4'],['phasefield-audio/Irodori-TTS-v4.1-Anime','Irodori v4.1 Anime'],['phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only','Irodori Anime INT8']],
@@ -444,13 +461,14 @@ async function startGeneration(overrideIds=null){
  const outputFormat=$('exportFormat').value;
  if(!['wav','mp3'].includes(outputFormat))return message('生成する音声形式が正しくありません',true);
  const only=ids.length===1?game.voices.find(v=>v.voiceId===ids[0]):null;
- const oneLinePreview=only?'\\n\\n読み上げ文章（保存済み）:\\n'+only.ttsText:'';
+ const oneLinePreview=only?'\n\n読み上げ文章（保存済み）:\n'+only.ttsText:'';
  if(!confirm(`${ids.length}件の音声を${outputFormat.toUpperCase()}形式で生成します。\n${ready?'生成済み '+ready+'件を再生成します。\\n':''}モデルごとに分割して順番に処理します。${oneLinePreview}\n続行しますか？`))return;
  try{
   const pid=game.id;
   const job=await request(`/api/game/projects/${pid}/generate`,json('POST',{voiceIds:ids,numSteps:steps,format:outputFormat}));
   activeGameGeneration={jobId:job.id,pid};
   $('generationIssues').hidden=true;
+  renderGenerationSummary(job);
   message(`${ids.length}件の${outputFormat.toUpperCase()}音声生成を開始しました`);
   $('generateSelected').disabled=true;$('cancelGameGeneration').hidden=false;
   poll(job.id,pid);
@@ -471,6 +489,7 @@ function poll(id,pid=game?.id){
    $('jobStatus').textContent=`${job.message} — ${job.completed}/${job.total||0} 件${job.errors?.length?' · エラー'+job.errors.length:''}`;
    $('progressBar').style.width=job.total?Math.round(job.completed/job.total*100)+'%':'0%';
    renderGenerationIssues(job);
+   renderGenerationSummary(job);
    if(job.status!=='running'){
     clearInterval(pollTimer);
     if(activeGameGeneration?.jobId===id){activeGameGeneration=null;$('cancelGameGeneration').hidden=true}
@@ -483,7 +502,8 @@ function poll(id,pid=game?.id){
      marked=new Set([...marked].filter(vid=>game.voices.some(v=>v.voiceId===vid)));
      renderAll();
     }
-    message(job.status==='done'?(job.errors?.length?`生成完了（失敗 ${job.errors.length}件）`:'生成完了'):`生成終了: ${job.message}`,job.status!=='done'||!!job.errors?.length);
+    const counts=generationCounts(job);
+    message(`生成終了：成功 ${counts.succeeded}件 / 失敗 ${counts.failed}件 / 未処理 ${counts.unprocessed}件`,job.status!=='done'||counts.failed>0);
    }
   }catch(e){
    clearInterval(pollTimer);
