@@ -141,3 +141,9 @@
 .scenario-select-row .scenario-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .scenario-select-row .scenario-btn span:last-child{flex:none;white-space:nowrap}
 #cancelGameGeneration[hidden]{display:none!important}
+
+/* Make spoken-text save and single-line generation unambiguous. */
+.game-voice-edit-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.game-voice-edit-actions button{flex:1 1 135px;min-height:36px;white-space:normal}
+.generation-summary{border:1px solid var(--line,#95b4c4);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;font-weight:700;margin:8px 0;background:var(--surface,#f4f8fa)}
+.generation-summary[hidden]{display:none}
