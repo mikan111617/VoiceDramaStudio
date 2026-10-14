@@ -10,7 +10,7 @@ function editor(){
  const elements=new Map(),shell={clientWidth:728,scrollLeft:0,scrollTop:0};
  const ctx=vm.createContext({structuredClone,setTimeout:()=>0,clearTimeout:()=>{},console,
   localStorage:{setItem(){},getItem(){return null}},
-  document:{getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:'',value:'',classList:{toggle(){}}});return elements.get(id)},
+  document:{getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:'',value:'',style:{},classList:{toggle(){}}});return elements.get(id)},
    querySelector:selector=>selector==='.timeline-shell'?shell:null,querySelectorAll:()=>[]}});
  const source=fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
  vm.runInContext(source.slice(0,source.lastIndexOf('\ninstallPanelResizers();')),ctx);
