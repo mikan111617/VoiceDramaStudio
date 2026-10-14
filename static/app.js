@@ -315,14 +315,97 @@ function renderEditor(){if(!state)return;const act=$('panelActions');const title
  renderLibraryView();
  }
 }
+const TIMELINE_ZOOM_KEY='vds.timeline.zoom.v1';
+const TIMELINE_MIN_PX_PER_SEC=.001,TIMELINE_MAX_PX_PER_SEC=200,TIMELINE_LABEL_WIDTH=108;
+function clampTimelineZoom(value){
+ const number=Number(value);
+ return Number.isFinite(number)?Math.max(TIMELINE_MIN_PX_PER_SEC,Math.min(TIMELINE_MAX_PX_PER_SEC,number)):38;
+}
+function timelineZoomToSlider(value){
+ const px=clampTimelineZoom(value);
+ return Math.round(100*Math.log(px/TIMELINE_MIN_PX_PER_SEC)/Math.log(TIMELINE_MAX_PX_PER_SEC/TIMELINE_MIN_PX_PER_SEC));
+}
+function timelineSliderToZoom(value){
+ const fraction=Math.max(0,Math.min(100,Number(value)||0))/100;
+ return TIMELINE_MIN_PX_PER_SEC*Math.pow(TIMELINE_MAX_PX_PER_SEC/TIMELINE_MIN_PX_PER_SEC,fraction);
+}
+function timelineTickStep(px=pxPerSec){
+ const target=90/Math.max(px,TIMELINE_MIN_PX_PER_SEC);
+ const options=[1,2,5,10,15,30,60,120,300,600,900,1800,3600,7200,14400,28800,86400,172800,604800,1209600];
+ return options.find(n=>n>=target)||Math.ceil(target/86400)*86400;
+}
+function timelineTickName(seconds){
+ if(seconds<60)return seconds+'秒';
+ if(seconds%3600===0)return (seconds/3600)+'時間';
+ if(seconds%60===0)return (seconds/60)+'分';
+ return seconds+'秒';
+}
+function timelineTickLabel(seconds){
+ const whole=Math.round(seconds),hours=Math.floor(whole/3600),mins=Math.floor(whole%3600/60),secs=whole%60;
+ return hours?hours+':'+String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0'):
+   String(mins).padStart(2,'0')+':'+String(secs).padStart(2,'0');
+}
 function timelineDuration(){return Math.max(40,...activeClips().map(c=>Number(c.start||0)+Number(c.duration||0)+7))}
-function renderTimeline(){if(!state)return;syncClipSelection();const duration=timelineDuration(),width=Math.ceil(duration*pxPerSec),clips=activeClips();let html=`<div class="tl-ruler"><div class="tl-ruler-side">TIME</div><div class="tl-ruler-scale" data-ruler="1" style="width:${width}px">`;
- for(let t=0;t<duration;t+=5)html+=`<div class="tl-tick" style="left:${t*pxPerSec}px">${fmt(t)}</div>`;html+='</div></div>';
- for(const track of state.tracks){const these=clips.filter(c=>c.trackId===track.id);html+=`<div class="tl-row"><div class="tl-label"><b>${esc(track.name)}</b><small>${these.length} clips</small><button class="track-select-button" data-select-track-below="${esc(track.id)}" title="このトラックと下の全トラックのクリップを選択">以降を全選択</button></div><div class="tl-lane" data-drop-track="${esc(track.id)}" title="音声をここへドロップして配置" style="width:${width}px;--fiveSec:${5*pxPerSec}px;--oneSec:${pxPerSec}px" data-lane="${esc(track.id)}">`;
- for(const c of these){const a=asset(c.assetId);if(!a)continue;const w=Math.max(14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);let label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span><div class="clip-handle" data-resize="1"></div></div>`}html+='</div></div>'}
- html+='<div id="playhead" class="tl-playhead" style="left:'+((108+currentTime*pxPerSec))+'px"></div>';$('timeline').innerHTML=html;
- $('timelineInfo').textContent=`${clips.length} clips · ${fmt(duration)} · ${state.tracks.length} tracks`;$('zoomNumber').textContent=`${pxPerSec} px/s`;paintClipSelection();updatePlayhead()}
-function updatePlayhead(){const ph=$('playhead');if(ph)ph.style.left=(108+currentTime*pxPerSec)+'px';$('timeDisplay').textContent=fmt(currentTime)}
+function setTimelineZoom(next,fit=false){
+ const shell=document.querySelector('.timeline-shell');
+ const before=pxPerSec;
+ const viewport=shell?.clientWidth||0;
+ // Keep the same moment under the center of the viewport while zooming.
+ const centerTime=Math.max(0,((shell?.scrollLeft||0)+viewport/2-TIMELINE_LABEL_WIDTH)/before);
+ pxPerSec=clampTimelineZoom(next);
+ renderTimeline();
+ if(shell){
+  if(fit)shell.scrollLeft=0;
+  else shell.scrollLeft=Math.max(0,TIMELINE_LABEL_WIDTH+centerTime*pxPerSec-viewport/2);
+ }
+ try{localStorage.setItem(TIMELINE_ZOOM_KEY,String(pxPerSec))}catch(_){}
+}
+function fitTimeline(){
+ if(!state)return;
+ const shell=document.querySelector('.timeline-shell');
+ if(!shell)return;
+ const visible=Math.max(50,shell.clientWidth-TIMELINE_LABEL_WIDTH-20);
+ setTimelineZoom(visible/timelineDuration(),true);
+}
+function restoreTimelineZoom(){
+ try{
+  const value=localStorage.getItem(TIMELINE_ZOOM_KEY);
+  if(value!==null&&value!=='')pxPerSec=clampTimelineZoom(value);
+ }catch(_){}
+}
+function renderTimeline(){
+ if(!state)return;
+ syncClipSelection();
+ const duration=timelineDuration(),width=Math.ceil(duration*pxPerSec),clips=activeClips();
+ const tick=timelineTickStep(),major=tick*pxPerSec,minor=major/5;
+ let html=`<div class="tl-ruler"><div class="tl-ruler-side">TIME</div><div class="tl-ruler-scale" data-ruler="1" style="width:${width}px">`;
+ for(let t=0;t<duration;t+=tick)html+=`<div class="tl-tick" style="left:${t*pxPerSec}px">${timelineTickLabel(t)}</div>`;
+ html+='</div></div>';
+ for(const track of state.tracks){
+  const these=clips.filter(c=>c.trackId===track.id);
+  html+=`<div class="tl-row"><div class="tl-label"><b>${esc(track.name)}</b><small>${these.length} clips</small><button class="track-select-button" data-select-track-below="${esc(track.id)}" title="このトラックと下の全トラックのクリップを選択">以降を全選択</button></div><div class="tl-lane" data-drop-track="${esc(track.id)}" title="音声をここへドロップして配置" style="width:${width}px;--fiveSec:${major}px;--oneSec:${minor}px" data-lane="${esc(track.id)}">`;
+  for(const c of these){
+   const a=asset(c.assetId);if(!a)continue;
+   const w=Math.max(14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);
+   const label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;
+   html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span><div class="clip-handle" data-resize="1"></div></div>`;
+  }
+  html+='</div></div>';
+ }
+ html+='<div id="playhead" class="tl-playhead" style="left:'+(TIMELINE_LABEL_WIDTH+currentTime*pxPerSec)+'px"></div>';
+ $('timeline').innerHTML=html;
+ $('timelineInfo').textContent=`${clips.length} clips · ${fmt(duration)} · ${state.tracks.length} tracks`;
+ $('zoomNumber').textContent=`${Number(pxPerSec.toPrecision(3))} px/s`;
+ $('zoomScale').textContent=`目盛: ${timelineTickName(tick)}`;
+ $('zoom').value=timelineZoomToSlider(pxPerSec);
+ paintClipSelection();
+ updatePlayhead();
+}
+function updatePlayhead(){
+ const ph=$('playhead');
+ if(ph)ph.style.left=(TIMELINE_LABEL_WIDTH+currentTime*pxPerSec)+'px';
+ $('timeDisplay').textContent=fmt(currentTime);
+}
 const models={irodori:[['Aratako/Irodori-TTS-v4.1-Small','Irodori v4.1 Small'],['Aratako/Irodori-TTS-v4-Large','Irodori v4 Large (FP32)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only','Irodori Large INT8 (RTX 4070向け)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only','Irodori Large INT4'],['phasefield-audio/Irodori-TTS-v4.1-Anime','Irodori v4.1 Anime'],['phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only','Irodori Anime INT8']],qwen:[['Qwen/Qwen3-TTS-12Hz-1.7B-Base','Qwen3 Base 1.7B'],['Qwen/Qwen3-TTS-12Hz-0.6B-Base','Qwen3 Base 0.6B'],['Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign','Qwen3 Voice Design 1.7B']]};
 function modelSelect(engine,value){return `<select id="lineModel"><option value="">モデルを選択</option>${(models[engine]||models.irodori).map(([id,n])=>`<option value="${esc(id)}" ${value===id?'selected':''}>${esc(n)}</option>`).join('')}<option value="custom" ${value&&!models[engine]?.some(x=>x[0]===value)?'selected':''}>その他（直接入力）</option></select><input id="modelCustom" placeholder="Hugging Face モデルID / 量子化モデルのサブフォルダ" style="${value&&!models[engine]?.some(x=>x[0]===value)?'':'display:none;'}margin-top:6px" value="${value&&!models[engine]?.some(x=>x[0]===value)?esc(value):''}">`}
 function getLineTtsSource(l){
@@ -1093,7 +1176,10 @@ function wire(){
  $('navScript').onclick=()=>setView('script');$('navVoices').onclick=()=>setView('voices');$('navAssets').onclick=()=>setView('assets');
  $('rewindBtn').onclick=stop;$('playBtn').onclick=play;$('stopBtn').onclick=stop;
  $('reflowBtn').onclick=()=>{reflow();dirtyState();renderTimeline();toast('台詞を順番どおりに再配置しました')};
- $('zoom').oninput=e=>{pxPerSec=Number(e.target.value);renderTimeline()};
+ $('zoom').oninput=e=>setTimelineZoom(timelineSliderToZoom(e.target.value));
+ $('zoomOutBtn').onclick=()=>setTimelineZoom(pxPerSec/1.6);
+ $('zoomInBtn').onclick=()=>setTimelineZoom(pxPerSec*1.6);
+ $('zoomFitBtn').onclick=fitTimeline;
  $('selectAllClips').onclick=()=>selectClipGroup(activeClips());
  $('selectTrackClips').onclick=selectTrackClips;
  $('selectFollowingClips').onclick=selectFollowingClips;
@@ -1130,4 +1216,4 @@ function wire(){
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''} });
 }
 installPanelResizers();
-wire();ensureProject().catch(e=>{toast('初期化に失敗しました: '+e.message,true);$('saveState').textContent='起動エラー'});
+restoreTimelineZoom();wire();ensureProject().catch(e=>{toast('初期化に失敗しました: '+e.message,true);$('saveState').textContent='起動エラー'});
