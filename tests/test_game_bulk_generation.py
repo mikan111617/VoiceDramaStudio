@@ -64,6 +64,7 @@ def test_bulk_generation_processes_more_than_500_with_small_batches(client,monke
     game.generate_game_audio(state['id'],[v['voiceId'] for v in state['voices']],40,job)
     assert job['status']=='done',job
     assert job['completed']==job['total']==501
+    assert (job['succeeded'],job['failed'],job['unprocessed'])==(501,0,0)
     assert len(batches)==13
     assert sum(map(len,batches))==501
     assert all(1<=len(chunk)<=40 for chunk in batches)
@@ -81,6 +82,7 @@ def test_bulk_generation_stops_between_batches(client,monkeypatch):
     assert job['status']=='cancelled',job
     assert job['completed']==40
     assert job['total']==85
+    assert (job['succeeded'],job['failed'],job['unprocessed'])==(40,0,45)
     assert len(batches)==1
     assert sum(bool(v['audio']) for v in game.get_game(state['id'])['voices'])==40
 
@@ -93,6 +95,7 @@ def test_bulk_generation_reports_partial_errors_without_discarding_others(client
     game.generate_game_audio(state['id'],[v['voiceId'] for v in state['voices']],40,job)
     assert job['status']=='done_with_errors'
     assert job['completed']==42
+    assert (job['succeeded'],job['failed'],job['unprocessed'])==(41,1,0)
     assert len(job['errors'])==1
     result=game.get_game(state['id'])
     assert result['voices'][1]['audio']==''
@@ -172,6 +175,7 @@ def test_bulk_generation_continues_after_subprocess_batch_crashes(client,monkeyp
     assert job['status']=='done_with_errors',job
     assert job['total']==job['completed']==85
     assert len(job['errors'])==40
+    assert (job['succeeded'],job['failed'],job['unprocessed'])==(45,40,0)
     assert all('CUDA out of memory' in e['error'] for e in job['errors'])
     assert [len(x) for x in successes]==[40,5]
     after=game.get_game(state['id'])
@@ -183,5 +187,46 @@ def test_bulk_generation_continues_after_subprocess_batch_crashes(client,monkeyp
     assert payload['status']=='done_with_errors'
     assert payload['completed']==85
     assert len(payload['errors'])==40
+    assert (payload['succeeded'],payload['failed'],payload['unprocessed'])==(45,40,0)
     assert game.get_last_game_generation(state['id'])==payload
+
+
+def test_updated_individual_spoken_text_reaches_actual_worker_and_original_is_retained(client,monkeypatch):
+    """The editable TTS sentence, not original script text, is sent to speech generation."""
+    state=_bulk_game(1)
+    voice=state['voices'][0]
+    voice['text']='元のゲームシナリオです。'
+    voice['ttsText']=voice['text']
+    game._write(state['id'],state)
+    response=client.put(f'/api/game/projects/{state["id"]}',json={
+        'expectedRevision':state['revision'],
+        'changes':{'voices':[{'voiceId':voice['voiceId'],
+                              'ttsText':'変更したセリフを読み上げてください。',
+                              'caption':'少しゆっくり話す'}]}})
+    assert response.status_code==200,response.text
+    latest=response.json()['voices'][0]
+    assert latest['text']=='元のゲームシナリオです。'
+    assert latest['ttsText']=='変更したセリフを読み上げてください。'
+    batches=[]
+    _stub_tts(monkeypatch,batches)
+    original_run=game.subprocess.run
+    captured=[]
+    def inspecting_worker(args,**kwargs):
+        payload=json.loads(Path(args[2]).read_text(encoding='utf8'))
+        captured.append(payload['items'][0])
+        return original_run(args,**kwargs)
+    monkeypatch.setattr(game.subprocess,'run',inspecting_worker)
+    job={'status':'running','total':1,'completed':0,'errors':[],'message':''}
+    game.generate_game_audio(state['id'],[voice['voiceId']],40,job)
+    assert job['status']=='done',job
+    assert (job['succeeded'],job['failed'],job['unprocessed'])==(1,0,0)
+    assert captured[0]['text']=='変更したセリフを読み上げてください。'
+    assert captured[0]['caption']=='少しゆっくり話す'
+    saved=game.get_game(state['id'])['voices'][0]
+    assert saved['text']=='元のゲームシナリオです。'
+    assert saved['ttsText']=='変更したセリフを読み上げてください。'
+    assert saved['audio'] and not saved['stale']
+    last=client.get(f'/api/game/projects/{state["id"]}/generate/last')
+    assert last.status_code==200
+    assert last.json()['succeeded']==1
 
