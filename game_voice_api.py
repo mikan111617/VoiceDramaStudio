@@ -228,7 +228,7 @@ def generate(gid:str,body:GameGenerate):
     _errors(game.generation_groups,gid,set(body.voiceIds))
     jid='gj_'+uuid.uuid4().hex[:16]
     output_format=body.format or str(state.get('format','wav')).lstrip('.')
-    job={'id':jid,'projectId':gid,'status':'running','message':'生成の準備中','completed':0,'total':len(body.voiceIds),'errors':[],'format':output_format}
+    job={'id':jid,'projectId':gid,'status':'running','message':'生成の準備中','completed':0,'total':len(body.voiceIds),'errors':[],'format':output_format,'succeeded':0,'failed':0,'unprocessed':len(body.voiceIds)}
     game.GAME_JOBS[jid]=job
     executor.submit(game.generate_game_audio,gid,body.voiceIds,body.numSteps,job,output_format)
     return job
