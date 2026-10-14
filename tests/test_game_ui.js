@@ -74,6 +74,7 @@ test('single-line generation first saves edited TTS text, then submits generatio
  };
  view.ctx.confirm=()=>true;
  view.run("game={id:'g_one',revision:1,voices:[{voiceId:'v00100',scenario:'scene1',speaker:'愛理',text:'元の文章です。',ttsText:'元の文章です。',caption:'',audio:'',stale:false}],pendingKS:[],format:'wav'};focusedVoice='v00100';renderAll=()=>{};message=()=>{};poll=()=>{};");
+ view.run("$('ttsText');$('caption');$('numSteps');$('exportFormat')");
  view.elements.get('ttsText').value='変更した文章を読み上げる。';
  view.elements.get('caption').value='落ち着いて話す';
  view.elements.get('numSteps').value='40';
@@ -97,6 +98,7 @@ test('failed spoken-text save must never fall back to original sentence',async()
  };
  view.ctx.confirm=()=>true;
  view.run("game={id:'g_one',revision:1,voices:[{voiceId:'v00100',scenario:'scene1',speaker:'愛理',text:'元の文章。',ttsText:'元の文章。',caption:'',audio:'',stale:false}],pendingKS:[],format:'wav'};focusedVoice='v00100';renderAll=()=>{};message=()=>{};poll=()=>{};");
+ view.run("$('ttsText');$('caption');$('numSteps');$('exportFormat')");
  view.elements.get('ttsText').value='変更された文章。';
  view.elements.get('caption').value='';
  view.elements.get('numSteps').value='40';
