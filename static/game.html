@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Game Voice | VoiceDrama Studio</title>
-<link rel="stylesheet" href="/static/game.css?v=0314"><link rel="stylesheet" href="/static/harbor.css?v=0313"></head>
+<link rel="stylesheet" href="/static/game.css?v=0315"><link rel="stylesheet" href="/static/harbor.css?v=0313"></head>
 <body>
 <header class="harbor-masthead"><canvas class="harbor-art" aria-hidden="true"></canvas><div class="harbor-brand"><strong>HARBOR ATELIER</strong><span>VoiceDrama Studio · 音声制作のアトリエ</span></div><button type="button" id="harborFocus" class="harbor-focus-button" aria-pressed="false">集中表示</button></header>
 <header class="bar">
@@ -76,7 +76,7 @@
 <aside class="details"><div class="details-scroll"><div class="micro">VOICE INSPECTOR</div><div id="inspector"><div class="empty">台詞を選択すると、ボイスID・話者・演技指示・音声を確認できます。</div></div>
 
 </div><div id="resizeGameProduction" class="game-resizer horizontal" role="separator" aria-orientation="horizontal" aria-label="ボイス編集と生成操作の高さを調整" tabindex="0"></div><div class="production"><div class="micro">GAME BUILD</div><div class="inline"><label>生成・ダウンロード・ZIPの音声形式 <select id="exportFormat"><option value="wav">WAV</option><option value="mp3">MP3（FFmpeg）</option></select></label><label>ステップ <input id="numSteps" type="number" min="1" max="80" value="40"></label></div><p class="helper">ここで選んだ形式で新しい音声を保存・個別ダウンロードします。以前のWAVも再生成せずMP3で個別ダウンロードできます。ゲーム用ZIPも選択形式で出力します（MP3変換にはFFmpegが必要です）。</p>
-<label class="small-label">Ollamaモデル <input id="ollamaModel" type="text" value="gemma4:12b" placeholder="gemma4:12b"></label><div class="inline"><button id="analyzeSelected" class="outline">✦ 演技指示を解析</button></div><div class="inline"><button id="generateSelected" class="primary">✦ 選択分を一括生成</button><button id="cancelGameGeneration" class="outline" hidden>■ 生成停止</button><button id="exportZip" class="outline">↓ ゲーム用ZIP</button></div><p id="jobStatus" class="helper">ゲーム用シナリオ・ボイスID一覧・音声ファイルを出力します。</p>
+<label class="small-label">Ollamaモデル <input id="ollamaModel" type="text" value="gemma4:12b" placeholder="gemma4:12b"></label><div class="inline"><button id="analyzeSelected" class="outline">✦ 演技指示を解析</button></div><div class="inline"><button id="generateSelected" class="primary">✦ 選択分を一括生成</button><button id="cancelGameGeneration" class="outline" hidden>■ 生成停止</button><button id="exportZip" class="outline">↓ ゲーム用ZIP</button></div><p id="jobStatus" class="helper">ゲーム用シナリオ・ボイスID一覧・音声ファイルを出力します。</p><p id="generationSummary" class="generation-summary" role="status" aria-live="polite" hidden></p>
 <p id="audioHealthNotice" class="helper" hidden></p>
 <details id="generationIssues" hidden><summary>失敗したボイスID・エラー内容を表示</summary><pre id="generationIssueLog" style="white-space:pre-wrap;max-height:180px;overflow:auto;font-size:11px"></pre></details>
 <div class="progress"><div id="progressBar"></div></div>
@@ -87,5 +87,5 @@
 <input id="captionPicker" type="file" accept=".csv,text/csv" hidden>
 <input id="ksPicker" type="file" accept=".ks" multiple hidden><input id="jsonPicker" type="file" accept=".json,application/json" hidden><input id="statePicker" type="file" accept=".json,application/json" hidden><input id="sheetPicker" type="file" accept=".json,application/json" hidden><input id="storyPicker" type="file" accept=".json,application/json" hidden>
 <div id="toasts" class="toasts"></div>
-<script src="/static/harbor.js?v=0313" defer></script><script src="/static/game.js?v=0317" defer></script>
+<script src="/static/harbor.js?v=0313" defer></script><script src="/static/game.js?v=0318" defer></script>
 </body></html>
