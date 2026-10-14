@@ -1380,6 +1380,7 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
         if fmt not in AUDIO_FORMATS:
             raise ValueError('音声形式はWAVまたはMP3を指定してください')
         job['format']=fmt
+        job['succeeded']=0
         if not groups:raise ValueError('生成する台詞がありません')
         buckets=defaultdict(list)
         for v,engine,model,cast,refs in groups:
@@ -1457,6 +1458,9 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                                         target['stale']=bool(target.get('ttsText')!=v.get('ttsText')
                                             or target.get('caption')!=v.get('caption'))
                                         _save(pid,state,state['revision'])
+                                        # Count only audio that was published AND whose
+                                        # persisted voice metadata points to the new file.
+                                        job['succeeded']+=1
                                     else:
                                         job['errors'].append({'id':v['voiceId'],'error':'台詞が見つかりません'})
                             except (OSError,ValueError,RuntimeError) as exc:
@@ -1472,6 +1476,9 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
     except Exception as exc:
         job['status']='error';job['message']=str(exc)
     finally:
+        job['failed']=len(job.get('errors',[]))
+        job['unprocessed']=max(0,job.get('total',0)-job.get('completed',0))
+        job['succeeded']=max(0,job.get('succeeded',0))
         # Preserve errors from a long generation even after restarting the app.
         # This report never modifies an existing audio take.
         try:
@@ -1480,7 +1487,8 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                 path.parent.mkdir(parents=True,exist_ok=True)
                 staged=path.with_name('.last_generation_'+uuid.uuid4().hex+'.tmp')
                 report={k:job.get(k) for k in
-                        ('id','projectId','status','message','completed','total','format','errors')}
+                        ('id','projectId','status','message','completed','total','format','errors',
+                         'succeeded','failed','unprocessed')}
                 try:
                     staged.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf8')
                     os.replace(staged,path)
