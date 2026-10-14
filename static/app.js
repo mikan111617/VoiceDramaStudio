@@ -388,7 +388,7 @@ function renderTimeline(){
    const a=asset(c.assetId);if(!a)continue;
    const w=Math.max(pxPerSec<4?2:pxPerSec<12?6:14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);
    const label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;
-   html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span>${w>=20?\`<div class="clip-handle" data-resize="1"></div>\`:''}</div>`;
+   html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span>${w>=20?'<div class="clip-handle" data-resize="1"></div>':''}</div>`;
   }
   html+='</div></div>';
  }
