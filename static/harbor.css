@@ -199,3 +199,12 @@ kbd{background:#f4fafc;border-color:var(--line);color:var(--text)}
 @media(max-width:600px){.harbor-masthead{padding:16px 16px 84px;flex-wrap:wrap}.harbor-brand strong{font-size:20px;letter-spacing:2px}.harbor-focus .harbor-masthead{padding:12px 16px}.bar,.topbar{gap:10px}.top-actions .btn.ghost{display:inline-block}.top-actions .small{display:inline}.project-name{min-width:120px;max-width:100%}.voice-list{padding:12px}.voice-row{padding:14px 12px}.voice-row-meta{gap:8px}.pane-head{padding:14px}.toolset{width:100%}.side-tabs{grid-template-columns:1fr}.speaker-select-tools button{white-space:normal}.production .inline{flex-wrap:wrap}.production .inline>button{flex-basis:100%}.inspector-grid{gap:10px}.workbench-title{align-items:flex-start}.brand{min-width:0}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.progress div,.panel-resizer{transition:none}}
 @media(max-width:600px){.topbar .project-name{width:100%;min-width:0;max-width:100%}}
+
+/* Adaptive multitrack zoom: expanded range, seconds/minutes/hours and fit view. */
+.timeline-zoom-tools{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-width:0}
+.timeline-zoom-tools #zoom{width:clamp(90px,11vw,160px);min-width:75px;accent-color:var(--accent)}
+.transport .timeline-zoom-tools button{border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--text);padding:5px 9px;line-height:1.2;min-width:28px;font-size:14px}
+.transport .timeline-zoom-tools button:hover,.transport .timeline-zoom-tools button:focus-visible{background:#dceef5;border-color:#79a7c0;outline-color:var(--accent)}
+.transport .timeline-zoom-tools .zoom-fit{font-size:11px;white-space:nowrap;padding:7px 9px}
+.timeline-zoom-tools #zoomNumber{min-width:58px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.timeline-zoom-tools #zoomScale{white-space:nowrap}
