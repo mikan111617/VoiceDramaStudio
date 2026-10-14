@@ -7,9 +7,11 @@ const vm=require('node:vm');
 const path=require('node:path');
 
 function editor(){
- const elements=new Map();
+ const elements=new Map(),shell={clientWidth:728,scrollLeft:0,scrollTop:0};
  const ctx=vm.createContext({structuredClone,setTimeout:()=>0,clearTimeout:()=>{},console,
-  document:{getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',classList:{toggle(){}}});return elements.get(id)},querySelectorAll:()=>[]}});
+  localStorage:{setItem(){},getItem(){return null}},
+  document:{getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:'',value:'',classList:{toggle(){}}});return elements.get(id)},
+   querySelector:selector=>selector==='.timeline-shell'?shell:null,querySelectorAll:()=>[]}});
  const source=fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
  vm.runInContext(source.slice(0,source.lastIndexOf('\ninstallPanelResizers();')),ctx);
  vm.runInContext(`
@@ -126,4 +128,54 @@ test('timeline dialogue selection scrolls the corresponding script line without 
  assert.deepEqual(e.get("activeIds"),['dialogue-1']);
  e.run("selectClip('b')");
  assert.equal(e.get("scrollPosition"),300); // BGM has no associated script line.
+});
+
+test('zoom out adjusts ticks from seconds to minutes while keeping clip timing unchanged',()=>{
+ const e=editor();
+ e.run("state.assets=[{id:'audio',name:'sound.wav'}];state.clips[0].assetId='audio';");
+ const original=e.get('state.clips');
+ assert.equal(e.get('timelineTickStep(38)'),5);
+ assert.equal(e.get('timelineTickStep(.5)'),300);
+ assert.equal(e.get('timelineTickStep(.02)'),7200);
+ e.run("setTimelineZoom(.5)");
+ assert.equal(e.get('pxPerSec'),.5);
+ assert.equal(e.get("$('zoomScale').textContent"),'目盛: 5分');
+ assert.ok(e.get("$('timeline').innerHTML.includes('00:00')"));
+ assert.deepEqual(e.get('state.clips'),original);
+});
+
+test('fit-to-scene shows hours on narrow timeline and preserves source positions',()=>{
+ const e=editor();
+ e.run("state.clips[0].start=5400;state.clips[0].duration=900;state.assets=[{id:'audio',name:'sound.wav'}];state.clips[0].assetId='audio';");
+ const clips=e.get('state.clips');
+ e.run("fitTimeline()");
+ const duration=e.get('timelineDuration()'),scale=e.get('pxPerSec');
+ assert.ok(scale<1,scale);
+ assert.ok(duration*scale<=600+1e-6,{duration,scale});
+ assert.equal(e.get("document.querySelector('.timeline-shell').scrollLeft"),0);
+ assert.deepEqual(e.get('state.clips'),clips);
+ assert.ok(e.get("$('zoomNumber').textContent.includes('px/s')"));
+});
+
+test('zooming preserves the center time in a scrolled timeline',()=>{
+ const e=editor();
+ e.run("state.clips[0].start=300;pxPerSec=20;document.querySelector('.timeline-shell').scrollLeft=1600;");
+ const centerBefore=e.get("(document.querySelector('.timeline-shell').scrollLeft+728/2-108)/pxPerSec");
+ e.run("setTimelineZoom(40)");
+ const centerAfter=e.get("(document.querySelector('.timeline-shell').scrollLeft+728/2-108)/pxPerSec");
+ assert.ok(Math.abs(centerBefore-centerAfter)<1e-9);
+ assert.equal(e.get('pxPerSec'),40);
+});
+
+test('time-axis zoom slider uses a logarithmic scale for long scenes',()=>{
+ const e=editor();
+ for(const px of [0.001,.03,.2,1,5,38,110,200]){
+  const value=e.get('timelineZoomToSlider('+px+')');
+  const actual=e.get('timelineSliderToZoom('+value+')');
+  assert.ok(actual>0&&actual>=.001&&actual<=200);
+  assert.ok(Math.abs(Math.log(actual/px))<.07,{px,value,actual});
+ }
+ assert.equal(e.get('timelineTickName(300)'),'5分');
+ assert.equal(e.get('timelineTickName(3600)'),'1時間');
+ assert.equal(e.get('timelineTickLabel(3660)'),'1:01:00');
 });
