@@ -1,149 +1,238 @@
-:root{--bg:#0c0f16;--surface:#171d29;--side:#111723;--line:#333d4f;--muted:#93a0b1;--text:#e8edf6;--gold:#d9ae6f;--blue:#88b5e4;--green:#7fd3a3;--red:#e69798}
-*{box-sizing:border-box}body{margin:0;color:var(--text);background:var(--bg);font-family:'Noto Sans JP',system-ui,sans-serif;font-size:13px}button,input,textarea,select{font:inherit}button{cursor:pointer;white-space:nowrap;border-radius:8px;border:1px solid var(--line);background:#202837;color:var(--text);padding:10px 12px;font-weight:600}button:hover{border-color:var(--gold)}button:disabled{opacity:.45;cursor:not-allowed}input,textarea,select{color:var(--text);background:#101724;border:1px solid var(--line);border-radius:7px;padding:10px;width:100%}input:focus,textarea:focus,select:focus{outline:1px solid var(--gold)}.bar{height:70px;display:flex;align-items:center;gap:24px;padding:0 25px;border-bottom:1px solid var(--line);background:#111621}.brand{display:flex;gap:12px;align-items:center;min-width:240px}.brand b{display:block;font-size:12px;letter-spacing:2px}.brand small{display:block;color:var(--muted);font-size:9px;letter-spacing:1.5px}.mark{display:grid;place-items:center;color:var(--gold);border:1px solid #765e3e;width:35px;height:35px;border-radius:8px;font-size:23px}.modes{display:flex;align-items:center;gap:6px;background:#0c111b;border:1px solid var(--line);border-radius:11px;padding:5px}.modes a{color:#aab5c6;text-decoration:none;padding:9px 20px;border-radius:8px;font-weight:700}.modes a.active{background:#b78e57;color:#101319}.modes a:not(.active):hover{background:#252e3e}.bar #saveNotice{margin-left:auto;color:var(--muted);font-size:11px}.shell{display:grid;grid-template-columns:260px minmax(420px,1fr) 370px;height:calc(100vh - 70px);min-height:600px}.side{background:var(--side);border-right:1px solid var(--line);display:flex;min-height:0;flex-direction:column}.side-scroll{padding:22px 16px;overflow-y:auto;flex:1}.micro{font-size:10px;font-weight:800;color:var(--gold);letter-spacing:1.9px;margin-bottom:11px}.inline{display:flex;align-items:center;gap:8px}.inline>select{min-width:0;flex:1}.inline>button{flex:1}.side .inline>button{flex:0 0 38px}.button-group{display:grid;gap:8px}.button-group button{text-align:left;font-size:11px}.scenario-list{display:grid;gap:5px;margin:16px 0 0}.scenario-btn{display:flex;align-items:center;justify-content:space-between;text-align:left;gap:8px;padding:12px 10px;width:100%;background:transparent}.scenario-btn.active{background:#2c2c38;border-color:#736046}.scenario-btn span:last-child{color:var(--muted);font-size:11px}.side-help{line-height:1.75;color:var(--muted);font-size:11px;margin-top:20px}.side-foot{padding:17px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;line-height:2}.side-foot strong{color:var(--gold)}.main{display:flex;flex-direction:column;min-height:0;min-width:0}.source-pane{flex:0 0 49%;display:flex;flex-direction:column;min-height:145px;min-width:0;border-bottom:1px solid var(--line)}.pane-head{padding:22px 26px 14px;display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid #262d3a}.pane-head h1{font-size:20px;margin:0 0 6px}.pane-head p{font-size:11px;color:var(--muted);margin:0}.toolset{width:min(245px,50%)}.source-area{overflow:auto;padding:12px 19px 22px;flex:1;background:#10151e}.source-line{display:grid;grid-template-columns:42px 1fr;gap:12px;padding:3px 10px;border-left:3px solid transparent;min-height:25px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;font-family:Consolas,'Noto Sans JP',monospace;font-size:11px;color:#aebacb}.source-line .number{color:#677a90;text-align:right;user-select:none}.source-line.voiced{color:#f1e3c5;cursor:pointer;background:#232635;border-left-color:#8d6c3c;margin:2px 0}.source-line.selected{border-left-color:var(--gold);background:#3c3440}.source-line.untagged{color:#80a3be}.voice-pane{display:flex;min-height:0;flex-direction:column;flex:1}.voice-pane-header{padding:16px 25px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.voice-pane-header h2{margin:0;font-size:15px}.voice-pane-header h2 span{color:var(--muted);font-size:12px}.small-label{font-size:11px;display:flex;gap:7px;align-items:center;color:var(--muted)}.small-label input{width:auto}.voice-list{overflow:auto;flex:1;padding:10px 14px 20px}.voice-row{display:grid;grid-template-columns:26px 92px 95px 1fr auto;gap:10px;align-items:center;width:100%;padding:12px;border:1px solid #313b4a;border-radius:8px;margin-bottom:8px;background:#171e2a;cursor:pointer}.voice-row.selected{border-color:var(--gold);background:#282733}.voice-row input{width:auto}.voice-id{font-family:Consolas,monospace;color:var(--gold);font-size:11px}.voice-speaker{font-weight:700;color:var(--blue);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.voice-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#d2d8e4}.voice-status{font-size:10px;border:1px solid var(--line);padding:4px 7px;border-radius:9px;color:#8c96a8}.voice-status.ready{color:var(--green);border-color:#32644d}.voice-status.stale{color:#ebc78b}.details{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:#151b27}.details-scroll{flex:1;overflow-y:auto;padding:22px 18px}.empty{padding:36px 15px;color:var(--muted);font-size:12px;line-height:1.9;text-align:center}.field{margin-bottom:15px}.field label{display:block;color:#aeb7c6;font-size:11px;margin-bottom:6px}.field textarea{min-height:82px;resize:vertical;line-height:1.7}.voice-inspector-title{font-size:20px;margin:0 0 12px}.keypair{display:flex;gap:8px;align-items:center;margin-bottom:15px}.keypair .tag{border:1px solid #66583f;background:#3b332c;padding:5px 8px;color:#f1d8a8;border-radius:6px;font-family:Consolas,monospace}.keypair .muted{color:var(--muted);font-size:10px}.note{font-size:11px;line-height:1.7;color:#aeb7c6;background:#222c3d;border:1px solid #354960;padding:11px;border-radius:8px;margin-bottom:14px}.divider{border-top:1px solid var(--line);margin:22px 0}.cast-bindings{display:grid;gap:10px}.binding label{font-size:11px;display:block;margin-bottom:5px;color:#d0d9e7}.helper{font-size:11px;color:var(--muted);line-height:1.75;margin:5px 0 13px}.production{padding:17px;border-top:1px solid var(--line);background:#111823}.production label{font-size:10px;color:var(--muted);flex:1}.production label select,.production label input{margin-top:6px}.production .inline{margin:8px 0}.production .inline>button{font-size:11px}.primary{background:linear-gradient(135deg,#c59a5e,#e0b879);color:#181b23;border:0}.outline{background:transparent}.progress{height:5px;background:#313948;border-radius:4px;overflow:hidden;margin-top:8px}.progress div{width:0;height:100%;background:var(--gold);transition:width .25s}.toasts{position:fixed;right:20px;top:80px;z-index:4;display:grid;gap:8px}.toast{padding:13px 17px;background:#283247;border:1px solid #667991;box-shadow:0 10px 35px #0008;border-radius:10px;font-size:11px;max-width:350px}.good{color:var(--green)}.muted{color:var(--muted)}.pill{font-size:10px;color:var(--muted);border:1px solid #3e4c60;padding:5px;border-radius:12px}.audio{width:100%;margin:5px 0 14px;height:36px}#inspector>button{margin:5px 0 12px}
-@media(max-width:1150px){.shell{grid-template-columns:205px minmax(380px,1fr) 320px}.bar{gap:10px}.brand{min-width:175px}.modes a{padding:9px 11px}.voice-row{grid-template-columns:23px 72px 80px 1fr auto;gap:5px}}
-@media(max-width:900px){.shell{display:block;height:auto}.side{min-height:280px}.side-scroll{padding:17px}.main{height:730px}.details{min-height:450px}.bar{height:auto;min-height:70px;flex-wrap:wrap;padding:12px}.bar #saveNotice{margin-left:0}.source-pane{flex-basis:40%}}
-
-/* KS import errors persist until the next import; toasts alone vanish too quickly. */
-.import-error{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;padding:11px 12px;border:1px solid #b86d6d;border-radius:8px;background:#3a2228;color:#ffe0df;font-size:12px;line-height:1.6}
-.import-error[hidden]{display:none!important}
-
-/* Distinguish character sheet registrations from speakers with lines. */
-.binding-heading{margin:16px 0 10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.4px;font-weight:800;color:var(--gold)}
-.binding-help{font-size:11px;line-height:1.6;color:var(--muted);margin:0 0 10px}
-.binding-status{display:block;font-size:10px;color:#8fb6a5;font-weight:500;margin:3px 0 7px}
-.binding-status.sheet-only{color:#a9b3c7}
-.binding-unused{padding-left:10px;border-left:2px solid #48536a}
-
-/* Two-phase project-wide KS identity registration. */
-.id-import-help{margin:10px 0}
-.pending-ks-info{margin:10px 0;font-size:11px;line-height:1.6;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
-.pending-ks-info:not(:empty){padding:10px 12px;border-radius:8px;background:#253044;border:1px solid #49586e}
-.remap-info{margin:12px 0;font-size:11px;line-height:1.5;color:#f1cd91;white-space:pre-wrap;overflow-wrap:anywhere}
-.remap-info:not(:empty){padding:10px;border-radius:8px;background:#332c27;border:1px solid #73583b}
-
-
-/* Game-local voice editor: same fields as VoiceDrama cast settings. */
-.game-cast-card{border:1px solid #3c4d64;border-radius:10px;padding:12px;background:#1c2635;margin:4px 0 12px}
-.game-cast-card .cast-name{font-size:12px;font-weight:700}
-.game-cast-source{display:block;margin:9px 0 10px;color:#a9bfd4;font-size:11px}
-.game-cast-source select,.game-shared-cast select{margin-top:5px;width:100%}
-.game-shared-cast{display:block;color:#a9bfd4;font-size:11px}
-.game-cast-detail{margin-top:9px;border-top:1px solid #43536b;padding:12px 0 2px}
-.game-cast-detail summary{cursor:pointer;color:#efc890;font-size:11px;font-weight:700;white-space:normal;overflow-wrap:anywhere}
-.game-cast-settings{margin-top:15px}
-.game-cast-settings label{display:block;margin:0 0 10px;font-size:11px;color:#aeb7c6}
-.game-cast-settings select,.game-cast-settings textarea{display:block;margin-top:5px;width:100%}
-.game-cast-settings textarea{min-height:65px;resize:vertical;line-height:1.5}
-.game-cast-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
-.game-cast-reference{border:1px solid #3a4c65;border-radius:8px;padding:10px;background:#151e2e}
-.game-cast-reference strong{font-size:11px;color:#d8e6f3}
-.game-ref-row{display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #344358}
-.game-ref-row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:11px}
-.game-ref-row button{padding:6px 7px;font-size:10px;white-space:nowrap}
-.game-ref-row .ref-remove{color:#eaa5a5}
-.game-cast-buttons{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
-.game-cast-buttons button{font-size:10px;white-space:normal;text-align:center;flex:1;min-width:110px}
-@media(max-width:1100px){.game-cast-grid{grid-template-columns:1fr}}
-
-
-/* v0.3.8: VoiceDrama-style left navigation for scenario or cast editing. */
-.shell{grid-template-columns:335px minmax(410px,1fr) 350px}
-.side-head{padding:17px 15px 12px;border-bottom:1px solid var(--line);flex:none}
-.side-head .micro{margin-bottom:9px}
-.side-head .inline>select{min-width:0}
-.side-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:13px}
-.side-tabs button{white-space:normal;font-size:11px;line-height:1.3;min-height:44px;padding:9px 6px;background:transparent}
-.side-tabs button.active{background:#423726;color:#f5d2a0;border-color:#aa8654}
-.side-panel[hidden]{display:none!important}
-.side-panel{min-width:0}
-.side-scroll{padding:18px 15px;min-height:0}
-.side .game-cast-card{padding:10px;margin:4px 0 11px}
-.side .game-cast-grid{grid-template-columns:1fr 1fr}
-.side .game-cast-reference{padding:8px}
-.side .game-ref-row{flex-wrap:wrap}
-.side .game-ref-row span{min-width:100%}
-.side .game-cast-buttons{display:grid;grid-template-columns:1fr}
-.side .binding-status{line-height:1.5}
-/* Select or deselect only the chosen character in the current scenario. */
-.voice-pane-header{gap:15px;align-items:flex-start}
-.voice-selected-count{font-size:11px;color:var(--muted);margin:7px 0 0}
-.voice-select-tools{display:flex;flex-direction:column;align-items:flex-end;gap:10px;min-width:430px}
-.speaker-select-tools{display:flex;align-items:center;gap:6px;width:100%}
-.speaker-select-tools label{font-size:11px;color:var(--muted);white-space:nowrap}
-.speaker-select-tools select{min-width:110px;flex:1;width:auto;padding:8px}
-.speaker-select-tools button{padding:9px 10px;font-size:11px}
-@media(max-width:1250px){.shell{grid-template-columns:290px minmax(390px,1fr) 330px}.voice-pane-header{flex-wrap:wrap}.voice-select-tools{min-width:0;align-items:flex-start;width:100%}}
-@media(max-width:950px){.shell{grid-template-columns:270px minmax(340px,1fr) 300px}.speaker-select-tools{flex-wrap:wrap}.speaker-select-tools label{width:100%}.side .game-cast-grid{grid-template-columns:1fr}}
-@media(max-width:900px){.shell{display:block;height:auto}.side{min-height:280px}.side-scroll{max-height:620px}.side .game-cast-grid{grid-template-columns:1fr 1fr}.voice-select-tools{width:100%}}
-@media(max-width:560px){.speaker-select-tools label{width:100%}.speaker-select-tools select{width:100%;flex-basis:100%}.speaker-select-tools button{flex:1}.voice-pane-header{padding:14px 15px}.side .game-cast-grid{grid-template-columns:1fr}}
-
-/* v0.3.9: per-game pronunciation and prosody dictionary editor */
-.side-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}
-.side-tabs button{font-size:10px;min-width:0;overflow-wrap:anywhere}
-.dict-group{padding-top:20px;border-top:1px solid var(--line);margin-top:18px}
-.dict-group h3{font-size:15px;color:#f2d7aa;margin:0 0 8px}
-.dict-group>button{width:100%;margin:8px 0 10px}
-.dictionary-entries{display:flex;flex-direction:column;gap:7px}
-.dict-entry{border:1px solid #34475d;border-radius:8px;padding:10px;background:#141e2d}
-.dict-entry .dict-title{font-size:12px;font-weight:700;margin-bottom:9px;overflow-wrap:anywhere}
-.dict-entry label,.dictionary-add-form label{display:block;font-size:11px;color:#b7c5d6;margin:6px 0}
-.dict-entry input:not([type=checkbox]),.dict-entry textarea,.dictionary-add-form input,.dictionary-add-form textarea{display:block;width:100%;margin-top:4px;font-size:12px;line-height:1.4;min-width:0}
-.dict-entry textarea,.dictionary-add-form textarea{resize:vertical;min-height:60px}
-.dict-entry .dict-actions{display:flex;gap:8px;align-items:center;margin-top:9px}
-.dict-entry .dict-actions button{flex:1;font-size:11px;padding:7px 8px}
-.dict-entry .dict-actions .dict-delete{color:#eeb1ad}
-.dict-entry details summary{cursor:pointer;font-size:12px}
-.dictionary-add-form{border:1px dashed #5e7190;border-radius:8px;padding:10px;margin-top:15px}
-.dictionary-add-form button{width:100%;margin-top:7px}
-.dict-empty{font-size:12px;color:var(--muted);padding:10px}
-.pronunciation-preview{margin:10px 0 14px;padding:12px;border-radius:8px;border:1px solid #475d75;background:#151f2d;overflow-wrap:anywhere}
-.pronunciation-preview strong{font-size:11px;color:#e1c18f}
-.pronunciation-preview .pronunciation-text{padding:6px 0;font-size:13px;white-space:pre-wrap}
-.pronunciation-preview .pronunciation-note{font-size:11px;color:#aabccf}
-
-/* Browser-local panel sizes. Grips remain reachable when a panel is small. */
+/* Game-voice workbench layout. Loaded after harbor.css, which provides the
+   shared palette (--surface, --line, --accent ...) for both production modes.
+   Layout mirrors VoiceDrama: menu | list | selected line. */
+*{box-sizing:border-box}
+body{margin:0;font-family:'Noto Sans JP',system-ui,sans-serif}
 [hidden]{display:none!important}
-#renameProject{margin-top:8px;width:100%;padding:7px;font-size:11px}
-.remap-info{position:relative;padding:12px 30px 12px 10px!important}
-.notice-close{position:absolute;right:4px;top:4px;padding:2px 6px;background:transparent;border:0;font-size:18px}
-.game-resizer{background:#202938;touch-action:none;position:relative}
-.game-resizer:hover,.game-resizer:focus-visible,.game-resizer.is-resizing{background:#886f4b;outline:none}
+button{cursor:pointer;white-space:nowrap;border-radius:7px;border:1px solid var(--line);padding:9px 13px;font-size:13px}
+button:disabled{cursor:not-allowed}
+input,textarea,select{border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;font-size:14px}
+input[type=checkbox]{width:17px;height:17px;min-width:17px;padding:0;margin:0;accent-color:var(--accent)}
+h1,h2,h3,p{margin:0}
+.micro{display:block;font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--gold);margin-bottom:8px}
+.helper,.side-help{font-size:12px;line-height:1.7;color:var(--muted);margin:6px 0 10px}
+.small-label{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);line-height:1.5}
+.empty{padding:32px 18px;color:var(--muted);font-size:13px;line-height:1.9;text-align:center;border:1px dashed var(--line);border-radius:9px}
+.button-link{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 13px;border:1px solid var(--line);border-radius:7px;font-size:13px;text-decoration:none;color:var(--text);background:var(--surface)}
+.button-link:hover{background:#e2f2f8;border-color:#699fb8}
+
+/* Top bar: mode · project · status · settings · export (same order as VoiceDrama). */
+.topbar .project-name{display:flex;align-items:center;gap:14px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;font-weight:600}
+.top-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.save-state{font-size:12px;color:var(--muted);margin-right:4px;white-space:nowrap}
+
+/* Shell: side menu | resizer | main view | resizer | selected line */
+.shell{display:grid;grid-template-columns:var(--game-side-width,270px) 8px minmax(360px,1fr) 8px var(--game-details-width,380px);min-height:640px}
+.side{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line)}
+.side-head{padding:18px 12px 12px;border-bottom:1px solid var(--line);flex:none}
+.side-head .micro{padding:0 8px}
+.view-nav{display:grid;gap:4px}
+.view-tab{display:flex;align-items:center;gap:11px;width:100%;padding:10px 10px;border:1px solid transparent;border-radius:8px;background:transparent;text-align:left;white-space:normal;position:relative}
+.view-tab .nav-icon{flex:none;width:22px;text-align:center;font-size:16px;color:var(--muted)}
+.view-tab .nav-text{display:flex;flex-direction:column;min-width:0;flex:1}
+.view-tab .nav-text b{font-size:14px;font-weight:600;color:var(--text)}
+.view-tab .nav-text small{font-size:11px;color:var(--muted);line-height:1.4;margin-top:1px}
+.view-tab .nav-short{flex:none;font-size:10px;color:var(--muted)}
+.view-tab.active{background:#d9ecf4;border-color:#9bbfd1}
+.view-tab.active .nav-icon,.view-tab.active .nav-text b{color:var(--accent2)}
+.view-tab:hover{background:#dceef5}
+.nav-badge{position:absolute;right:8px;top:6px;font-size:10px;padding:1px 6px;border-radius:9px;background:#f6e9ce;color:#7e5d26;border:1px solid #dcc59b}
+.side-scroll{flex:1;min-height:0;overflow-y:auto;padding:16px 12px}
+.side-section-title{display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:11px;letter-spacing:1.5px;font-weight:600;color:var(--gold)}
+.side-count{font-size:11px;color:var(--muted);letter-spacing:0;font-weight:400}
+.scenario-help{padding:0 8px;margin:6px 0 10px}
+.scenario-list{display:grid;gap:4px}
+.scenario-list>.side-help{padding:0 8px}
+.scenario-select-row{display:flex;align-items:center;gap:8px;min-width:0;padding-left:8px}
+.scenario-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1;min-width:0;padding:9px 10px;border:1px solid transparent;border-radius:8px;background:transparent;text-align:left}
+.scenario-btn.active{background:#d9ecf4;border-color:#9bbfd1}
+.scenario-btn:hover{background:#dceef5}
+.scenario-name{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:var(--text)}
+.scenario-btn.active .scenario-name{color:var(--accent2);font-weight:600}
+.scenario-stats{font-size:11px;color:var(--muted);white-space:normal}
+.scenario-include{margin:14px 8px 0}
+.scenario-bulk{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:0 0 10px 8px;font-size:11px;color:var(--muted)}
+.scenario-bulk span{margin-right:2px}
+.scenario-bulk button{padding:4px 8px;font-size:11px}
+.side-foot{padding:13px 20px;border-top:1px solid var(--line);font-size:11px;line-height:1.9;color:var(--muted)}
+.side-foot strong{color:var(--gold)}
+
+/* Main views */
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line)}
+.view{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.pane-head{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none}
+.pane-head h1{font-size:21px;font-weight:600;margin:0 0 4px;overflow-wrap:anywhere}
+.pane-head p{font-size:12px;color:var(--muted);line-height:1.7}
+.toolset{width:min(280px,100%)}
+.view-body{flex:1;min-height:0;overflow-y:auto;padding:18px 22px 40px}
+.notice-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 22px 0;padding:10px 14px;border-radius:8px;background:#fbf2df;border:1px solid #dcc59b;color:#7e5d26;font-size:13px;flex:none}
+.notice-banner button{margin-left:auto;padding:6px 11px;font-size:12px}
+
+/* Bulk selection and generation: always directly above the line list. */
+.generate-bar{flex:none;padding:12px 22px;border-bottom:1px solid var(--line);background:#f3f9fb;display:grid;gap:8px}
+.select-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.select-row>button,.speaker-select-tools button{padding:6px 10px;font-size:12px}
+.speaker-select-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:14px;padding-left:14px;border-left:1px solid var(--line)}
+.speaker-select-tools label{flex:none;font-size:12px;color:var(--muted);white-space:nowrap}
+.speaker-select-tools select{width:auto;min-width:140px;max-width:240px;padding:6px 8px;font-size:13px}
+.generate-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-top:8px;border-top:1px dashed var(--line)}
+.selection-summary{display:flex;flex-direction:column;min-width:0}
+.selection-summary strong{font-size:14px;font-weight:600;color:var(--text)}
+.voice-selected-count{font-size:12px;color:var(--muted)}
+.generate-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.generate-actions .primary{min-width:190px}
+.job-area:empty{display:none}
+.job-area .progress{height:5px;border-radius:4px;overflow:hidden;margin-top:2px}
+.job-area .progress>div{width:0;height:100%;transition:width .25s}
+.job-area .helper{margin:4px 0 0}
+.generation-summary{border:1px solid var(--line);border-radius:7px;padding:8px 11px;font-size:12px;line-height:1.5;font-weight:600;margin:4px 0 0;background:var(--surface)}
+#generationIssueLog{white-space:pre-wrap;max-height:180px;overflow:auto;font-size:11px}
+
+/* Line list */
+.voice-pane{flex:1;min-height:120px;display:flex;flex-direction:column}
+.list-head{display:flex;align-items:baseline;gap:8px;padding:10px 22px 4px;font-size:12px;font-weight:600;color:var(--text);flex:none}
+.list-hint{margin-left:auto;font-weight:400;font-size:11px;color:var(--muted)}
+.voice-list{flex:1;min-height:0;overflow:auto;padding:6px 18px 18px}
+.voice-row{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:start;gap:10px;padding:13px 15px;border:1px solid var(--line);border-radius:7px;margin-bottom:8px;background:var(--surface);cursor:pointer}
+.voice-row>input{margin-top:4px}
+.voice-row.selected{background:#e2f2f8;border-color:#699fb8;box-shadow:inset 3px 0 #348bb2}
+.voice-row-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:5px}
+.voice-text{font-size:15px;line-height:1.8}
+.voice-caption{font-size:12px;margin-top:5px}
+.row-play{flex:none;width:30px;height:28px;padding:0;border-radius:50%;font-size:11px;line-height:1;display:grid;place-items:center;color:var(--accent)}
+.row-play.playing{background:var(--accent);color:#fffdf8;border-color:var(--accent)}
+
+/* KS source: below the list, collapsible */
+.view-lines .source-pane{flex:0 0 var(--game-source-height,170px);min-height:0;display:flex;flex-direction:column;border-top:1px solid var(--line);overflow:hidden}
+.source-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 22px;flex:none}
+.source-head .micro{margin:0}
+.compact-panel-button{padding:5px 10px;font-size:12px}
+.source-area{flex:1;min-height:0;overflow:auto;padding:4px 16px 16px}
+.source-line{display:grid;grid-template-columns:42px 1fr;gap:12px;padding:2px 10px;border-left:3px solid transparent;white-space:pre-wrap;overflow-wrap:anywhere;font-family:Consolas,'Noto Sans JP',monospace;font-size:12px;line-height:1.8}
+.source-line .number{text-align:right;user-select:none}
+.source-line.voiced{cursor:pointer}
+.source-line .voice-id{font-weight:600}
+.view-lines.source-collapsed .source-pane{flex:0 0 auto}
+.view-lines.source-collapsed .source-area,.view-lines.source-collapsed #resizeGameSource{display:none}
+
+/* Selected line panel (right). Same role as VoiceDrama's 選択中の台詞・クリップ. */
+.details{display:flex;flex-direction:column;min-width:0;min-height:0}
+.details-scroll{flex:1;min-height:0;overflow-y:auto;padding:18px 18px 30px}
+.voice-inspector-title{font-size:21px;font-weight:600;margin:0 0 6px;overflow-wrap:anywhere}
+.keypair{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.keypair .tag{border:1px solid var(--line);padding:3px 8px;border-radius:6px;font-family:Consolas,monospace;font-size:12px}
+.take-panel{border:1px solid #9bbfd1;border-radius:9px;background:var(--surface);padding:12px 13px;margin-bottom:16px}
+.take-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.take-title{font-size:12px;font-weight:600;letter-spacing:1px;color:var(--gold)}
+.take-panel .audio{width:100%;height:36px;margin:2px 0 6px}
+.take-panel .helper{margin:2px 0 8px}
+.take-actions{display:grid;gap:8px}
+.take-actions>*{width:100%}
+.field{margin-bottom:13px}
+.field label{display:block;margin-bottom:5px}
+.field textarea{min-height:84px;resize:vertical}
+.note{font-size:12px;line-height:1.7;border:1px solid var(--line);padding:10px 11px;border-radius:8px;margin-bottom:12px;overflow-wrap:anywhere}
+.note p{margin:4px 0 0}
+.pronunciation-preview{margin:0 0 13px;padding:10px 12px;border-radius:8px;border:1px solid var(--line);overflow-wrap:anywhere}
+.pronunciation-preview strong{font-size:11px}
+.pronunciation-text{padding:4px 0;font-size:14px;white-space:pre-wrap}
+.pronunciation-note{font-size:11px}
+.game-voice-edit-actions{display:flex;gap:8px;margin:0 0 14px}
+.game-voice-edit-actions button{flex:1}
+
+/* Casts view: wide cards in a responsive grid. */
+.cast-bindings{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px;align-items:start}
+.binding-heading{grid-column:1/-1;margin:6px 0 0;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px;font-weight:600;letter-spacing:.5px;color:var(--gold)}
+.binding-help{grid-column:1/-1;margin:0}
+.cast-bindings>.helper,.cast-bindings>.empty{grid-column:1/-1}
+.game-cast-card{border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--surface)}
+.game-cast-card .cast-name{display:block;font-size:15px;font-weight:600}
+.binding-status{display:block;font-size:11px;font-weight:400;margin:3px 0 4px}
+.binding-unused{border-style:dashed}
+.game-cast-source,.game-shared-cast{display:block;margin:8px 0;font-size:12px}
+.game-cast-source select,.game-shared-cast select{margin-top:5px}
+.game-cast-detail{margin-top:8px;border-top:1px solid var(--line);padding:10px 0 2px}
+.game-cast-detail summary{cursor:pointer;font-weight:600;white-space:normal;overflow-wrap:anywhere}
+.game-cast-settings{margin-top:12px}
+.game-cast-settings label{display:block;margin:0 0 10px;font-size:12px}
+.game-cast-settings select,.game-cast-settings textarea{display:block;margin-top:5px}
+.game-cast-settings textarea{min-height:62px;resize:vertical;line-height:1.5}
+.game-cast-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.game-cast-reference{border:1px solid var(--line);border-radius:8px;padding:10px}
+.game-cast-reference strong{font-size:12px}
+.game-ref-row{display:flex;align-items:center;gap:6px;padding:7px 0;border-bottom:1px solid var(--line)}
+.game-ref-row span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:12px}
+.game-ref-row button{padding:5px 8px;font-size:11px}
+.game-cast-buttons{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+.game-cast-buttons button{flex:1;min-width:140px;white-space:normal;font-size:12px}
+
+/* Pronunciation view: two columns. */
+.dict-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;align-items:start}
+.dict-group{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--surface)}
+.dict-group h3{font-size:16px;margin:0 0 4px}
+.dict-group>button{width:100%;margin:6px 0 10px}
+.dictionary-entries{display:flex;flex-direction:column;gap:7px;margin-top:14px}
+.dict-entry{border:1px solid var(--line);border-radius:8px;padding:10px}
+.dict-entry .dict-title{font-size:13px;font-weight:600;margin-bottom:6px;overflow-wrap:anywhere}
+.dict-entry label,.dictionary-add-form label{display:block;font-size:12px;margin:6px 0}
+.dict-entry input:not([type=checkbox]),.dict-entry textarea,.dictionary-add-form input:not([type=checkbox]),.dictionary-add-form textarea{display:block;margin-top:4px;font-size:13px}
+.dict-entry textarea,.dictionary-add-form textarea{resize:vertical;min-height:58px}
+.dict-entry .dict-actions{display:flex;gap:8px;margin-top:8px}
+.dict-entry .dict-actions button{flex:1;padding:6px 8px;font-size:12px}
+.dict-entry details summary{cursor:pointer;font-size:13px}
+.dict-entry input[type=checkbox]{display:inline-block;vertical-align:middle}
+.dictionary-add-form{border:1px dashed var(--line);border-radius:8px;padding:10px}
+.dictionary-add-form button{width:100%;margin-top:6px}
+.dictionary-add-form .check-label{display:flex;align-items:center;gap:7px}
+.dict-empty{font-size:12px;color:var(--muted);padding:6px 2px}
+
+/* Import view: numbered steps. */
+.import-steps{display:grid;gap:14px;align-content:start}
+.import-card{display:flex;gap:14px;border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--surface)}
+.step-no{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#d9ecf4;color:var(--accent2);font-weight:700}
+.step-body{flex:1;min-width:0}
+.step-body h3{font-size:16px;margin:3px 0 4px}
+.button-row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.pending-ks-info{margin:8px 0;font-size:12px;line-height:1.6;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.pending-ks-info:not(:empty){padding:9px 12px;border-radius:8px;border:1px solid var(--line)}
+.remap-info{position:relative;margin:10px 0;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 30px 10px 12px;border-radius:8px;border:1px solid}
+.notice-close{position:absolute;right:4px;top:4px;padding:2px 7px;background:transparent;border:0;font-size:18px}
+.import-error{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;padding:10px 12px;border:1px solid;border-radius:8px;font-size:12px;line-height:1.6}
+
+/* Dialogs (project switcher, settings) */
+.dialog{width:min(600px,94vw);max-height:86vh;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:24px;background:var(--surface);color:var(--text);box-shadow:0 16px 60px #21465d26}
+.dialog::backdrop{background:#21465d66}
+.dialog h2{font-size:19px;font-weight:600;margin-bottom:6px}
+.dialog-section{border-top:1px solid var(--line);padding:14px 0 6px;margin-top:12px}
+.dialog-section h3{font-size:14px;margin-bottom:10px}
+.dialog-section label{display:block;font-size:12px;color:var(--muted);margin-bottom:10px}
+.dialog-section label input,.dialog-section label select{margin-top:5px}
+.dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:18px}
+.project-choices{display:grid;gap:6px;margin-top:12px}
+.project-choice{display:block;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:8px;white-space:normal;font-size:14px}
+.project-choice small{display:block;font-size:11px;color:var(--muted);margin-top:2px}
+.project-choice.current{border-color:#699fb8;background:#e2f2f8}
+
+/* Resizers */
+.game-resizer{touch-action:none;position:relative}
 .game-resizer.vertical{cursor:col-resize}
 .game-resizer.horizontal{cursor:row-resize;flex:0 0 8px}
 .game-resizing{user-select:none}
 .game-resizing-columns,.game-resizing-columns *{cursor:col-resize!important}
 .game-resizing-rows,.game-resizing-rows *{cursor:row-resize!important}
-.main .source-pane{flex:0 0 var(--game-source-height,49%);min-height:0;overflow:hidden}
-.main .voice-pane{overflow:hidden}
-.source-area,.voice-list,.details-scroll{min-height:0}
-.source-pane>.compact-panel-button{align-self:flex-start;margin:4px 20px;padding:5px 8px;font-size:10px}
-.voice-pane-header{flex-wrap:wrap;padding:12px 16px;gap:8px}
-.voice-select-tools{min-width:0;width:100%;align-items:flex-start}
-.speaker-select-tools{flex-wrap:wrap}
-.details .production{flex:0 0 var(--game-production-height,290px);min-height:0;overflow:auto}
-.details{min-width:0}
-.side{min-width:0}
-.pane-head{flex-wrap:wrap;padding:12px 18px;gap:8px}
-.voice-row{grid-template-columns:23px 70px 75px minmax(0,1fr) auto;gap:5px;padding:10px 8px}
-@media(min-width:901px){.shell{grid-template-columns:var(--game-side-width,290px) 8px minmax(300px,1fr) 8px var(--game-details-width,350px)}}
-@media(max-width:900px){.game-resizer.vertical{display:none}.details{height:700px}.details .production{flex-basis:var(--game-production-height,290px)}}
 
-/* Game-voice multi-file selection: selecting a file never changes its script. */
-.scenario-bulk-controls{border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0 12px}
-.scenario-bulk-controls .small-label{line-height:1.5;white-space:normal}
-.scenario-bulk-controls input[type=checkbox],.scenario-select-row input[type=checkbox]{width:17px;height:17px;min-width:17px;accent-color:var(--gold)}
-.scenario-bulk-buttons{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:10px}
-.scenario-bulk-buttons button{white-space:normal;font-size:10px;padding:7px 5px}
-#clearAllVoiceMarks{grid-column:1 / -1}
-#totalGenerationSelection{display:block;margin:9px 0 0;color:var(--muted)}
-.scenario-select-row{display:flex;align-items:center;gap:8px;min-width:0}
-.scenario-select-row .scenario-btn{min-width:0;flex:1}
-.scenario-select-row .scenario-btn span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.scenario-select-row .scenario-btn span:last-child{flex:none;white-space:nowrap}
-#cancelGameGeneration[hidden]{display:none!important}
+.toasts{position:fixed;right:20px;bottom:20px;z-index:60;display:grid;gap:8px}
+.toast{padding:12px 16px;border:1px solid var(--line);border-radius:9px;font-size:13px;max-width:380px;background:var(--surface)}
 
-/* Make spoken-text save and single-line generation unambiguous. */
-.game-voice-edit-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
-.game-voice-edit-actions button{flex:1 1 135px;min-height:36px;white-space:normal}
-.generation-summary{border:1px solid var(--line,#95b4c4);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;font-weight:700;margin:8px 0;background:var(--surface,#f4f8fa)}
-.generation-summary[hidden]{display:none}
+@media(max-width:1250px){.shell{grid-template-columns:var(--game-side-width,230px) 8px minmax(340px,1fr) 8px var(--game-details-width,330px)}}
+@media(max-width:900px){
+ .shell{display:block;height:auto}
+ .game-resizer.vertical{display:none}
+ .side{min-height:0;border-right:0;border-bottom:1px solid var(--line)}
+ .view-nav{grid-template-columns:1fr 1fr}
+ .side-scroll{max-height:320px}
+ .main{height:860px}
+ .details{height:auto;min-height:420px;border-top:1px solid var(--line)}
+ .top-actions{margin-left:0}
+}
+@media(max-width:600px){.view-nav{grid-template-columns:1fr}.pane-head,.generate-bar{padding-left:14px;padding-right:14px}.generate-actions{margin-left:0;width:100%}.generate-actions>button{flex:1 1 100%}.game-cast-grid{grid-template-columns:1fr}.list-hint{display:none}}

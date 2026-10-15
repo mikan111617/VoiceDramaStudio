@@ -132,3 +132,20 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .bottom-stats{flex-wrap:wrap}
 .tl-clip{touch-action:none}
 .tl-clip:focus-visible{outline:2px solid var(--accent2)}
+
+/* v0.4: shared vocabulary with the game-voice screen. Menu items carry a
+   one-line purpose; bulk actions sit above the line list; the selected
+   line's generate / preview / download live together at the top right. */
+.side-nav{align-items:center}
+.side-nav .nav-text{display:flex;flex-direction:column;min-width:0;flex:1}
+.side-nav .nav-text b{font-size:14px;font-weight:600}
+.side-nav .nav-text small{font-size:11px;font-weight:400;color:var(--muted);line-height:1.4;margin-top:1px;white-space:normal}
+.heading-actions{flex-direction:column;align-items:flex-start}
+.heading-actions .action-group{display:flex;flex-wrap:wrap;gap:8px}
+.heading-actions .action-main{padding-bottom:8px;border-bottom:1px dashed var(--line);width:100%}
+.take-panel{border:1px solid #9bbfd1;border-radius:9px;background:var(--surface);padding:12px 13px;margin-bottom:14px}
+.take-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.take-title{font-size:12px;font-weight:600;letter-spacing:1px;color:var(--gold)}
+.take-panel .field{margin-bottom:8px}
+.take-panel .take-actions{margin-top:6px}
+.take-panel .line-status{margin-left:0}

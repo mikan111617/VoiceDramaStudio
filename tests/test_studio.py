@@ -1,3 +1,4 @@
+import re
 import io
 import sys
 from pathlib import Path
@@ -1048,8 +1049,8 @@ def test_resizable_layout_contains_three_accessible_splitters():
     assert html.count('role="separator"')==3
     assert 'aria-orientation="horizontal"' in html
     assert 'aria-orientation="vertical"' in html
-    assert '/static/app.js?v=0313' in html
-    assert '/static/style.css?v=0313' in html
+    assert re.search(r'/static/app\.js\?v=\d+',html)
+    assert re.search(r'/static/style\.css\?v=\d+',html)
 
 
 def test_resizable_layout_saves_and_restores_without_mutating_project():
@@ -1135,7 +1136,7 @@ def test_cast_delete_ui_wired_and_cache_busted():
     assert 'confirmCastDeleteBtn' in js
     assert '/casts/delete' in js
     assert 'await saveNow();' in js[js.index('async function deleteCast'):js.index('function applyVoice(index)')]
-    assert '/static/app.js?v=0313' in html
+    assert re.search(r'/static/app\.js\?v=\d+',html)
 
 
 def test_asset_files_are_separated_and_servable(client):
@@ -1359,7 +1360,7 @@ def test_scene_and_take_delete_ui_wiring():
     assert '/scenes/${sid}/delete' in js
     assert 'id="deleteSelectedTakeBtn"' in js
     assert '/lines/${line.id}/takes/${take.id}/delete' in js
-    assert '/static/app.js?v=0313' in html
+    assert re.search(r'/static/app\.js\?v=\d+',html)
 
 
 def test_undo_redo_controls_are_present_and_cache_busted():
@@ -1367,8 +1368,8 @@ def test_undo_redo_controls_are_present_and_cache_busted():
     html=(root/'static'/'index.html').read_text(encoding='utf-8')
     js=(root/'static'/'app.js').read_text(encoding='utf-8')
     assert 'id="undoBtn"' in html and 'id="redoBtn"' in html
-    assert '/static/app.js?v=0313' in html
-    assert '/static/style.css?v=0313' in html
+    assert re.search(r'/static/app\.js\?v=\d+',html)
+    assert re.search(r'/static/style\.css\?v=\d+',html)
     assert 'function undoEdit()' in js and 'function redoEdit()' in js
     assert "key==='z'&&!e.shiftKey" in js
     assert "key==='y'" in js
