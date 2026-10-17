@@ -269,3 +269,41 @@ test('script take preview and clip-inspector TTS shortcut both switch to line co
  assert.deepEqual(e.get('[...selectedClips]'),[]);
  assert.ok(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"));
 });
+
+
+test('script-to-timeline seek moves playhead and scrolls to linked dialogue start',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'ここを再生する',status:'ready',takes:[]}];state.clips[0].lineId='line1';state.clips[0].trackId='dialogue';state.clips[0].start=120;state.clips[1].lineId='line1';state.clips[1].trackId='sfx';state.clips[1].start=10;currentTime=6;playing=true;stopNodes=()=>{playing=false};const link={dataset:{action:'seek'}};handleGlobalClick({target:{id:'',dataset:{},closest:selector=>selector==='.script-line'?{dataset:{id:'line1'}}:selector==='[data-action]'?link:null}});");
+ assert.equal(e.get('currentTime'),120);
+ assert.equal(e.get('playing'),false);
+ assert.equal(e.get('selectedLine'),'line1');
+ assert.equal(e.get('selectedClip'),null);
+ const scroll=e.get("document.querySelector('.timeline-shell').scrollLeft");
+ assert.ok(scroll>0,scroll);
+ assert.ok(Math.abs(scroll-(120*20-(728-108)*.3))<.0001,scroll);
+ assert.equal(e.get('state.clips[0].start'),120);
+});
+
+test('seek from script correctly clears old selected clip and keeps paused playback',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'移動する',status:'ready',takes:[]}];state.clips[0].lineId='line1';state.clips[0].trackId='dialogue';state.clips[0].start=18;selectClip('a');currentTime=3;playing=false;stopNodes=()=>{playing=false};jumpToScriptLine('line1');");
+ assert.equal(e.get('currentTime'),18);
+ assert.equal(e.get('selectedClip'),null);
+ assert.deepEqual(e.get('[...selectedClips]'),[]);
+ assert.equal(e.get('clipSelectionAnchor'),null);
+});
+
+test('seeking to an unplaced script line leaves current playback position unchanged',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'unplaced',sceneId:'s',speaker:'愛理',text:'未配置',takes:[]}];currentTime=33;playing=false;stopNodes=()=>{throw Error('must not interrupt playback')};const result=jumpToScriptLine('unplaced');");
+ assert.equal(e.get('currentTime'),33);
+ assert.equal(e.get('selectedLine'),'unplaced');
+ assert.equal(e.get('result'),false);
+});
+
+test('script play-from action seeks before starting multitrack playback',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'再生開始',takes:[]}];state.clips[0].lineId='line1';state.clips[0].trackId='dialogue';state.clips[0].start=45;currentTime=1;stopNodes=()=>{playing=false};let startedAt=-1;play=()=>{startedAt=currentTime};const link={dataset:{action:'playFrom'}};handleGlobalClick({target:{id:'',dataset:{},closest:selector=>selector==='.script-line'?{dataset:{id:'line1'}}:selector==='[data-action]'?link:null}});");
+ assert.equal(e.get('currentTime'),45);
+ assert.equal(e.get('startedAt'),45);
+});
