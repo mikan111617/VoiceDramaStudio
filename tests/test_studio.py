@@ -58,6 +58,76 @@ def test_project_audio_workflow_and_mixer(client):
     assert client.get(f'/api/projects/{pid}').json()['clips'][1]['loop']
 
 
+
+def test_excel_template_download_has_import_headers_and_safe_input_guidance(client):
+    response=client.get('/api/excel/template')
+    assert response.status_code==200,response.text
+    assert response.content[:2]==b'PK'
+    assert response.headers['content-type'].startswith(
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    assert 'attachment' in response.headers['content-disposition']
+    assert 'voice_drama_template.xlsx' in response.headers['content-disposition']
+    wb=openpyxl.load_workbook(io.BytesIO(response.content))
+    assert wb.sheetnames==['台本']
+    ws=wb.active
+    assert [ws.cell(1,col).value for col in range(1,8)]==list(core.EXCEL_COLUMNS)
+    assert ws.freeze_panes=='A2'
+    assert all(ws.cell(row,col).value is None for row in range(2,12) for col in range(1,8))
+    assert ws['I1'].value.startswith('入力ガイド')
+    assert '話者' in ws['I2'].value
+    assert '台詞' in ws['I3'].value
+    # Help text must not accidentally be imported as dialogue.
+    p=project(client)
+    result=client.post(
+        f'/api/projects/{p["id"]}/excel/import',
+        files={'file':('voice_drama_template.xlsx',response.content,
+               'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')})
+    assert result.status_code==200,result.text
+    assert result.json()['project']['lines']==[]
+
+
+def test_excel_template_can_be_filled_and_imported_with_no_extra_lines(client):
+    response=client.get('/api/excel/template')
+    assert response.status_code==200
+    wb=openpyxl.load_workbook(io.BytesIO(response.content))
+    ws=wb.active
+    ws['B2']='第一幕'
+    ws['C2']='真歩流'
+    ws['D2']='サブレがない！'
+    ws['E2']='驚いて叫ぶ'
+    ws['F2']=0.6
+    ws['B3']='第一幕'
+    ws['C3']='愛理'
+    ws['D3']='知らないわよ。'
+    ws['F3']=0.8
+    stream=io.BytesIO()
+    wb.save(stream)
+    p=project(client)
+    result=client.post(
+        f'/api/projects/{p["id"]}/excel/import',
+        files={'file':('voice_drama_template.xlsx',stream.getvalue(),
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')},
+        data={'mode':'replace','expectedRevision':str(p['revision'])})
+    assert result.status_code==200,result.text
+    payload=result.json()
+    lines=payload['project']['lines']
+    assert len(lines)==2
+    assert [line['speaker'] for line in lines]==['真歩流','愛理']
+    assert [line['text'] for line in lines]==['サブレがない！','知らないわよ。']
+    assert lines[0]['caption']=='驚いて叫ぶ'
+    assert lines[0]['after']==pytest.approx(0.6)
+    assert payload['project']['scenes'][0]['name']=='第一幕'
+    assert not payload['summary']['warnings']
+
+
+def test_excel_template_buttons_exist_in_script_toolbar_and_import_dialog():
+    code=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    assert "id=\"downloadExcelTemplateBtn\"" in code
+    assert "id=\"downloadExcelTemplateModalBtn\"" in code
+    assert "link.href='/api/excel/template'" in code
+    assert 'function downloadExcelTemplate()' in code
+
+
 def test_excel_roundtrip_preserves_ids_and_stale_audio(client):
     s=project(client);pid=s['id'];sid=s['scenes'][0]['id']
     l=core.new_line(sid,'愛理','どこに行ったの？','少し困惑',.5)
