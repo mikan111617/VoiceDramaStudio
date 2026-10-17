@@ -177,6 +177,17 @@ def delete_take(pid: str, lineid: str, takeid: str, body: DestructiveRevisionReq
         raise HTTPException(400, str(exc))
 
 
+@app.get('/api/excel/template')
+def excel_template_download():
+    """Download a clean Excel template; no project is required."""
+    result=core.excel_template()
+    return StreamingResponse(
+        result,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': 'attachment; filename="voice_drama_template.xlsx"'}
+    )
+
+
 @app.post('/api/projects/{pid}/excel/import')
 def excel_import(pid:str,file:UploadFile=File(...),mode:str=Form('merge'),expectedRevision:int|None=Form(None)):
     if not file.filename.lower().endswith('.xlsx'):raise HTTPException(400,'Excel .xlsx ファイルを指定してください')
