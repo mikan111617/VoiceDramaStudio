@@ -90,7 +90,17 @@ async function createProject(title){const s=await req('/api/projects',json('POST
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker)].filter(Boolean))]}
 function selectScene(id){if(id===selectedScene)return;stop();selectedScene=id;selectedLine=null;selectedClip=null;currentTime=0;renderAll()}
-function selectLine(id){selectedLine=id;selectedClip=null;document.querySelectorAll('.script-line').forEach(x=>x.classList.toggle('active',x.dataset.id===id));renderTimeline();renderInspector()}
+function selectLine(id){
+ // A script-line click always switches the inspector to line/TTS controls,
+ // including when its clip is selected and selectedLine is already this ID.
+ selectedLine=id;
+ selectedClip=null;
+ selectedClips.clear();
+ clipSelectionAnchor=null;
+ document.querySelectorAll('.script-line').forEach(x=>x.classList.toggle('active',x.dataset.id===id));
+ renderTimeline();
+ renderInspector();
+}
 function syncScriptToSelectedClip(){
  if(view!=='script')return;
  const panel=$('editorContent');if(!panel||typeof panel.querySelectorAll!=='function')return;
@@ -1035,7 +1045,7 @@ function handleGlobalClick(e){const target=e.target;
  const rename=target.closest('[data-rename-scene]');if(rename)return renameScene(rename.dataset.renameScene);
  if(target.id==='confirmDeleteSceneBtn')return confirmSceneDelete(target.dataset.confirmScene);
  const scene=target.closest('[data-scene]');if(scene)return selectScene(scene.dataset.scene);
- const article=target.closest('.script-line');if(article){const lid=article.dataset.id;const del=target.closest('[data-delete]');if(del)return removeLine(lid);const move=target.closest('[data-move]');if(move)return moveLine(lid,Number(move.dataset.move));const action=target.closest('[data-action]');if(action?.dataset.action==='addBelow')return addLine(lid);if(action?.dataset.action==='preview'){const l=lineById(lid),t=l?.takes?.find(t=>t.id===l.selectedTakeId);if(lid!==selectedLine)selectLine(lid);if(t)playPreview(t.assetId);return}if(lid!==selectedLine)selectLine(lid)}
+ const article=target.closest('.script-line');if(article){const lid=article.dataset.id;const del=target.closest('[data-delete]');if(del)return removeLine(lid);const move=target.closest('[data-move]');if(move)return moveLine(lid,Number(move.dataset.move));const action=target.closest('[data-action]');if(action?.dataset.action==='addBelow')return addLine(lid);if(action?.dataset.action==='preview'){const l=lineById(lid),t=l?.takes?.find(t=>t.id===l.selectedTakeId);if(lid!==selectedLine||selectedClip!==null)selectLine(lid);if(t)playPreview(t.assetId);return}if(lid!==selectedLine||selectedClip!==null)selectLine(lid)}
  const vc=target.closest('[data-voice-upload]');if(vc){const v=state.voices[Number(vc.dataset.voiceUpload)];if(v)uploadAudio('reference',null,v.name);return}
  const vd=target.closest('[data-voice-design]');if(vd)return designCharacterVoice(Number(vd.dataset.voiceDesign));
  const va=target.closest('[data-voice-apply]');if(va)return applyVoice(Number(va.dataset.voiceApply));
@@ -1070,7 +1080,7 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='previewTakeBtn'){const l=lineById(selectedLine);const t=l.takes.find(t=>t.id===l.selectedTakeId);if(t)playPreview(t.assetId)}
  if(target.id==='deleteSelectedTakeBtn')return removeSelectedTake();
  if(target.id==='downloadTakeBtn'){const l=lineById(selectedLine);const t=l?.takes.find(t=>t.id===l.selectedTakeId);if(t)location.href=`/api/projects/${state.id}/assets/${t.assetId}/download`;return}
- if(target.id==='inspectLineBtn'){selectedClip=null;renderInspector()}
+ if(target.id==='inspectLineBtn'){if(selectedLine)selectLine(selectedLine);return}
  if(target.id==='addTrackBtn'){const name=prompt('トラック名','追加トラック');if(!name)return;const id=newid('track');state.tracks.push({id,name,kind:'sfx'});dirtyState();renderTimeline();renderInspector()}
  if(target.id==='playClipBtn'){currentTime=clipById(selectedClip)?.start||0;play()}
  if(target.id==='deleteClipBtn'){const c=clipById(selectedClip);if(!c)return;state.clips=state.clips.filter(x=>x.id!==c.id);selectedClip=null;dirtyState();renderTimeline();renderInspector()}
