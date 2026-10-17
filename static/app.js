@@ -407,6 +407,21 @@ function updatePlayhead(){
  if(ph)ph.style.left=(TIMELINE_LABEL_WIDTH+currentTime*pxPerSec)+'px';
  $('timeDisplay').textContent=fmt(currentTime);
 }
+// Scroll the timeline content, not the clips themselves: keep their actual
+// timestamps unchanged.  During playback the playhead stays near the right
+// third of the visible range, while every lane scrolls together.
+function followPlaybackPosition(){
+ if(!playing)return;
+ const shell=document.querySelector('.timeline-shell');
+ const width=shell?.clientWidth||0;
+ if(width<=TIMELINE_LABEL_WIDTH+60)return;
+ const x=TIMELINE_LABEL_WIDTH+currentTime*pxPerSec;
+ const relative=x-shell.scrollLeft;
+ const left=TIMELINE_LABEL_WIDTH+12;
+ const right=TIMELINE_LABEL_WIDTH+(width-TIMELINE_LABEL_WIDTH)*.72;
+ if(relative<left||relative>right)
+  shell.scrollLeft=Math.max(0,x-right);
+}
 const models={irodori:[['Aratako/Irodori-TTS-v4.1-Small','Irodori v4.1 Small'],['Aratako/Irodori-TTS-v4-Large','Irodori v4 Large (FP32)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only','Irodori Large INT8 (RTX 4070向け)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only','Irodori Large INT4'],['phasefield-audio/Irodori-TTS-v4.1-Anime','Irodori v4.1 Anime'],['phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only','Irodori Anime INT8']],qwen:[['Qwen/Qwen3-TTS-12Hz-1.7B-Base','Qwen3 Base 1.7B'],['Qwen/Qwen3-TTS-12Hz-0.6B-Base','Qwen3 Base 0.6B'],['Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign','Qwen3 Voice Design 1.7B']]};
 function modelSelect(engine,value){return `<select id="lineModel"><option value="">モデルを選択</option>${(models[engine]||models.irodori).map(([id,n])=>`<option value="${esc(id)}" ${value===id?'selected':''}>${esc(n)}</option>`).join('')}<option value="custom" ${value&&!models[engine]?.some(x=>x[0]===value)?'selected':''}>その他（直接入力）</option></select><input id="modelCustom" placeholder="Hugging Face モデルID / 量子化モデルのサブフォルダ" style="${value&&!models[engine]?.some(x=>x[0]===value)?'':'display:none;'}margin-top:6px" value="${value&&!models[engine]?.some(x=>x[0]===value)?esc(value):''}">`}
 function getLineTtsSource(l){
@@ -696,7 +711,7 @@ async function generate(ids){
   };
  }catch(e){toast('生成前の設定確認に失敗: '+e.message,true)}
 }
-function showJob(jid){clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div><div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
+function showJob(jid){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div><div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
  const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){
  try{
@@ -790,7 +805,7 @@ async function importSharedAudio(id){
 }
 async function playSharedPreview(id){
  try{
-  stop();await ensureContext();
+  stopNodes();await ensureContext();
   const r=await fetch('/api/shared-assets/'+encodeURIComponent(id)+'/audio');
   if(!r.ok)throw new Error('素材を読み込めません');
   const buffer=await ctx.decodeAudioData(await r.arrayBuffer());
@@ -918,7 +933,7 @@ async function openSettings(){
   };
  }catch(e){toast('共通TTS設定を開けません: '+e.message,true)}
 }
-async function playPreview(aid){try{stop();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
+async function playPreview(aid){try{stopNodes();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
 async function ensureContext(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume()}
 async function decodeAsset(id){if(audioCache.has(id))return audioCache.get(id);const promise=(async()=>{const r=await fetch(`/api/projects/${state.id}/assets/${id}`);if(!r.ok)throw new Error('音声を読み込めません');return ctx.decodeAudioData(await r.arrayBuffer())})();audioCache.set(id,promise);try{return await promise}catch(e){audioCache.delete(id);throw e}}
 async function play(){if(playing){pause();return}const clips=activeClips().filter(c=>c.start+c.duration>currentTime);if(!clips.length){toast('再生するクリップがありません',true);return}try{await ensureContext();const buffers=await Promise.all(clips.map(c=>decodeAsset(c.assetId)));nodes=[];playStart=ctx.currentTime-currentTime;
@@ -928,9 +943,18 @@ async function play(){if(playing){pause();return}const clips=activeClips().filte
   const fi=Number(c.fadeIn||0),fo=Number(c.fadeOut||0);gain.gain.setValueAtTime(volume,when);if(fi>0){let k=Math.min(1,offset/fi);gain.gain.setValueAtTime(volume*k,when);if(offset<fi)gain.gain.linearRampToValueAtTime(volume,when+Math.min(fi-offset,playLength))}
   if(fo>0){const fadeBegin=Math.max(0,len-fo);if(offset>=fadeBegin)gain.gain.setValueAtTime(Math.min(volume,volume*Math.max(0,(len-offset)/fo)),when);const whenFade=when+Math.max(0,fadeBegin-offset);if(whenFade<when+playLength){gain.gain.setValueAtTime(volume,whenFade);gain.gain.linearRampToValueAtTime(0,when+playLength)}}
   source.start(when,offsetInside);source.stop(when+playLength);nodes.push(source)});
-  playing=true;$('playBtn').textContent='❚❚';animationId=requestAnimationFrame(tick);
- }catch(e){stop();toast('再生エラー: '+e.message,true)}}
-function tick(){if(!playing)return;currentTime=Math.max(0,ctx.currentTime-playStart);updatePlayhead();if(currentTime>=Math.max(0,...activeClips().map(c=>c.start+c.duration))+0.15){stopNodes();currentTime=0;updatePlayhead();return}animationId=requestAnimationFrame(tick)}
+  playing=true;$('playBtn').textContent='❚❚';updatePlayhead();followPlaybackPosition();animationId=requestAnimationFrame(tick);
+ }catch(e){stopNodes();toast('再生エラー: '+e.message,true)}}
+function tick(){
+ if(!playing)return;
+ currentTime=Math.max(0,ctx.currentTime-playStart);
+ updatePlayhead();
+ followPlaybackPosition();
+ if(currentTime>=Math.max(0,...activeClips().map(c=>c.start+c.duration))+0.15){
+  stopNodes();currentTime=0;updatePlayhead();return;
+ }
+ animationId=requestAnimationFrame(tick);
+}
 function pause(){if(!playing)return;currentTime=Math.max(0,ctx.currentTime-playStart);stopNodes();updatePlayhead()}
 function stopNodes(){nodes.forEach(n=>{try{n.stop()}catch{}});nodes=[];playing=false;cancelAnimationFrame(animationId);$('playBtn').textContent='▶'}
 function stop(){stopNodes();currentTime=0;updatePlayhead()}
@@ -1175,7 +1199,7 @@ function wire(){
  $('projectButton').onclick=openProjects;$('settingsBtn').onclick=openSettings;$('exportExcelBtn').onclick=async()=>{try{await saveNow();location.href=`/api/projects/${state.id}/excel/export`}catch(e){toast(e.message,true)}};
  $('renderBtn').onclick=renderAudio;$('addSceneBtn').onclick=addScene;
  $('navScript').onclick=()=>setView('script');$('navVoices').onclick=()=>setView('voices');$('navAssets').onclick=()=>setView('assets');
- $('rewindBtn').onclick=stop;$('playBtn').onclick=play;$('stopBtn').onclick=stop;
+ $('rewindBtn').onclick=stop;$('playBtn').onclick=play;$('stopBtn').onclick=()=>{if(playing)pause();else stopNodes()};
  $('reflowBtn').onclick=()=>{reflow();dirtyState();renderTimeline();toast('台詞を順番どおりに再配置しました')};
  $('zoom').oninput=e=>setTimelineZoom(timelineSliderToZoom(e.target.value));
  $('zoomOutBtn').onclick=()=>setTimelineZoom(pxPerSec/1.6);
