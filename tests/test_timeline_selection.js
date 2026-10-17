@@ -217,3 +217,15 @@ test('starting a generation job pauses playback without returning to zero',()=>{
  assert.equal(e.get('currentTime'),62);
  assert.equal(e.get('playing'),false);
 });
+
+
+test('a delayed playback decode cannot restart audio after the user interrupts it',async()=>{
+ const e=editor();
+ e.run("state.assets=[{id:'recording',name:'recording.wav'}];state.clips[0].assetId='recording';selectedScene='s';currentTime=1;stopNodes=()=>{playbackRequest++;playing=false};ensureContext=async()=>{};let resolveAudio;decodeAsset=()=>new Promise(done=>{resolveAudio=done});");
+ const loading=e.run("play()");
+ await Promise.resolve();
+ e.run("stopNodes();resolveAudio({duration:2})");
+ await loading;
+ assert.equal(e.get('currentTime'),1);
+ assert.equal(e.get('playing'),false);
+});
