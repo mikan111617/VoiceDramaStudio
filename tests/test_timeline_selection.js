@@ -213,7 +213,7 @@ test('pausing and auditioning one regenerated take preserve timeline playhead ti
 
 test('starting a generation job pauses playback without returning to zero',()=>{
  const e=editor();
- e.run("globalThis.clearInterval=()=>{};globalThis.setInterval=()=>0;modal=()=>{};req=async()=>({status:'running',message:'processing',completed:0,total:1});ctx={currentTime:97};playStart=35;playing=true;stopNodes=()=>{playing=false};showJob('job_1')");
+ e.run("globalThis.clearInterval=()=>{};globalThis.setInterval=()=>0;modal=()=>{};globalThis.fetch=async()=>({ok:true,headers:{get:()=> 'application/json'},json:async()=>({status:'running',message:'processing',completed:0,total:1})});ctx={currentTime:97};playStart=35;playing=true;stopNodes=()=>{playing=false};showJob('job_1')");
  assert.equal(e.get('currentTime'),62);
  assert.equal(e.get('playing'),false);
 });
