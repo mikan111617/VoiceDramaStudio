@@ -15,7 +15,7 @@ function editor(){
  const source=fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8');
  vm.runInContext(source.slice(0,source.lastIndexOf('\ninstallPanelResizers();')),ctx);
  vm.runInContext(`
-  renderInspector=()=>{};renderTimeline=()=>{};renderAll=()=>{};toast=()=>{};stopNodes=()=>{};
+  const originalInspector=renderInspector;renderInspector=()=>{};renderTimeline=()=>{};renderAll=()=>{};toast=()=>{};stopNodes=()=>{};
   state={title:'test',revision:1,scenes:[{id:'s'},{id:'other'}],lines:[],assets:[],voices:[],settings:{},
     tracks:[{id:'dialogue'},{id:'bgm'},{id:'sfx'}],clips:[
     {id:'a',sceneId:'s',trackId:'bgm',start:1.03,duration:2,pinned:false},
@@ -228,4 +228,44 @@ test('a delayed playback decode cannot restart audio after the user interrupts i
  await loading;
  assert.equal(e.get('currentTime'),1);
  assert.equal(e.get('playing'),false);
+});
+
+
+test('clicking a script line opens voice regeneration even when its clip is already selected',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'テスト台詞',caption:'',status:'ready',takes:[],selectedTakeId:null}];state.clips[0].trackId='dialogue';state.clips[0].lineId='line1';state.clips[0].assetId='voice';state.assets=[{id:'voice',name:'line.wav',kind:'voice'}];");
+ e.run("selectClip('a');originalInspector()");
+ assert.ok(e.get("$('inspector').innerHTML.includes('id=\"clipStart\"')"));
+ assert.equal(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"),false);
+ assert.equal(e.get('selectedLine'),'line1');
+ e.run("handleGlobalClick({target:{id:'',dataset:{},closest:sel=>sel==='.script-line'?{dataset:{id:'line1'}}:null}});originalInspector()");
+ assert.equal(e.get('selectedLine'),'line1');
+ assert.equal(e.get('selectedClip'),null);
+ assert.deepEqual(e.get('[...selectedClips]'),[]);
+ assert.equal(e.get('clipSelectionAnchor'),null);
+ assert.ok(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"));
+ assert.equal(e.get("$('inspector').innerHTML.includes('id=\"clipStart\"')"),false);
+});
+
+test('clicking a different script line switches to its TTS inspector without clearing playback position',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'一つ目',status:'ready',takes:[]},{id:'line2',sceneId:'s',speaker:'愛理',text:'二つ目',status:'stale',takes:[]}];state.clips[0].lineId='line1';state.clips[0].trackId='dialogue';currentTime=25;selectClip('a');");
+ e.run("handleGlobalClick({target:{id:'',dataset:{},closest:sel=>sel==='.script-line'?{dataset:{id:'line2'}}:null}});originalInspector()");
+ assert.equal(e.get('selectedLine'),'line2');
+ assert.equal(e.get('selectedClip'),null);
+ assert.deepEqual(e.get('[...selectedClips]'),[]);
+ assert.equal(e.get('currentTime'),25);
+ assert.ok(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"));
+});
+
+test('script take preview and clip-inspector TTS shortcut both switch to line controls',()=>{
+ const e=editor();
+ e.run("state.lines=[{id:'line1',sceneId:'s',speaker:'愛理',text:'こんにちは',status:'ready',takes:[{id:'take1',assetId:'audio',engine:'irodori'}],selectedTakeId:'take1'}];state.clips[0].trackId='dialogue';state.clips[0].lineId='line1';state.assets=[{id:'audio',name:'take.wav'}];playPreview=()=>{};selectClip('a');");
+ e.run("handleGlobalClick({target:{id:'',dataset:{},closest:sel=>sel==='.script-line'?{dataset:{id:'line1'}}:sel==='[data-action]'?{dataset:{action:'preview'}}:null}});originalInspector()");
+ assert.equal(e.get('selectedClip'),null);
+ assert.ok(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"));
+ e.run("selectClip('a');handleGlobalClick({target:{id:'inspectLineBtn',dataset:{},closest:()=>null}});originalInspector()");
+ assert.equal(e.get('selectedClip'),null);
+ assert.deepEqual(e.get('[...selectedClips]'),[]);
+ assert.ok(e.get("$('inspector').innerHTML.includes('id=\"generateLineBtn\"')"));
 });
