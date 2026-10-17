@@ -723,6 +723,8 @@ def refresh_staleness(s):
         else:line["status"]="ready"
 
 
+EXCEL_COLUMNS=("台詞ID","シーン","話者","台詞","キャプション","間(秒)","音声ファイル名")
+
 HEADERS={
     "id":{"台詞id","セリフid","voice_id","line_id","id","音声id"},
     "scene":{"シーン","scene","scene_name","場面"},
@@ -995,6 +997,61 @@ def import_excel(project_id, stream, mode="merge", expected_revision=None):
         wb.close()
 
 
+def excel_template():
+    """An empty, import-ready script template with guidance outside input columns.
+
+    The importer only uses the named A:G columns. Never put sample dialogue
+    into A:G: otherwise a first-time user might import it as a real line.
+    """
+    from io import BytesIO
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb=openpyxl.Workbook()
+    ws=wb.active
+    ws.title="台本"
+    ws.append(list(EXCEL_COLUMNS))
+    ws.freeze_panes="A2"
+    ws.auto_filter.ref="A1:G1"
+    for cell in ws[1][:7]:
+        cell.font=Font(color="FFFFFF",bold=True)
+        cell.fill=PatternFill("solid",fgColor="1C3347")
+        cell.alignment=Alignment(vertical="center",wrap_text=True)
+    ws.row_dimensions[1].height=27
+    for col,width in {"A":24,"B":20,"C":18,"D":64,"E":56,"F":14,"G":32,"H":4,"I":26,"J":64}.items():
+        ws.column_dimensions[col].width=width
+    guides=[
+        ("入力ガイド（取り込み対象外）","左側のA〜G列に2行目から入力してください。ここは記入不要です。"),
+        ("話者（必須）","例：真歩流 / 愛理。キャラクター名を入力します。"),
+        ("台詞（必須）","例：おかえり、お姉ちゃん。"),
+        ("シーン（任意）","例：第一幕。空欄ならシート名の「台本」がシーン名になります。"),
+        ("キャプション（任意）","例：驚いて、小さな声で話す。"),
+        ("間(秒)（任意）","例：0.6。次のセリフまでの間を秒で指定します。"),
+        ("台詞ID（初回空欄）","最初は空欄でOK。再取り込みはアプリの「台本をExcelで書き出す」でID付きのファイルを使ってください。"),
+        ("音声ファイル名（任意）","例：scene_001.wav。空欄なら自動命名されます。"),
+        ("取り込み方法","A〜G列に台本を入力し、.xlsxで保存して「Excel取込」から読み込みます。"),
+        ("注意","I・J列の説明は取り込み対象外です。A〜G列にサンプル台詞は入っていません。"),
+    ]
+    for row,(label,description) in enumerate(guides,1):
+        item=ws.cell(row=row,column=9,value=label)
+        item.font=Font(bold=True,color="FFFFFF" if row==1 else "1C3347")
+        item.fill=PatternFill("solid",fgColor="1C3347" if row==1 else "E6F2F7")
+        item.alignment=Alignment(vertical="center",wrap_text=True)
+        detail=ws.cell(row=row,column=10,value=description)
+        detail.alignment=Alignment(vertical="center",wrap_text=True)
+        if row==1:
+            detail.font=Font(bold=True,color="FFFFFF")
+            detail.fill=PatternFill("solid",fgColor="1C3347")
+        if row>1: ws.row_dimensions[row].height=35
+    # Text input columns are formatted for easy reading without adding data.
+    for row in ws.iter_rows(min_row=2,max_row=40,min_col=1,max_col=7):
+        for cell in row:
+            cell.alignment=Alignment(vertical="top",wrap_text=True)
+    buf=BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
 def export_excel(project_id):
     from io import BytesIO
     s=load_project(project_id)
@@ -1007,7 +1064,7 @@ def export_excel(project_id):
         while name in wb.sheetnames:
             i+=1;name=base[:25]+f"_{i}"
         ws=wb.create_sheet(name)
-        ws.append(["台詞ID","シーン","話者","台詞","キャプション","間(秒)","音声ファイル名"])
+        ws.append(list(EXCEL_COLUMNS))
         for line in (l for l in s["lines"] if l["sceneId"]==scene["id"]):
             ws.append([line["id"],scene["name"],line["speaker"],line["text"],line.get("caption",""),line.get("after",0.65),line.get("outputFilename","")])
         ws.freeze_panes="A2"
