@@ -4,7 +4,7 @@ let state=null, selectedScene=null,selectedLine=null,selectedClip=null, view='sc
 let selectedClips=new Set(),clipSelectionAnchor=null,suppressClipClick=false;
 let dirty=false,saveTimer=null,saving=null,pxPerSec=38,currentTime=0,playing=false,playStart=0,ctx=null,nodes=[],audioCache=new Map(),animationId=0;
 let uploadContext={kind:'sfx',lineId:null,voiceName:null};
-let jobTimer=null;
+let jobTimer=null,playbackRequest=0;
 let bulkFiles=[],bulkMode='assign',bulkKind='voice',bulkCast='',bulkSort='natural',bulkScene='',bulkStart='',bulkOnlyMissing=true,bulkTargets={};
 let bulkNextKey=0,bulkBusy=false;
 let trashSelection=new Set();
@@ -805,7 +805,8 @@ async function importSharedAudio(id){
 }
 async function playSharedPreview(id){
  try{
-  stopNodes();await ensureContext();
+  if(playing)pause();else stopNodes();
+  await ensureContext();
   const r=await fetch('/api/shared-assets/'+encodeURIComponent(id)+'/audio');
   if(!r.ok)throw new Error('素材を読み込めません');
   const buffer=await ctx.decodeAudioData(await r.arrayBuffer());
@@ -933,10 +934,10 @@ async function openSettings(){
   };
  }catch(e){toast('共通TTS設定を開けません: '+e.message,true)}
 }
-async function playPreview(aid){try{stopNodes();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
+async function playPreview(aid){try{if(playing)pause();else stopNodes();await ensureContext();const b=await decodeAsset(aid),source=ctx.createBufferSource();source.buffer=b;source.connect(ctx.destination);source.start();nodes.push(source)}catch(e){toast('試聴できません: '+e.message,true)}}
 async function ensureContext(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();await ctx.resume()}
 async function decodeAsset(id){if(audioCache.has(id))return audioCache.get(id);const promise=(async()=>{const r=await fetch(`/api/projects/${state.id}/assets/${id}`);if(!r.ok)throw new Error('音声を読み込めません');return ctx.decodeAudioData(await r.arrayBuffer())})();audioCache.set(id,promise);try{return await promise}catch(e){audioCache.delete(id);throw e}}
-async function play(){if(playing){pause();return}const clips=activeClips().filter(c=>c.start+c.duration>currentTime);if(!clips.length){toast('再生するクリップがありません',true);return}try{await ensureContext();const buffers=await Promise.all(clips.map(c=>decodeAsset(c.assetId)));nodes=[];playStart=ctx.currentTime-currentTime;
+async function play(){if(playing){pause();return}const clips=activeClips().filter(c=>c.start+c.duration>currentTime);if(!clips.length){toast('再生するクリップがありません',true);return}const requestId=++playbackRequest;try{await ensureContext();const buffers=await Promise.all(clips.map(c=>decodeAsset(c.assetId)));if(requestId!==playbackRequest)return;nodes=[];playStart=ctx.currentTime-currentTime;
  clips.forEach((c,i)=>{const b=buffers[i];if(!b)return;const begin=Number(c.start||0),len=Math.max(0,Number(c.duration||0));const offset=Math.max(0,currentTime-begin);if(offset>=len)return;const lead=Math.max(0,begin-currentTime);const when=ctx.currentTime+lead;const end=Math.max(0.01,b.duration-Number(c.trimEnd||0));const start=Math.max(0,Math.min(end-.001,Number(c.trimStart||0)));const playable=Math.max(.001,end-start);let source=ctx.createBufferSource();source.buffer=b;source.loop=!!c.loop;source.loopStart=start;source.loopEnd=end;let gain=ctx.createGain();const volume=Math.max(0,Math.min(8,Number(c.gain??1)));source.connect(gain);gain.connect(ctx.destination);
   const offsetInside=start+(c.loop?(offset%playable):offset);if(!c.loop && offsetInside>=end)return;
   const playLength=Math.min(len-offset,c.loop?len:end-offsetInside);if(playLength<=0)return;
@@ -944,7 +945,7 @@ async function play(){if(playing){pause();return}const clips=activeClips().filte
   if(fo>0){const fadeBegin=Math.max(0,len-fo);if(offset>=fadeBegin)gain.gain.setValueAtTime(Math.min(volume,volume*Math.max(0,(len-offset)/fo)),when);const whenFade=when+Math.max(0,fadeBegin-offset);if(whenFade<when+playLength){gain.gain.setValueAtTime(volume,whenFade);gain.gain.linearRampToValueAtTime(0,when+playLength)}}
   source.start(when,offsetInside);source.stop(when+playLength);nodes.push(source)});
   playing=true;$('playBtn').textContent='❚❚';updatePlayhead();followPlaybackPosition();animationId=requestAnimationFrame(tick);
- }catch(e){stopNodes();toast('再生エラー: '+e.message,true)}}
+ }catch(e){if(requestId!==playbackRequest)return;stopNodes();toast('再生エラー: '+e.message,true)}}
 function tick(){
  if(!playing)return;
  currentTime=Math.max(0,ctx.currentTime-playStart);
@@ -956,7 +957,7 @@ function tick(){
  animationId=requestAnimationFrame(tick);
 }
 function pause(){if(!playing)return;currentTime=Math.max(0,ctx.currentTime-playStart);stopNodes();updatePlayhead()}
-function stopNodes(){nodes.forEach(n=>{try{n.stop()}catch{}});nodes=[];playing=false;cancelAnimationFrame(animationId);$('playBtn').textContent='▶'}
+function stopNodes(){playbackRequest++;nodes.forEach(n=>{try{n.stop()}catch{}});nodes=[];playing=false;cancelAnimationFrame(animationId);$('playBtn').textContent='▶'}
 function stop(){stopNodes();currentTime=0;updatePlayhead()}
 let drag=null;
 function dragStart(e){
