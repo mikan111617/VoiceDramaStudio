@@ -179,3 +179,41 @@ test('time-axis zoom slider uses a logarithmic scale for long scenes',()=>{
  assert.equal(e.get('timelineTickName(3600)'),'1時間');
  assert.equal(e.get('timelineTickLabel(3660)'),'1:01:00');
 });
+
+
+test('playback automatically scrolls all timeline lanes while the playhead advances',()=>{
+ const e=editor();
+ const before=e.get('state.clips');
+ e.run("playing=true;pxPerSec=20;currentTime=30;followPlaybackPosition()");
+ const first=e.get("document.querySelector('.timeline-shell').scrollLeft");
+ const expected=108+30*20-(108+(728-108)*.72);
+ assert.ok(Math.abs(first-expected)<1e-9,{first,expected});
+ e.run("currentTime=31;followPlaybackPosition()");
+ const next=e.get("document.querySelector('.timeline-shell').scrollLeft");
+ assert.ok(next>first, {first,next});
+ assert.deepEqual(e.get('state.clips'),before); // No edits to clip offsets/timing.
+ e.run("playing=false;currentTime=35;followPlaybackPosition()");
+ assert.equal(e.get("document.querySelector('.timeline-shell').scrollLeft"),next);
+});
+
+test('playback does not scroll an overview that already shows the playhead',()=>{
+ const e=editor();
+ e.run("playing=true;pxPerSec=.5;currentTime=500;followPlaybackPosition()");
+ assert.equal(e.get("document.querySelector('.timeline-shell').scrollLeft"),0);
+});
+
+test('pausing and auditioning one regenerated take preserve timeline playhead time',async()=>{
+ const e=editor();
+ e.run("playing=true;ctx={currentTime:63};playStart=21;stopNodes=()=>{playing=false};pause()");
+ assert.equal(e.get('currentTime'),42);
+ e.run("ensureContext=async()=>{};decodeAsset=async()=>({duration:1});ctx={destination:{},createBufferSource:()=>({connect(){},start(){}})};");
+ await e.run("playPreview('regenerated-asset')");
+ assert.equal(e.get('currentTime'),42);
+});
+
+test('starting a generation job pauses playback without returning to zero',()=>{
+ const e=editor();
+ e.run("globalThis.clearInterval=()=>{};globalThis.setInterval=()=>0;modal=()=>{};req=async()=>({status:'running',message:'processing',completed:0,total:1});ctx={currentTime:97};playStart=35;playing=true;stopNodes=()=>{playing=false};showJob('job_1')");
+ assert.equal(e.get('currentTime'),62);
+ assert.equal(e.get('playing'),false);
+});
