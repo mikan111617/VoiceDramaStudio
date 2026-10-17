@@ -351,7 +351,7 @@ function renderEditor(){if(!state)return;const act=$('panelActions');const title
  if(view==='script'){
   key.textContent='台本・台詞';title.textContent=sceneName(selectedScene);sub.textContent=`${activeLines().length} セリフ · 編集すると音声の更新を検出`;
   const pendingCount=activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).length;
-  act.innerHTML=`<div class="action-group action-main">${button('＋ セリフを追加','id="addLineTop"')}${button(pendingCount?`✦ 未生成の${pendingCount}件をまとめて生成`:'✦ 未生成をまとめて生成', `id="generateMissingBtn" ${pendingCount?'':'disabled'} title="このシーンの未生成・要再生成の台詞を生成します"`,'primary')}</div><div class="action-group">${button('↑ Excel取込','id="importExcelBtn"')}${button('↓ 手持ちの音声を台詞に割り当て','id="batchAssignBtn"')}${button('↓ このシーンの台詞音声（ZIP）','id="downloadSceneTakesZipBtn"')}${button('🗑 台本を全削除','id="openClearScriptBtn"','danger')}</div>`;
+  act.innerHTML=`<div class="action-group action-main">${button('＋ セリフを追加','id="addLineTop"')}${button(pendingCount?`✦ 未生成の${pendingCount}件をまとめて生成`:'✦ 未生成をまとめて生成', `id="generateMissingBtn" ${pendingCount?'':'disabled'} title="このシーンの未生成・要再生成の台詞を生成します"`,'primary')}</div><div class="action-group">${button('↑ Excel取込','id="importExcelBtn"')}${button('↓ Excelひな形','id="downloadExcelTemplateBtn"')}${button('↓ 手持ちの音声を台詞に割り当て','id="batchAssignBtn"')}${button('↓ このシーンの台詞音声（ZIP）','id="downloadSceneTakesZipBtn"')}${button('🗑 台本を全削除','id="openClearScriptBtn"','danger')}</div>`;
   $('editorContent').innerHTML=bulkDropZone('assign')+activeLines().map((l,i)=>`<article class="script-line ${selectedLine===l.id?'active':''}" data-id="${esc(l.id)}"><div class="line-top"><span class="line-number">${String(i+1).padStart(2,'0')}</span><input class="speaker-select" data-line-field="speaker" list="speakers" value="${esc(l.speaker)}" title="話者を入力"><span class="line-status ${esc(l.status)}">${{ready:'音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成'}</span><div class="line-actions"><button class="icon-btn" data-move="-1" title="上へ">↑</button><button class="icon-btn" data-move="1" title="下へ">↓</button><button class="icon-btn" data-delete="line" title="削除">×</button></div></div><textarea class="line-text" data-line-field="text" placeholder="ここに台詞を入力">${esc(l.text)}</textarea><div class="caption-box"><span class="caption-tag">演技指示</span><textarea data-line-field="caption" placeholder="例：声をひそめて、辺りを警戒しながら…">${esc(l.caption)}</textarea></div><div class="file-name-box"><label>生成音声のファイル名（任意） <input data-line-field="outputFilename" type="text" maxlength="120" value="${esc(l.outputFilename||'')}" placeholder="未指定なら自動命名 · 例: mahoru_001.wav" spellcheck="false"></label></div><div class="line-footer"><label>次の台詞まで <input class="gap-input" type="number" min="0" max="60" step="0.1" data-line-field="after" value="${fnum(l.after,1)}"> 秒</label><span>${l.selectedTakeId?'<button data-action="preview" title="選択中のテイクを試聴">▶ 試聴</button>　':''}<button type="button" data-action="seek" title="対応する台詞クリップの開始位置へ再生ヘッドを移動">↪ 再生位置へ</button>　<button type="button" data-action="playFrom" title="この台詞の開始位置へ移動して再生">▶ ここから再生</button>　<button data-action="addBelow">＋ 次に追加</button>　<button data-action="select" title="右側の「選択中の台詞・クリップ」で生成・試聴・テイク選択">${l.takes?.length||0} テイク　→</button></span></div></article>`).join('')+`<button class="editor-bigaction" id="addLineBottom">＋ セリフを追加</button><datalist id="speakers">${getVoices().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
  }else if(view==='voices'){
   key.textContent='キャスト・声';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')+button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
@@ -690,9 +690,19 @@ async function downloadSceneSelectedTakes(){
   link.remove();
  }catch(e){toast('音声ZIPの保存に失敗: '+e.message,true)}
 }
+function downloadExcelTemplate(){
+ // Works even before any lines exist; the server does not need a project ID.
+ const link=document.createElement('a');
+ link.href='/api/excel/template';
+ link.download='voice_drama_template.xlsx';
+ document.body.appendChild(link);
+ link.click();
+ link.remove();
+}
 function chooseExcelImport(){
  excelImportMode='merge';
  modal(`<h2>Excelシナリオの取り込み方法</h2><p>読み込む前に、更新方法を選択してください。</p>
+  <div class="excel-template-guide"><b>初めてExcelで台本を作る場合</b><p>専用のひな形をダウンロードして、2行目から話者とセリフを入力してください。列名を覚える必要はありません。</p>${button('↓ Excelひな形をダウンロード','id="downloadExcelTemplateModalBtn"')}</div>
   <label class="import-mode-choice"><input type="radio" name="excelMode" value="merge" checked><span><b>追加・更新（従来の方法）</b><small>Excelにない台詞も残します。</small></span></label>
   <label class="import-mode-choice"><input type="radio" name="excelMode" value="replace"><span><b>シナリオをすべて置き換える</b><small>Excelにない台詞とシーンを削除します。既存の音声素材・キャスト設定は保持し、変更前の台本をバックアップします。</small></span></label>
   <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('Excelファイルを選択','id="chooseExcelFileBtn"','primary')}</div>`);
@@ -1091,6 +1101,7 @@ function handleGlobalClick(e){const target=e.target;
  const trackSelection=target.closest('[data-select-track-below]');if(trackSelection)return selectTrackAndBelow(trackSelection.dataset.selectTrackBelow);
  const cl=target.closest('.tl-clip');if(cl){if(!suppressClipClick&&e.detail===0)selectClip(cl.dataset.clip);return}
  if(target.id==='downloadSceneTakesZipBtn')return downloadSceneSelectedTakes();
+ if(target.id==='downloadExcelTemplateBtn'||target.id==='downloadExcelTemplateModalBtn')return downloadExcelTemplate();
  if(target.id==='importExcelBtn')chooseExcelImport();
  if(target.id==='openClearScriptBtn'){openClearScript();return}
  if(target.id==='confirmClearScriptBtn'){clearEntireScript();return}
