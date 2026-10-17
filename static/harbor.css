@@ -208,3 +208,10 @@ kbd{background:#f4fafc;border-color:var(--line);color:var(--text)}
 .transport .timeline-zoom-tools .zoom-fit{font-size:11px;white-space:nowrap;padding:7px 9px}
 .timeline-zoom-tools #zoomNumber{min-width:58px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .timeline-zoom-tools #zoomScale{white-space:nowrap}
+
+/* Script lines can move the playhead to the corresponding multitrack clip. */
+.line-footer{gap:8px;flex-wrap:wrap}
+.line-footer>span{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px}
+.line-footer [data-action="seek"]{color:var(--accent2);font-weight:700}
+.line-footer [data-action="playFrom"]{color:var(--accent);font-weight:700}
+.line-footer [data-action="seek"]:hover,.line-footer [data-action="playFrom"]:hover{text-decoration:underline;text-underline-offset:3px}
