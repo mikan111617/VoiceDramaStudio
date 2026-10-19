@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ゲーム音声 | VoiceDrama Studio</title>
-<link rel="stylesheet" href="/static/harbor.css?v=0313"><link rel="stylesheet" href="/static/game.css?v=0400"></head>
+<link rel="stylesheet" href="/static/harbor.css?v=0313"><link rel="stylesheet" href="/static/game.css?v=0401"><link rel="stylesheet" href="/static/pronunciation.css?v=0401"></head>
 <body class="game-mode">
 <header class="harbor-masthead"><canvas class="harbor-art" aria-hidden="true"></canvas><div class="harbor-brand"><strong>HARBOR ATELIER</strong><span>VoiceDrama Studio · 音声制作のアトリエ</span></div><button type="button" id="harborFocus" class="harbor-focus-button" aria-pressed="false">集中表示</button></header>
 <header class="bar topbar">
@@ -49,11 +49,9 @@
  <section id="viewPronunciation" class="view" role="tabpanel" aria-labelledby="navPronunciation" hidden>
   <div class="pane-head"><div><div class="micro">読み方・アクセント</div><h1>読み方・アクセント辞書</h1><p>音声生成のときだけ適用します。元のKS・演技指示・ボイスIDは変更しません。</p></div></div>
   <div class="view-body dict-columns">
-   <div class="dict-group"><h3>読み方辞書</h3>
-    <p class="side-help">「舞黒館 → まいくろかん」のように、元の単語と読みを登録します。長い単語を優先します。</p>
-    <button id="importPronunciation" type="button" class="outline">↑ 読み方JSONを取り込む</button>
-    <form id="newPronunciation" class="dictionary-add-form"><label>単語<input name="surface" required maxlength="100" placeholder="例：舞黒館"></label><label>読み<input name="reading" required maxlength="120" placeholder="例：まいくろかん"></label><button type="submit" class="primary">＋ 読みを追加</button></form>
-    <div id="pronunciationEntries" class="dictionary-entries"></div></div>
+   <div class="dict-group dict-shared"><h3>読み方辞書（ボイスドラマと共通）</h3>
+    <div id="sharedPronunciation"></div>
+    <details id="legacyPronunciation" class="legacy-dictionary" hidden><summary>このプロジェクトに以前保存されていた読み方（共通辞書へ統合済み・読み取り専用）</summary><p class="side-help">生成には使いません。共通辞書への統合元の記録として残しています。</p><div id="legacyPronunciationEntries"></div></details></div>
    <div class="dict-group"><h3>アクセント・発音指示</h3>
     <p class="side-help">登録した単語が台詞に出てきたときだけ、発音指示をTTSへ渡します。モデルによって反映度は異なります。</p>
     <button id="importProsody" type="button" class="outline">↑ アクセントJSONを取り込む</button>
@@ -109,11 +107,10 @@
  <section class="dialog-section"><h3>画面</h3><button id="resetGameLayout" type="button" class="outline">パネルの幅・高さを初期状態に戻す</button></section>
  <div class="dialog-actions"><button type="button" class="primary" data-close-dialog>閉じる</button></div>
 </dialog>
-<input id="pronunciationPicker" type="file" accept=".json,application/json" hidden>
 <input id="prosodyPicker" type="file" accept=".json,application/json" hidden>
 <input id="gameRefPicker" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" hidden>
 <input id="captionPicker" type="file" accept=".csv,text/csv" hidden>
 <input id="ksPicker" type="file" accept=".ks" multiple hidden><input id="jsonPicker" type="file" accept=".json,application/json" hidden><input id="statePicker" type="file" accept=".json,application/json" hidden><input id="sheetPicker" type="file" accept=".json,application/json" hidden><input id="storyPicker" type="file" accept=".json,application/json" hidden>
 <div id="toasts" class="toasts"></div>
-<script src="/static/harbor.js?v=0313" defer></script><script src="/static/game.js?v=0400" defer></script>
+<script src="/static/harbor.js?v=0313" defer></script><script src="/static/pronunciation.js?v=0401" defer></script><script src="/static/game.js?v=0410" defer></script>
 </body></html>

@@ -1153,22 +1153,40 @@ def _dict_import(client,state,kind,body):
         files={'file':('dictionary.json',json.dumps(body,ensure_ascii=False).encode('utf8'),'application/json')})
 
 
+# Readings live in the dictionary shared with VoiceDrama (global settings).
+def _shared_import(client,body,mode='replace',revision=None):
+    if revision is None:
+        revision=client.get('/api/pronunciation-dictionary').json()['revision']
+    return client.post(f'/api/pronunciation-dictionary/import?expectedRevision={revision}&mode={mode}',
+        files={'file':('dictionary.json',json.dumps(body,ensure_ascii=False).encode('utf8'),'application/json')})
+
+
+def _shared_put(client,dictionary):
+    revision=client.get('/api/pronunciation-dictionary').json()['revision']
+    return client.put('/api/pronunciation-dictionary',json={'dictionary':dictionary,'expectedRevision':revision})
+
+
+def _legacy_form(dictionary):
+    return {k:{'readings':[{'label':'通常','reading':v}],'default':0} for k,v in dictionary.items()}
+
+
 def test_speech_dictionaries_import_legacy_json_without_touching_ks(client):
     state=new_game(client)
     src='#mahoru\n舞黒館に行くよ。朱志香さん。[p]\n'
     state=ks_file(client,state,src).json()
     original=state['voices'][0].copy()
     p={'舞黒館':'まいくろかん','舞黒':'まいくろ','朱志香':'じゅしか','2F':'にかい'}
-    resp=_dict_import(client,state,'pronunciation',p)
+    resp=_shared_import(client,p)
     assert resp.status_code==200,resp.text
-    state=resp.json()
+    assert resp.json()['dictionary']==_legacy_form(p)
+    state=game.get_game(state['id'])
     pro={'version':1,'entries':{'朱志香':{'reading':'じゅしか','aliases':['ジュシカ'],'enabled':True,
         'accent':'じゅ','instruction':'冒頭のじゅを強めに'},
         '愛理':{'reading':'あいり','enabled':False,'note':'不要'}}}
     resp=_dict_import(client,state,'prosody',pro)
     assert resp.status_code==200,resp.text
     state=resp.json()
-    assert state['pronunciationDictionary']==p
+    assert 'pronunciationDictionary' not in state
     assert state['prosodyDictionary']['愛理']['enabled'] is False
     assert state['scenarios'][0]['content']==src
     voice=state['voices'][0]
@@ -1185,9 +1203,10 @@ def test_dictionary_from_attached_files_roundtrip_and_longest_match(client):
     readings=json.loads((path/'pronunciation_dictionary.json').read_text(encoding='utf8'))
     accents=json.loads((path/'prosody_dictionary.json').read_text(encoding='utf8'))
     state=new_game(client)
-    state=_dict_import(client,state,'pronunciation',readings).json()
+    shared=_shared_import(client,readings)
+    assert shared.status_code==200,shared.text
     state=_dict_import(client,state,'prosody',accents).json()
-    assert len(state['pronunciationDictionary'])==34
+    assert len(shared.json()['dictionary'])==34
     assert len(state['prosodyDictionary'])==11
     voice={'ttsText':'富礼知朱志香は舞黒館の2Fにいる。叡留久が来た。'}
     text,caption=game._speech_inputs(state,voice)
@@ -1202,10 +1221,10 @@ def test_dictionary_can_edit_disable_remove_and_mark_only_affected_takes_stale(c
     for v in state['voices']:
         v['audio']=f'{v["speaker"]}/scene1/{v["voiceId"]}.wav'
     game._write(state['id'],state)
-    changed=client.put(f'/api/game/projects/{state["id"]}',json={
-        'expectedRevision':state['revision'],'changes':{'pronunciationDictionary':{'舞黒館':'まいくろかん'}}})
+    changed=_shared_put(client,{'舞黒館':'まいくろかん'})
     assert changed.status_code==200,changed.text
-    next_state=changed.json()
+    # The shared dictionary is re-checked when the project is opened.
+    next_state=client.get(f'/api/game/projects/{state["id"]}').json()
     assert next_state['voices'][0]['stale'] is True
     assert next_state['voices'][1]['stale'] is False
     assert next_state['voices'][0]['audio']==state['voices'][0]['audio']
@@ -1220,20 +1239,24 @@ def test_dictionary_can_edit_disable_remove_and_mark_only_affected_takes_stale(c
     r2=client.put(f'/api/game/projects/{state["id"]}',json={
         'expectedRevision':r.json()['revision'],'changes':{'prosodyDictionary':{}}})
     assert r2.status_code==200,r2.text
-    assert r2.json()['pronunciationDictionary']=={'舞黒館':'まいくろかん'}
+    assert client.get('/api/pronunciation-dictionary').json()['dictionary']==_legacy_form({'舞黒館':'まいくろかん'})
 
 
 def test_bad_dictionary_upload_keeps_all_existing_project_state(client):
     state=new_game(client)
-    for kind,body in [('pronunciation',{'':'empty'}),('pronunciation',{'舞黒館':[]}),
+    shared=client.get('/api/pronunciation-dictionary').json()
+    for body in ({'':'empty'},{'舞黒館':[]}):
+        resp=_shared_import(client,body)
+        assert resp.status_code==400,resp.text
+        assert client.get('/api/pronunciation-dictionary').json()==shared
+    for kind,body in [('pronunciation',{'舞黒館':'まいくろかん'}),
         ('prosody',{'entries':{'朱志香':{'aliases':'string'}}}),('prosody',{'hello':'world'})]:
         resp=_dict_import(client,state,kind,body)
         assert resp.status_code==400,resp.text
         assert game.get_game(state['id'])['revision']==state['revision']
     # Importing a valid dictionary with a stale expectedRevision gives 409.
-    state=_dict_import(client,state,'pronunciation',{'舞黒館':'まいくろかん'}).json()
-    res=client.post(f'/api/game/projects/{state["id"]}/dictionaries/pronunciation?expectedRevision={state["revision"]-1}',
-      files={'file':('dict.json',b'{"test":"reading"}','application/json')})
+    current=_shared_import(client,{'舞黒館':'まいくろかん'}).json()
+    res=_shared_import(client,{'test':'reading'},revision=current['revision']-1)
     assert res.status_code==409
 
 
@@ -1241,8 +1264,8 @@ def test_dictionary_worker_request_applies_readings_and_prosody(client,monkeypat
     state=new_game(client)
     state=ks_file(client,state,'#mahoru\n朱志香さん、舞黒館に来ました！[p]\n').json()
     local=game.default_local_cast('mahoru')
+    assert _shared_put(client,{'朱志香':'じゅしか','舞黒館':'まいくろかん'}).status_code==200
     changes={'localCasts':{'mahoru':local},'localCastMode':{'mahoru':'local'},
-             'pronunciationDictionary':{'朱志香':'じゅしか','舞黒館':'まいくろかん'},
              'prosodyDictionary':{'朱志香':{'reading':'じゅしか','aliases':[],
                  'enabled':True,'accent':'じゅ','instruction':'冒頭のじゅにアクセント'}}}
     r=client.put(f'/api/game/projects/{state["id"]}',json={'expectedRevision':state['revision'],'changes':changes})
@@ -1274,13 +1297,15 @@ def test_pronunciation_ui_has_import_edit_tabs_and_preview():
     root=Path(__file__).resolve().parents[1]
     html=(root/'static'/'game.html').read_text(encoding='utf8')
     js=(root/'static'/'game.js').read_text(encoding='utf8')
-    for target in ('navPronunciation','viewPronunciation','newPronunciation','newProsody',
-                   'pronunciationEntries','prosodyEntries','pronunciationPicker','prosodyPicker'):
+    for target in ('navPronunciation','viewPronunciation','sharedPronunciation','legacyPronunciation',
+                   'newProsody','prosodyEntries','prosodyPicker'):
         assert f'id="{target}"' in html
     for term in ('function renderDictionaries','function speechPreview','function setupDictionaryControls',
-                  'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText'):
+                  'data-dict-delete','pronunciationDictionary','prosodyDictionary','speechPreviewText',
+                  'createEditor','data-pron-choice','speechChoices'):
         assert term in js
     assert re.search(r'game\.js\?v=\d+',html)
+    assert html.index('pronunciation.js')<html.index('game.js')
 
 
 @pytest.mark.parametrize("explicit_format", [False, True])

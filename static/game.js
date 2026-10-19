@@ -2,6 +2,8 @@
 /* Entirely separate game-voice state from the VoiceDrama Studio timeline editor. */
 let game=null,gameProjects=[],castProjects=[],scenarioKey='',focusedVoice='',marked=new Set(),pollTimer=null;
 let currentView='lines',includeReady=false,activeGameGeneration=null,missingAudioIds=new Set();
+// The pronunciation dictionary is shared with VoiceDrama (not stored per project).
+let pronunciation=null,pronunciationEditor=null;
 const VIEWS=[['lines','navLines','viewLines'],['casts','navCasts','viewCasts'],['pronunciation','navPronunciation','viewPronunciation'],['import','navImport','viewImport']];
 const VIEW_KEY='vds.game.view.v1';
 const $=id=>document.getElementById(id);
@@ -144,6 +146,7 @@ async function openGame(id){
   busy('保存済み');$('exportFormat').value=game.format||'wav';
   await refreshAudioHealth(id);
   renderAll();
+  pronunciationEditor?.load();
   // Recover progress after refreshing the page or switching back to this project.
   const ongoing=await request('/api/game/projects/'+encodeURIComponent(id)+'/generate/active');
   if(ongoing?.status==='running'&&game?.id===id){
@@ -307,27 +310,16 @@ function castRoster(){
  return [...active.sort((a,b)=>a.speaker.localeCompare(b.speaker)),
          ...sheetOnly.sort((a,b)=>a.speaker.localeCompare(b.speaker))];
 }
-// Game-project pronunciation and prosody dictionaries. These never edit KS
-// source, captions, or ttsText; only effective generation inputs change.
-function speechReading(text){
- const dictionary=game?.pronunciationDictionary||{};
- const tokens=Object.keys(dictionary).sort((a,b)=>b.length-a.length||a.localeCompare(b));
- if(!tokens.length)return text;
- const re=new RegExp(tokens.map(t=>t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'g');
- return String(text||'').replace(re,(key,offset,whole)=>{
-   if(/^[\x00-\x7F]+$/.test(key)&&/[A-Za-z0-9]/.test(key)){
-     if(offset>0&&/[A-Za-z0-9]/.test(whole[offset-1]))return key;
-     if(offset+key.length<whole.length&&/[A-Za-z0-9]/.test(whole[offset+key.length]))return key;
-   }
-   return dictionary[key];
- });
-}
-function speechPreview(text){
- let spoken=speechReading(text),instructions=[];
+// Pronunciation readings come from the shared dictionary (with this line's
+// pattern choices); the prosody dictionary is game-project-local. Neither
+// edits KS source, captions, or ttsText; only effective generation inputs change.
+function speechPreview(text,choices){
+ const pd=globalThis.PronunciationDictionary,dictionary=pronunciation?.dictionary||{};
+ let spoken=pd?pd.apply(text,dictionary,choices):String(text??''),instructions=[];
  for(const [name,item] of Object.entries(game?.prosodyDictionary||{})){
    if(item.enabled===false)continue;
    if(![name,...(item.aliases||[])].some(term=>term&&String(text).includes(term)))continue;
-   if(!Object.hasOwn(game?.pronunciationDictionary||{},name)&&item.reading){
+   if(!Object.hasOwn(dictionary,name)&&item.reading){
      const escaped=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
      spoken=spoken.replace(new RegExp(escaped,'g'),item.reading);
    }
@@ -336,57 +328,90 @@ function speechPreview(text){
  }
  return {spoken,instructions};
 }
+function choiceSelectsHtml(text,choices){
+ const pd=globalThis.PronunciationDictionary,dictionary=pronunciation?.dictionary||{};
+ if(!pd)return '';
+ return pd.choosable(text,dictionary).map(word=>`<label class="pd-choice">「${esc(word)}」の読み${pd.choiceSelect(word,dictionary[word],choices,`data-pron-choice="${esc(word)}"`)}</label>`).join('');
+}
+function updateSpeechPreview(text){
+ const v=selectedVoice(),p=speechPreview(text,v?.pronunciationChoices);
+ $('speechPreviewText').textContent=p.spoken;
+ $('speechPreviewInstructions').textContent=p.instructions.length?'発音指示: '+p.instructions.join(' / '):'発音指示なし';
+ const box=$('speechChoices');if(box)box.innerHTML=choiceSelectsHtml(text,v?.pronunciationChoices);
+}
+// Redraw the selected line without discarding unsaved reading/caption edits.
+function refreshInspectorKeepingDraft(){
+ const text=$('ttsText')?.value,caption=$('caption')?.value,editing=focusedVoice;
+ renderInspector();
+ if(!selectedVoice()||selectedVoice().voiceId!==editing)return;
+ if(typeof text==='string'&&$('ttsText')){$('ttsText').value=text;updateSpeechPreview(text)}
+ if(typeof caption==='string'&&$('caption'))$('caption').value=caption;
+}
+async function setVoiceChoice(word,value){
+ const v=selectedVoice(),pd=globalThis.PronunciationDictionary;if(!v||!pd)return;
+ const choices=pd.withChoice(v.pronunciationChoices,word,value);
+ if(await update({voices:[{voiceId:v.voiceId,pronunciationChoices:choices}]})){
+  renderVoiceRows();renderScenarios();message(`「${word}」の読みを変更しました`);
+ }
+ refreshInspectorKeepingDraft();
+}
+async function pronunciationSaved(data){
+ pronunciation=data;
+ if(!game)return refreshInspectorKeepingDraft();
+ // Opening the project again re-checks its audio against the new dictionary.
+ try{
+  const pid=game.id,fresh=await request('/api/game/projects/'+encodeURIComponent(pid));
+  if(game?.id!==pid)return;
+  game=fresh;renderVoiceRows();renderScenarios();renderLegacyPronunciation();refreshInspectorKeepingDraft();
+ }catch(e){message('台詞の状態を更新できません: '+e.message,true)}
+}
+function renderLegacyPronunciation(){
+ const entries=Object.entries(game?.pronunciationDictionary||{}),box=$('legacyPronunciation');
+ if(!box)return;
+ box.hidden=!entries.length;
+ $('legacyPronunciationEntries').innerHTML=entries.map(([source,reading])=>`<div class="legacy-dictionary-row"><span>${esc(source)}</span><span>${esc(typeof reading==='string'?reading:(reading?.readings||[]).map(p=>p.reading).join(' / '))}</span></div>`).join('');
+}
 function renderDictionaries(){
  if(!game)return;
- const pronunciation=game.pronunciationDictionary||{},prosody=game.prosodyDictionary||{};
- $('pronunciationEntries').innerHTML=Object.entries(pronunciation).map(([source,reading])=>`<form class="dict-entry" data-dict-kind="pronunciation" data-dict-key="${esc(source)}"><div class="dict-title">${esc(source)}</div><label>読み<input name="reading" required maxlength="120" value="${esc(reading)}"></label><div class="dict-actions"><button type="submit">保存</button><button class="dict-delete" type="button" data-dict-delete="pronunciation">削除</button></div></form>`).join('')||'<p class="dict-empty">読み方の登録はありません。</p>';
+ const prosody=game.prosodyDictionary||{};
+ renderLegacyPronunciation();
  $('prosodyEntries').innerHTML=Object.entries(prosody).map(([source,item])=>`<form class="dict-entry" data-dict-kind="prosody" data-dict-key="${esc(source)}"><details><summary>${esc(source)} ${item.enabled===false?'（無効）':''}</summary><label>有効 <input type="checkbox" name="enabled" ${item.enabled===false?'':'checked'} style="width:auto"></label><label>読み<input name="reading" maxlength="120" value="${esc(item.reading||'')}"></label><label>アクセントの位置<input name="accent" maxlength="80" value="${esc(item.accent||'')}"></label><label>別名（読点区切り）<input name="aliases" value="${esc((item.aliases||[]).join('、'))}"></label><label>発音指示<textarea name="instruction" maxlength="500" rows="3">${esc(item.instruction||'')}</textarea></label><div class="dict-actions"><button type="submit">保存</button><button class="dict-delete" type="button" data-dict-delete="prosody">削除</button></div></details></form>`).join('')||'<p class="dict-empty">発音指示の登録はありません。</p>';
 }
 async function uploadSpeechDictionary(kind,file){
  if(!game)return;
  const form=new FormData();form.append('file',file);
- const name=kind==='pronunciation'?'読み方':'アクセント';
- if(Object.keys(kind==='pronunciation'?game.pronunciationDictionary||{}:game.prosodyDictionary||{}).length&&!confirm(`${name}辞書をJSONの内容で置き換えます。続行しますか？`))return;
+ const name='アクセント';
+ if(Object.keys(game.prosodyDictionary||{}).length&&!confirm(`${name}辞書をJSONの内容で置き換えます。続行しますか？`))return;
  try{busy(`${name}辞書を取り込み中…`);game=await request(`/api/game/projects/${game.id}/dictionaries/${kind}?expectedRevision=${game.revision}`,{method:'POST',body:form});renderAll();busy('保存済み');message(`${name}辞書を取り込みました`)}
  catch(e){busy('保存エラー');message(`${name}辞書の取り込みに失敗: `+e.message,true)}
 }
+// Accent (prosody) entries only; readings use the shared editor above.
 async function saveDictionary(kind,key,form){
- const dict={...(kind==='pronunciation'?(game.pronunciationDictionary||{}):(game.prosodyDictionary||{}))};
+ const dict={...(game.prosodyDictionary||{})};
  const field=name=>form.elements.namedItem(name)?.value?.trim()||'';
- if(kind==='pronunciation'){
-   const reading=field('reading');if(!reading)return message('読みを入力してください',true);
-   dict[key]=reading;
- }else{
-   const previous=dict[key]||{};
-   dict[key]={...previous,reading:field('reading'),accent:field('accent'),instruction:field('instruction'),
-     aliases:field('aliases').split(/[、,]/).map(x=>x.trim()).filter(Boolean),
-     enabled:!!form.elements.namedItem('enabled')?.checked};
- }
- if(await update({[kind==='pronunciation'?'pronunciationDictionary':'prosodyDictionary']:dict})){
-   renderDictionaries();renderInspector();message(`${key}の${kind==='pronunciation'?'読み':'発音指示'}を保存しました`);
+ const previous=dict[key]||{};
+ dict[key]={...previous,reading:field('reading'),accent:field('accent'),instruction:field('instruction'),
+   aliases:field('aliases').split(/[、,]/).map(x=>x.trim()).filter(Boolean),
+   enabled:!!form.elements.namedItem('enabled')?.checked};
+ if(await update({prosodyDictionary:dict})){
+   renderDictionaries();refreshInspectorKeepingDraft();message(`${key}の発音指示を保存しました`);
  }
 }
 async function removeDictionary(kind,key){
  if(!confirm(`「${key}」を辞書から削除しますか？`))return;
- const dict={...(kind==='pronunciation'?(game.pronunciationDictionary||{}):(game.prosodyDictionary||{}))};delete dict[key];
- if(await update({[kind==='pronunciation'?'pronunciationDictionary':'prosodyDictionary']:dict})){
-   renderDictionaries();renderInspector();message(`「${key}」を削除しました`);
+ const dict={...(game.prosodyDictionary||{})};delete dict[key];
+ if(await update({prosodyDictionary:dict})){
+   renderDictionaries();refreshInspectorKeepingDraft();message(`「${key}」を削除しました`);
  }
 }
 function setupDictionaryControls(){
- for(const [button,picker,kind] of [['importPronunciation','pronunciationPicker','pronunciation'],['importProsody','prosodyPicker','prosody']]){
-   $(button).onclick=()=>$(picker).click();
-   $(picker).onchange=e=>{const file=e.target.files[0];if(file)uploadSpeechDictionary(kind,file);e.target.value=''};
- }
- for(const id of ['pronunciationEntries','prosodyEntries']){
-   $(id).onsubmit=e=>{e.preventDefault();const form=e.target.closest('.dict-entry');if(form)saveDictionary(form.dataset.dictKind,form.dataset.dictKey,form)};
-   $(id).onclick=e=>{const b=e.target.closest('[data-dict-delete]');if(!b)return;const form=b.closest('.dict-entry');removeDictionary(form.dataset.dictKind,form.dataset.dictKey)};
- }
- $('newPronunciation').onsubmit=e=>{
-   e.preventDefault();const form=e.target,key=form.elements.namedItem('surface').value.trim();
-   if(Object.hasOwn(game?.pronunciationDictionary||{},key))return message('この単語はすでに登録されています',true);
-   saveDictionary('pronunciation',key,form).then(()=>{if(game?.pronunciationDictionary?.[key])form.reset()});
- };
+ pronunciationEditor=globalThis.PronunciationDictionary?.createEditor($('sharedPronunciation'),{toast:message,
+   onLoad:data=>{pronunciation=data;refreshInspectorKeepingDraft()},onSaved:pronunciationSaved,
+   classes:{button:'outline',primary:'primary',danger:'outline dict-delete'}})||null;
+ $('importProsody').onclick=()=>$('prosodyPicker').click();
+ $('prosodyPicker').onchange=e=>{const file=e.target.files[0];if(file)uploadSpeechDictionary('prosody',file);e.target.value=''};
+ $('prosodyEntries').onsubmit=e=>{e.preventDefault();const form=e.target.closest('.dict-entry');if(form)saveDictionary(form.dataset.dictKind,form.dataset.dictKey,form)};
+ $('prosodyEntries').onclick=e=>{const b=e.target.closest('[data-dict-delete]');if(!b)return;const form=b.closest('.dict-entry');removeDictionary(form.dataset.dictKind,form.dataset.dictKey)};
  $('newProsody').onsubmit=e=>{
    e.preventDefault();const form=e.target,key=form.elements.namedItem('surface').value.trim();
    if(Object.hasOwn(game?.prosodyDictionary||{},key))return message('この単語はすでに登録されています',true);
@@ -396,7 +421,7 @@ function setupDictionaryControls(){
 function renderInspector(){
  const wrap=$('inspector');const v=selectedVoice();
  if(!v){wrap.innerHTML='<div class="empty">台詞一覧で台詞を選ぶと、ここで読み上げテキストの編集・生成・試聴ができます。</div>';return}
- const profile=resolveSheetProfile(v.speaker)?.profile,preview=speechPreview(v.ttsText);
+ const profile=resolveSheetProfile(v.speaker)?.profile,choices=v.pronunciationChoices||{},preview=speechPreview(v.ttsText,choices);
  const fmt=$('exportFormat').value||'wav',missing=missingAudioIds.has(v.voiceId);
  const status=missing?'stale':v.stale?'stale':v.audio?'ready':'';
  const scenarioName=game.scenarios.find(sc=>sc.key===v.scenario)?.filename||v.scenario;
@@ -412,7 +437,7 @@ function renderInspector(){
  </section>
  <div class="field"><label>元の台詞（KS上の文章・変更されません）</label><div class="note">${esc(v.text)}</div></div>
  <div class="field"><label for="ttsText">読み上げテキスト</label><textarea id="ttsText">${esc(v.ttsText)}</textarea></div>
- <div class="pronunciation-preview"><strong>辞書を適用した読み上げ（生成時のみ）</strong><div id="speechPreviewText" class="pronunciation-text">${esc(preview.spoken)}</div><div id="speechPreviewInstructions" class="pronunciation-note">${preview.instructions.length?esc('発音指示: '+preview.instructions.join(' / ')):'発音指示なし'}</div></div>
+ <div class="pronunciation-preview"><strong>辞書を適用した読み上げ（生成時のみ）</strong><div id="speechPreviewText" class="pronunciation-text">${esc(preview.spoken)}</div><div id="speechPreviewInstructions" class="pronunciation-note">${preview.instructions.length?esc('発音指示: '+preview.instructions.join(' / ')):'発音指示なし'}</div><div id="speechChoices">${choiceSelectsHtml(v.ttsText,choices)}</div></div>
  <div class="field"><label for="caption">演技指示（任意）</label><textarea id="caption" placeholder="例：声をひそめて、辺りを警戒しながら">${esc(v.caption||'')}</textarea></div>
  <div class="game-voice-edit-actions"><button class="outline" id="saveLine" type="button">この台詞の変更を保存</button></div>
  ${profile?`<div class="note"><strong>${esc(profile.display_name||v.speaker)}</strong>${profile.reading?'（'+esc(profile.reading)+'）':''}<p>${esc(profile.baseline_tone||'')}</p>${(profile.acting_notes||[]).slice(0,4).map(n=>`<p>・${esc(n)}</p>`).join('')}</div>`:''}`;
@@ -680,7 +705,7 @@ function wire(){$('newProject').onclick=()=>createNew();$('finalizeKs').onclick=
  $('includeGeneratedVoices').onchange=e=>{includeReady=e.target.checked;renderScenarios()};
  $('markAllPending').onclick=()=>markAllScenarios('pending');
  $('markAllVoices').onclick=()=>markAllScenarios('all');
- $('clearAllVoiceMarks').onclick=()=>markAllScenarios('clear');$('voiceList').onclick=e=>{const play=e.target.closest('[data-play]');if(play){playVoice(play.dataset.play);return}if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();renderScenarios();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows();renderScenarios()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice();else if(e.target.id==='generateLine')startGeneration([focusedVoice])};$('inspector').oninput=e=>{if(e.target.id==='ttsText'){const p=speechPreview(e.target.value);$('speechPreviewText').textContent=p.spoken;$('speechPreviewInstructions').textContent=p.instructions.length?'発音指示: '+p.instructions.join(' / '):'発音指示なし'}};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{
+ $('clearAllVoiceMarks').onclick=()=>markAllScenarios('clear');$('voiceList').onclick=e=>{const play=e.target.closest('[data-play]');if(play){playVoice(play.dataset.play);return}if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();renderScenarios();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows();renderScenarios()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice();else if(e.target.id==='generateLine')startGeneration([focusedVoice])};$('inspector').oninput=e=>{if(e.target.id==='ttsText')updateSpeechPreview(e.target.value)};$('inspector').onchange=e=>{if(e.target.matches('[data-pron-choice]'))setVoiceChoice(e.target.dataset.pronChoice,e.target.value)};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{
  if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value);
  else if(e.target.matches('[data-cast-source]'))setCastSource(e.target.dataset.castSource,e.target.value);
  else if(e.target.matches('[data-local-field]'))setLocalCastField(e.target.closest('[data-cast-speaker]').dataset.castSpeaker,e.target.dataset.localField,e.target.value);

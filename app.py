@@ -27,7 +27,7 @@ import shared_audio
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.4.0")
+app=FastAPI(title="VoiceDrama Studio",version="0.4.1")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -54,25 +54,81 @@ class GlobalSettingsUpdate(BaseModel):
     qwen_python: str
     expectedRevision: int | None = None
 
+def _tts_settings_view(data):
+    # The pronunciation dictionary has its own endpoints; keep this response small.
+    return {key: data.get(key) for key in (*core.GLOBAL_TTS_KEYS, 'revision')}
+
 @app.get('/api/settings/global')
 def global_settings_get():
     try:
-        return core.load_global_settings()
+        return _tts_settings_view(core.load_global_settings())
     except (ValueError, OSError) as exc:
         raise HTTPException(500, str(exc))
 
 @app.put('/api/settings/global')
 def global_settings_put(body: GlobalSettingsUpdate):
     try:
-        return core.save_global_settings({
+        return _tts_settings_view(core.save_global_settings({
             "irodori_dir": body.irodori_dir,
             "irodori_python": body.irodori_python,
             "qwen_python": body.qwen_python,
-        }, body.expectedRevision)
+        }, body.expectedRevision))
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     except (ValueError, OSError) as exc:
         raise HTTPException(400, str(exc))
+
+
+# Pronunciation dictionary shared by VoiceDrama and game voice. It is stored in
+# global_settings.json and uses the same revision for conflict detection.
+PRONUNCIATION_JSON_LIMIT = 8 * 1024 * 1024
+
+
+class PronunciationSave(BaseModel):
+    dictionary: dict
+    expectedRevision: int
+
+
+def _pronunciation_errors(func, *args):
+    try:
+        return func(*args)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        raise HTTPException(500, str(exc))
+
+
+@app.get('/api/pronunciation-dictionary')
+def pronunciation_get():
+    return _pronunciation_errors(core.load_pronunciation_dictionary)
+
+
+@app.put('/api/pronunciation-dictionary')
+def pronunciation_put(body: PronunciationSave):
+    return _pronunciation_errors(core.save_pronunciation_dictionary, body.dictionary, body.expectedRevision)
+
+
+@app.post('/api/pronunciation-dictionary/import')
+async def pronunciation_import(expectedRevision: int, mode: str = 'merge', file: UploadFile = File(...)):
+    raw = await file.read(PRONUNCIATION_JSON_LIMIT + 1)
+    if len(raw) > PRONUNCIATION_JSON_LIMIT:
+        raise HTTPException(400, '読み方辞書JSONは8MB以内にしてください')
+    try:
+        payload = json.loads(raw.decode('utf-8-sig'))
+    except (UnicodeError, ValueError):
+        raise HTTPException(400, '有効なUTF-8のJSONを指定してください')
+    return _pronunciation_errors(core.import_pronunciation_dictionary, payload, expectedRevision, mode)
+
+
+@app.get('/api/pronunciation-dictionary/export')
+def pronunciation_export():
+    data = _pronunciation_errors(core.load_pronunciation_dictionary)
+    body = json.dumps(data['dictionary'], ensure_ascii=False, indent=2).encode('utf-8')
+    return StreamingResponse(iter([body]), media_type='application/json; charset=utf-8',
+                             headers={'Content-Disposition': 'attachment; filename="pronunciation_dictionary.json"',
+                                      'Cache-Control': 'no-store'})
 
 @app.get('/api/projects')
 def projects():return core.list_projects()
@@ -621,6 +677,8 @@ def run_generation(job_id,pid,line_ids,steps):
             selected=[copy.deepcopy(l) for l in state['lines'] if l['id'] in line_ids and l['text'].strip()]
             asset_map={a['id']:a for a in state['assets']}
             voices={v['name']:v for v in state['voices']}
+            # One snapshot for both the TTS text and the take signature.
+            dictionary=core.load_pronunciation_dictionary()['dictionary']
         if not selected:raise ValueError('生成する台詞がありません')
         filenames={line["id"]:line.get("outputFilename", "") for line in selected}
         groups={}
@@ -634,7 +692,9 @@ def run_generation(job_id,pid,line_ids,steps):
                 asset=asset_map.get(aid)
                 if asset:refs.append(str(core.asset_path(pid,asset)))
             descriptor=voice.get('description','')
-            spec={'id':line['id'],'text':line['text'],'caption':line.get('caption','') or descriptor,
+            # Only the TTS input gets the dictionary readings; the script,
+            # caption and Excel data keep the original text.
+            spec={'id':line['id'],'text':core.line_speech_text(line,dictionary),'caption':line.get('caption','') or descriptor,
                   'description':descriptor,'refs':refs,'mode':mode,'language':resolved['language'],
                   'ref_text':voice.get('refText',''),'num_steps':steps,'output':'',
                   'schedule':'linear','sway_coeff':-1.0}
@@ -668,7 +728,7 @@ def run_generation(job_id,pid,line_ids,steps):
                             line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
                             if line:
                                 asset=next(a for a in fresh['assets'] if a['id']==registered['asset']['id'])
-                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}')
+                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}',dictionary=dictionary)
                                 core.save_project(pid,fresh)
                     job['completed']+=1
         job['message']='生成が完了しました'
