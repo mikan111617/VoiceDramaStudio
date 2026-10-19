@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VoiceDrama Studio — シナリオから音へ</title>
-<link rel="stylesheet" href="/static/style.css?v=0400"><link rel="stylesheet" href="/static/harbor.css?v=0320"></head>
+<link rel="stylesheet" href="/static/style.css?v=0411"><link rel="stylesheet" href="/static/harbor.css?v=0320"><link rel="stylesheet" href="/static/pronunciation.css?v=0401"><link rel="stylesheet" href="/static/characters.css?v=0500"></head>
 <body>
 <div id="app">
 <header class="harbor-masthead"><canvas class="harbor-art" aria-hidden="true"></canvas><div class="harbor-brand"><strong>HARBOR ATELIER</strong><span>VoiceDrama Studio · 音声制作のアトリエ</span></div><button type="button" id="harborFocus" class="harbor-focus-button" aria-pressed="false">集中表示</button></header>
@@ -12,7 +12,7 @@
 </header>
 <div class="main-layout">
  <aside class="sidebar">
-  <div class="sidebar-top"><div class="section-label">作業メニュー</div><button class="side-nav active" id="navScript"><span class="nav-icon">▤</span><span class="nav-text"><b>台本・台詞</b><small>台詞を書いて生成</small></span><span class="nav-short">01</span></button><button class="side-nav" id="navVoices"><span class="nav-icon">◉</span><span class="nav-text"><b>キャスト・声</b><small>登場人物の声</small></span><span class="nav-short">02</span></button><button class="side-nav" id="navAssets"><span class="nav-icon">♬</span><span class="nav-text"><b>音声ライブラリ</b><small>BGM・効果音</small></span><span class="nav-short">03</span></button></div>
+  <div class="sidebar-top"><div class="section-label">作業メニュー</div><button class="side-nav active" id="navScript"><span class="nav-icon">▤</span><span class="nav-text"><b>台本・台詞</b><small>台詞を書いて生成</small></span><span class="nav-short">01</span></button><button class="side-nav" id="navVoices"><span class="nav-icon">◉</span><span class="nav-text"><b>キャスト・声</b><small>登場人物の声</small></span><span class="nav-short">02</span></button><button class="side-nav" id="navAssets"><span class="nav-icon">♬</span><span class="nav-text"><b>音声ライブラリ</b><small>BGM・効果音</small></span><span class="nav-short">03</span></button><button class="side-nav" id="navPronunciation"><span class="nav-icon">あ</span><span class="nav-text"><b>読み方</b><small>固有名詞の読み</small></span><span class="nav-short">04</span></button></div>
   <div class="sidebar-divider"></div><div class="side-section-title">シーン一覧 <button id="addSceneBtn" title="シーンを追加">＋</button></div><div id="sceneList" class="scene-list"></div>
   <div class="sidebar-footer"><div class="tip-label">ショートカット</div><div><kbd>Space</kbd> 再生/停止</div><div><kbd>Ctrl</kbd> + <kbd>S</kbd> 保存</div><div class="tiny muted">音声はPC内のworkspaceに保存されます。</div></div>
  </aside>
@@ -36,5 +36,5 @@
 <input type="file" id="excelPicker" accept=".xlsx" hidden>
 <input type="file" id="audioPicker" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.opus" multiple hidden>
 <input type="file" id="bulkAudioPicker" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" multiple hidden>
-<script src="/static/harbor.js?v=0313" defer></script><script src="/static/app.js?v=0404" defer></script>
+<script src="/static/harbor.js?v=0313" defer></script><script src="/static/pronunciation.js?v=0401" defer></script><script src="/static/characters.js?v=0500" defer></script><script src="/static/app.js?v=0500" defer></script>
 </body></html>

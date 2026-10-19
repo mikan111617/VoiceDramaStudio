@@ -149,3 +149,8 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .take-panel .field{margin-bottom:8px}
 .take-panel .take-actions{margin-top:6px}
 .take-panel .line-status{margin-left:0}
+
+/* Voice Design dialog: regenerate and compare results without closing it. */
+.design-panel{margin-top:14px}
+.design-candidates{margin:4px 0 8px;border:1px solid var(--border);border-radius:8px;padding:0 10px}
+.design-candidates .ref-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -14,10 +14,29 @@ const SHAREABLE_LIBRARY_KINDS=new Set(['bgm','sfx','ambience']);
 let librarySource='project',sharedAssets=[],sharedAssetsError='';
 let excelImportMode='merge';
 let castCopySelection=new Set();
+// Shared with game voice; applied to the TTS input only, never to l.text.
+let pronunciation=null,pronunciationEditor=null;
+const PD=()=>globalThis.PronunciationDictionary;
+// Characters shared by every work; a project's own casts are the fallback.
+let characterRegistry=null,characterEditor=null;
+const CH=()=>globalThis.CharacterRegistry;
+function voiceFor(speaker){
+ const link=state?.characterLinks?.[speaker],local=state?.voices.find(v=>v.name===speaker)||null;
+ if(link!=='project'){
+  const found=(link&&CH()?.byId(characterRegistry,link))||CH()?.match(characterRegistry,[speaker]);
+  if(found)return found;
+ }
+ return local;
+}
+function voiceLabel(v){
+ if(!v)return '未設定（標準の声）';
+ const shared=!!CH()?.byId(characterRegistry,v.id);
+ return `${shared?'共通キャラクター':'この作品のキャスト'}「${v.name}」 · ${String(v.model||'Aratako/Irodori-TTS-v4.1-Small').split('/').pop()} · 参照音声${(v.refs||[]).length}件`;
+}
 // Local edit history only: never roll back audio files, uploads or server-side
 // destructive actions. Keep asset metadata and the server revision authoritative.
 const HISTORY_LIMIT=80;
-const HISTORY_FIELDS=['title','scenes','lines','clips','tracks','voices','settings'];
+const HISTORY_FIELDS=['title','scenes','lines','clips','tracks','voices','settings','characterLinks'];
 let undoHistory=[],redoHistory=[],historyBaseline=null,historyLastKey='',historyLastAt=0,historyRestoring=false;
 function editSnapshot(){const snapshot={};for(const key of HISTORY_FIELDS)snapshot[key]=structuredClone(state?.[key]);return snapshot}
 function historyButtons(){const a=$('undoBtn'),b=$('redoBtn');if(a)a.disabled=!undoHistory.length;if(b)b.disabled=!redoHistory.length}
@@ -85,10 +104,10 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み';loadPronunciation();loadCharacters()}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
-function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker)].filter(Boolean))]}
+function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker),...(characterRegistry?.characters||[]).map(c=>c.name)].filter(Boolean))]}
 function selectScene(id){if(id===selectedScene)return;stop();selectedScene=id;selectedLine=null;selectedClip=null;currentTime=0;renderAll()}
 function selectLine(id){
  // A script-line click always switches the inspector to line/TTS controls,
@@ -249,7 +268,7 @@ function addLine(afterId){const l=lineDefault(selectedScene);const idx=afterId?s
 function removeLine(id){const l=lineById(id);if(!l||!confirm(`「${l.text.slice(0,30)||'空欄'}」を削除しますか？（音声素材はライブラリに保持）`))return;state.lines=state.lines.filter(x=>x.id!==id);state.clips=state.clips.filter(x=>x.lineId!==id);selectedLine=null;selectedClip=null;reflow();dirtyState();renderAll()}
 function moveLine(id,change){const idx=state.lines.findIndex(x=>x.id===id);const target=idx+change;if(target<0||target>=state.lines.length||state.lines[target].sceneId!==selectedScene)return;[state.lines[idx],state.lines[target]]=[state.lines[target],state.lines[idx]];reflow();dirtyState();renderAll()}
 function reflow(){let cursor=0;for(const l of activeLines()){const c=state.clips.find(c=>c.lineId===l.id&&c.trackId==='dialogue');if(c){if(!c.pinned){const old=c.start||0;c.start=+Math.max(0,cursor).toFixed(4);for(const a of activeClips()){if(a.anchorLineId===l.id&&a.id!==c.id)a.start=Math.max(0,c.start+(a.anchorOffset||0))}}cursor=Math.max(cursor,c.start+(c.duration||0))}cursor+=Math.max(0,Number(l.after)||0)}}
-function renderSidebar(){const counts={};state.lines.forEach(l=>counts[l.sceneId]=(counts[l.sceneId]||0)+1);$('sceneList').innerHTML=state.scenes.map((s,i)=>`<div class="scene-row"><button class="scene-item ${selectedScene===s.id?'active':''}" data-scene="${esc(s.id)}" title="${esc(s.name)}"><span class="scene-mark"></span><span class="scene-title">${esc(s.name)}</span><span class="scene-count">${counts[s.id]||0}</span></button><button class="scene-rename-btn" data-rename-scene="${esc(s.id)}" title="シーン名を変更" aria-label="${esc(s.name)}の名前を変更">✎</button><button class="scene-delete-btn" data-delete-scene="${esc(s.id)}" title="このシーンを削除" aria-label="${esc(s.name)}を削除">×</button></div>`).join('');$('projectButton').innerHTML=`<span class="project-title">${esc(state.title)}</span><span class="project-chevron" aria-hidden="true">⌄</span>`;for(const v of ['script','voices','assets'])$('nav'+v[0].toUpperCase()+v.slice(1)).classList.toggle('active',view===v)}
+function renderSidebar(){const counts={};state.lines.forEach(l=>counts[l.sceneId]=(counts[l.sceneId]||0)+1);$('sceneList').innerHTML=state.scenes.map((s,i)=>`<div class="scene-row"><button class="scene-item ${selectedScene===s.id?'active':''}" data-scene="${esc(s.id)}" title="${esc(s.name)}"><span class="scene-mark"></span><span class="scene-title">${esc(s.name)}</span><span class="scene-count">${counts[s.id]||0}</span></button><button class="scene-rename-btn" data-rename-scene="${esc(s.id)}" title="シーン名を変更" aria-label="${esc(s.name)}の名前を変更">✎</button><button class="scene-delete-btn" data-delete-scene="${esc(s.id)}" title="このシーンを削除" aria-label="${esc(s.name)}を削除">×</button></div>`).join('');$('projectButton').innerHTML=`<span class="project-title">${esc(state.title)}</span><span class="project-chevron" aria-hidden="true">⌄</span>`;for(const v of ['script','voices','assets','pronunciation'])$('nav'+v[0].toUpperCase()+v.slice(1)).classList.toggle('active',view===v)}
 function libraryDialogueMap(){
  const map=new Map(),add=(id,line)=>{if(!id||!line)return;const list=map.get(id)||[];if(!list.some(l=>l.id===line.id))list.push(line);map.set(id,list)};
  for(const line of state.lines)for(const take of line.takes||[])add(take.assetId,line);
@@ -346,17 +365,115 @@ function renderLibraryView(){
  loadSharedAssets();
 }
 function renderAll(){if(!state)return;renderSidebar();renderEditor();renderTimeline();renderInspector()}
+async function loadPronunciation(){
+ try{pronunciation=await PD().fetchDictionary();renderInspector()}
+ catch(e){toast('読み方辞書を読み込めません: '+e.message,true)}
+}
+// A dictionary or character change affects only lines whose spoken text or
+// voice changes; the server compares each take's signature, so take the
+// statuses from there.
+async function refreshLineStatuses(){
+ if(!state)return;
+ try{
+  await saveNow();
+  const pid=state.id,fresh=await req('/api/projects/'+pid);
+  if(state?.id!==pid)return;
+  const statuses=new Map(fresh.lines.map(l=>[l.id,l.status]));
+  for(const line of state.lines)if(statuses.has(line.id))line.status=statuses.get(line.id);
+  renderInspector();
+ }catch(e){toast('台詞の状態を更新できません: '+e.message,true)}
+}
+async function pronunciationSaved(data){
+ pronunciation=data;
+ await refreshLineStatuses();
+}
+async function loadCharacters(){
+ try{characterRegistry=await CH().fetchRegistry();renderInspector();renderProjectCasts()}
+ catch(e){toast('共通キャラクターを読み込めません: '+e.message,true)}
+}
+async function charactersSaved(data,info){
+ characterRegistry=data;
+ if(!state)return;
+ // "Use in the source scenario" links this project's speakers on the server.
+ if(info?.source?.kind==='drama'&&info.source.id===state.id&&info.summary?.applied){
+  try{state=await req('/api/projects/'+state.id);clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
+  catch(e){toast(e.message,true)}
+  return;
+ }
+ await refreshLineStatuses();
+ renderProjectCasts();characterEditor?.refresh();
+}
+function projectCastsHtml(){
+ // Casts made inside this project before shared characters existed.
+ const used=v=>voiceFor(v.name)===v;
+ return speakerLinksHtml()+(state.voices.length?`<section class="project-casts"><h3>この作品だけのキャスト</h3><p class="muted small">この作品だけの声の設定です。同じ名前の共通キャラクターがあると、そちらを使います。「⇧ 共通キャラクターへ取り込む」で全作品から使えるようにできます。</p><div class="buttonline">${button('⇧ この作品のキャストをまとめて共通キャラクターへ','id="promoteAllCastsBtn"')}${button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')}${button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')}</div></section>`+bulkDropZone('reference'):'')+(state.voices.length?state.voices.map((v,i)=>`<article class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><header class="cast-card-heading"><div class="cast-identity"><span class="cast-number">CAST ${String(i+1).padStart(2,'0')}</span><h3>${esc(v.name)}</h3></div><span class="cast-reference-count">参照音声 ${(v.refs||[]).length}件${used(v)?'':` · 共通キャラクター「${esc(voiceFor(v.name)?.name||'')}」を使用中`}</span></header><div class="inspector-grid cast-fields"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><section class="cast-reference-section"><div class="cast-reference-heading"><div class="cast-reference-kicker">VOICE SAMPLES</div><h4>${esc(v.name)} の参照音声</h4></div><div class="cast-reference-preview">${(v.refs||[]).map(id=>state.assets.find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)}</span>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}</div>`).join('')||'<span class="small muted">参照音声はまだありません</span>'}</div></section><div class="asset-actions cast-card-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('⇧ 共通キャラクターへ取り込む',`data-cast-promote="${i}" title="このキャストを全作品で使える共通キャラクターにします"`)}${button('このキャストの全台詞へ設定を適用',`data-voice-apply="${i}"`)}${button('⇄ 別作品へコピー',`data-cast-copy="${i}"`)}${button('🗑 このキャストを削除',`data-cast-delete="${i}"`,'danger')}</div></article>`).join(''):'')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
+}
+function renderCastsView(){
+ if(!($('characterEditor')?.isConnected&&characterEditor)){
+  $('editorContent').innerHTML='<div id="characterEditor"></div><div id="projectCasts"></div>';
+  characterEditor=CH()?.createEditor($('characterEditor'),{toast,models,onSaved:charactersSaved,
+   classes:{button:'btn ghost',primary:'btn primary',danger:'btn danger'},
+   usage:c=>{const ids=new Map();let n=0;for(const l of state.lines){if(!ids.has(l.speaker))ids.set(l.speaker,voiceFor(l.speaker)?.id);if(ids.get(l.speaker)===c.id)n++}return n?`この作品の台詞 ${n}件`:''},
+   actions:()=>[{label:'この作品の台詞へ設定を適用',title:'この作品でこのキャラクターを使う台詞の「声の設定元」を、キャラクター設定に戻します',run:applyCharacter}],
+   beforeImport:()=>saveNow(),
+   onLoad:data=>{characterRegistry=data;renderProjectCasts();renderInspector()}})||null;
+  characterEditor?.load();
+ }
+ renderProjectCasts();
+}
+function renderProjectCasts(){const box=$('projectCasts');if(box&&view==='voices')box.innerHTML=projectCastsHtml()}
+function speakerLinksHtml(){
+ const speakers=[...new Set(state.lines.map(l=>l.speaker).filter(Boolean))];
+ if(!speakers.length)return '';
+ const shared=characterRegistry?.characters||[];
+ return `<section class="speaker-links"><h3>この作品の話者と声</h3><p class="muted small">「自動」は、名前か別名が一致する共通キャラクターを使い、なければこの作品だけのキャストを使います。話者ごとに別のキャラクターも選べます。</p>${speakers.map(sp=>{
+  const link=state.characterLinks?.[sp]||'',auto=CH()?.match(characterRegistry,[sp]),local=state.voices.find(v=>v.name===sp),voice=voiceFor(sp);
+  return `<div class="speaker-link-row"><b title="${esc(sp)}">${esc(sp)} <small class="muted">${state.lines.filter(l=>l.speaker===sp).length}件</small></b><select data-speaker-link="${esc(sp)}" aria-label="${esc(sp)}の声"><option value="" ${link?'':'selected'}>自動（${auto?'共通キャラクター「'+esc(auto.name)+'」':local?'この作品だけのキャスト':'一致なし'}）</option>${shared.map(c=>`<option value="${esc(c.id)}" ${link===c.id?'selected':''}>共通キャラクター：${esc(c.name)}</option>`).join('')}${local?`<option value="project" ${link==='project'?'selected':''}>この作品だけのキャスト「${esc(sp)}」</option>`:''}</select><span class="speaker-link-state">${voice?esc(voiceLabel(voice)):'未登録（標準の声）'+button('＋ 共通キャラクターに登録',`data-register-speaker="${esc(sp)}"`)}</span></div>`;
+ }).join('')}</section>`;
+}
+function setSpeakerLink(speaker,value){
+ const before=voiceFor(speaker),links={...(state.characterLinks||{})};
+ if(value)links[speaker]=value;else delete links[speaker];
+ if(Object.keys(links).length)state.characterLinks=links;else delete state.characterLinks;
+ if(voiceFor(speaker)!==before)state.lines.filter(l=>l.speaker===speaker&&l.selectedTakeId&&getLineTtsSource(l)==='cast').forEach(l=>l.status='stale');
+ dirtyState();renderProjectCasts();characterEditor?.refresh();renderInspector();
+}
+function applyCharacter(c){
+ let num=0;
+ for(const l of state.lines.filter(l=>voiceFor(l.speaker)?.id===c.id)){l.ttsSource='cast';l.status=l.selectedTakeId?'stale':'missing';num++}
+ dirtyState();renderAll();toast(`${c.name} の ${num}件をキャラクター設定に切り替えました`);
+}
+function renderPronunciationView(){
+ if($('pronunciationEditor')?.isConnected&&pronunciationEditor)return;
+ $('editorContent').innerHTML='<div id="pronunciationEditor"></div>';
+ pronunciationEditor=PD()?.createEditor($('pronunciationEditor'),{toast,onSaved:pronunciationSaved,
+  onLoad:data=>{pronunciation=data;renderInspector()},
+  classes:{button:'btn ghost',primary:'btn primary',danger:'btn danger'}})||null;
+ pronunciationEditor?.load();
+}
+function linePronunciationHtml(l){
+ const pd=PD();if(!pd||!pronunciation)return '';
+ const dictionary=pronunciation.dictionary||{},choices=l.pronunciationChoices||{};
+ const words=pd.choosable(l.text,dictionary);
+ return `<section class="pd-line" aria-label="読み方"><div class="pd-line-title">辞書適用後の読み上げ（音声生成のときだけ・台本は変更しません）</div><div class="pd-spoken">${esc(pd.apply(l.text,dictionary,choices)||'（空の台詞）')}</div>${words.map(w=>`<label class="pd-choice">「${esc(w)}」の読み${pd.choiceSelect(w,dictionary[w],choices,`data-pron-choice="${esc(w)}"`)}</label>`).join('')}</section>`;
+}
 function bulkDropZone(mode){return `<div class="batch-dropzone" data-audio-drop="${mode}"><div class="dropzone-icon">⇩</div><div><b>${mode==='assign'?'生成済みの台詞音声をまとめて割り当て':mode==='reference'?'キャストの参照音声をドロップ':'音声ファイルをまとめてライブラリへ追加'}</b><p>音声ファイルをここへドラッグ＆ドロップ · 複数ファイル対応 · 取り込み前に割り当てを確認</p></div></div>`}
-function renderEditor(){if(!state)return;const act=$('panelActions');const title=$('editorTitle');const sub=$('editorSub');const key=$('editorKicker');
+function renderEditor(){if(!state)return;if(view!=='voices')characterEditor=null;const act=$('panelActions');const title=$('editorTitle');const sub=$('editorSub');const key=$('editorKicker');
  if(view==='script'){
+  pronunciationEditor=null;
   key.textContent='台本・台詞';title.textContent=sceneName(selectedScene);sub.textContent=`${activeLines().length} セリフ · 編集すると音声の更新を検出`;
   const pendingCount=activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).length;
   act.innerHTML=`<div class="action-group action-main">${button('＋ セリフを追加','id="addLineTop"')}${button(pendingCount?`✦ 未生成の${pendingCount}件をまとめて生成`:'✦ 未生成をまとめて生成', `id="generateMissingBtn" ${pendingCount?'':'disabled'} title="このシーンの未生成・要再生成の台詞を生成します"`,'primary')}</div><div class="action-group">${button('↑ Excel取込','id="importExcelBtn"')}${button('↓ Excelひな形','id="downloadExcelTemplateBtn"')}${button('↓ 手持ちの音声を台詞に割り当て','id="batchAssignBtn"')}${button('↓ このシーンの台詞音声（ZIP）','id="downloadSceneTakesZipBtn"')}${button('🗑 台本を全削除','id="openClearScriptBtn"','danger')}</div>`;
   $('editorContent').innerHTML=bulkDropZone('assign')+activeLines().map((l,i)=>`<article class="script-line ${selectedLine===l.id?'active':''}" data-id="${esc(l.id)}"><div class="line-top"><span class="line-number">${String(i+1).padStart(2,'0')}</span><input class="speaker-select" data-line-field="speaker" list="speakers" value="${esc(l.speaker)}" title="話者を入力"><span class="line-status ${esc(l.status)}">${{ready:'音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成'}</span><div class="line-actions"><button class="icon-btn" data-move="-1" title="上へ">↑</button><button class="icon-btn" data-move="1" title="下へ">↓</button><button class="icon-btn" data-delete="line" title="削除">×</button></div></div><textarea class="line-text" data-line-field="text" placeholder="ここに台詞を入力">${esc(l.text)}</textarea><div class="caption-box"><span class="caption-tag">演技指示</span><textarea data-line-field="caption" placeholder="例：声をひそめて、辺りを警戒しながら…">${esc(l.caption)}</textarea></div><div class="file-name-box"><label>生成音声のファイル名（任意） <input data-line-field="outputFilename" type="text" maxlength="120" value="${esc(l.outputFilename||'')}" placeholder="未指定なら自動命名 · 例: mahoru_001.wav" spellcheck="false"></label></div><div class="line-footer"><label>次の台詞まで <input class="gap-input" type="number" min="0" max="60" step="0.1" data-line-field="after" value="${fnum(l.after,1)}"> 秒</label><span>${l.selectedTakeId?'<button data-action="preview" title="選択中のテイクを試聴">▶ 試聴</button>　':''}<button type="button" data-action="seek" title="対応する台詞クリップの開始位置へ再生ヘッドを移動">↪ 再生位置へ</button>　<button type="button" data-action="playFrom" title="この台詞の開始位置へ移動して再生">▶ ここから再生</button>　<button data-action="addBelow">＋ 次に追加</button>　<button data-action="select" title="右側の「選択中の台詞・クリップ」で生成・試聴・テイク選択">${l.takes?.length||0} テイク　→</button></span></div></article>`).join('')+`<button class="editor-bigaction" id="addLineBottom">＋ セリフを追加</button><datalist id="speakers">${getVoices().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
  }else if(view==='voices'){
-  key.textContent='キャスト・声';title.textContent='キャスト・声';sub.textContent='キャラクター用の参照音声のみ表示します。台詞音声は音声ライブラリへ';act.innerHTML=button('⇄ キャストを別作品へコピー','id="openCastCopyBtn"')+button('↓ 参照音声をまとめて登録','id="batchReferencesBtn"')+button('＋ キャスト','id="addVoiceBtn"','primary');
-  $('editorContent').innerHTML=bulkDropZone('reference')+(state.voices.length?state.voices.map((v,i)=>`<article class="cast-card" data-voice="${i}" title="ここに音声をドロップすると、このキャストの参照音声として登録できます"><header class="cast-card-heading"><div class="cast-identity"><span class="cast-number">CAST ${String(i+1).padStart(2,'0')}</span><h3>${esc(v.name)}</h3></div><span class="cast-reference-count">参照音声 ${(v.refs||[]).length}件</span></header><div class="inspector-grid cast-fields"><div class="field"><label>名前</label><input data-vfield="name" value="${esc(v.name)}"></div><div class="field"><label>言語</label><select data-vfield="language">${['Japanese','English','Chinese','Auto'].map(z=>`<option ${z===v.language?'selected':''}>${z}</option>`).join('')}</select></div><div class="field"><label>既定TTS</label><select data-vfield="engine"><option value="irodori" ${v.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${v.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>生成方式</label><select data-vfield="mode"><option value="clone" ${v.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${v.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>音声モデル（Voice DesignのIrodoriモデルを選択可能）</label><select data-vfield="model">${(models[v.engine]||models.irodori).map(([m,n])=>`<option value="${esc(m)}" ${v.model===m?'selected':''}>${esc(n)}</option>`).join('')}</select></div><div class="field wide"><label>声の説明（Voice Design）</label><textarea rows="2" data-vfield="description">${esc(v.description||'')}</textarea></div><div class="field wide"><label>Qwen Base: 参照音声の書き起こし（任意）</label><textarea rows="2" data-vfield="refText">${esc(v.refText||'')}</textarea></div><div class="field wide"><label>参照音声（複数選択可 / Qwen Baseは先頭1本）</label><div class="buttonline">${state.assets.filter(a=>a.kind==='reference'||(v.refs?.includes(a.id)&&a.kind!=='reference')).map(a=>`<label class="pill" title="${a.kind==='reference'?'声の参照音声':'以前登録した台詞音声です。不要ならチェックを外してください'}"><input type="checkbox" data-ref="${esc(a.id)}" ${v.refs?.includes(a.id)?'checked':''}> ${esc(a.name.slice(0,22))}${a.kind==='reference'?'':' ⚠ 旧登録'}</label>`).join('')||'<span class="small muted">未登録</span>'}</div></div></div><section class="cast-reference-section"><div class="cast-reference-heading"><div class="cast-reference-kicker">VOICE SAMPLES</div><h4>${esc(v.name)} の参照音声</h4></div><div class="cast-reference-preview">${(v.refs||[]).map(id=>state.assets.find(a=>a.id===id)).filter(Boolean).map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)}</span>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}</div>`).join('')||'<span class="small muted">参照音声はまだありません</span>'}</div></section><div class="asset-actions cast-card-actions">${button('✦ Voice Designで新しい声を作成',`data-voice-design="${i}"`,'primary')}${button('＋ 参照音声を登録',`data-voice-upload="${i}"`)}${button('このキャストの全台詞へ設定を適用',`data-voice-apply="${i}"`)}${button('⇄ 別作品へコピー',`data-cast-copy="${i}"`)}${button('🗑 このキャストを削除',`data-cast-delete="${i}"`,'danger')}</div></article>`).join(''):'<div class="empty">キャストがありません。追加すると声を登録できます。</div>')+`<div class="ref-manage"><h3>参照音声の管理</h3><p class="muted small">キャストの参照音声だけを管理します。使用中の音声を削除するときは確認が必要です。</p>${state.assets.filter(a=>a.kind==='reference').map(a=>`<div class="ref-row"><span title="${esc(a.name)}">${esc(a.name)} · ${fnum(a.duration,1)}秒</span><div>${button('▶ 試聴',`data-preview="${esc(a.id)}"`)}${button('🗑 削除',`data-trash="${esc(a.id)}"`)}</div></div>`).join('')||'<p class="muted small">参照音声はまだありません。</p>'}</div>`;
+  key.textContent='キャスト・声';title.textContent='キャスト・声';sub.textContent='共通キャラクターは、すべての作品とゲーム音声で使えます。台詞音声は音声ライブラリへ';act.innerHTML=button('⇩ 作品・ゲームから取り込む','id="importCharactersBtn"')+button('＋ キャラクター','id="addCharacterBtn"','primary');
+  pronunciationEditor=null;
+  renderCastsView();
+ }else if(view==='pronunciation'){
+  key.textContent='読み方';title.textContent='読み方辞書';sub.textContent='ボイスドラマとゲーム音声で共通 · 音声生成のときだけ適用します';act.innerHTML='';
+  renderPronunciationView();
  }else{
+ pronunciationEditor=null;
  key.textContent='音声ライブラリ';title.textContent='音声ライブラリ';sub.textContent='音声をドラッグして右のマルチトラックへ配置できます。BGM・効果音・環境音など';act.innerHTML=button('↓ 音声をまとめて取り込む',`id="batchLibraryBtn"`,'primary')+button('＋ 音声ファイル',`id="uploadAudioBtn"`)+button(`🗑 選択削除 (${trashSelection.size})`,`id="trashSelectedBtn" ${trashSelection.size?'':'disabled'}`);
  renderLibraryView();
  }
@@ -470,7 +587,7 @@ function followPlaybackPosition(){
 const models={irodori:[['Aratako/Irodori-TTS-v4.1-Small','Irodori v4.1 Small'],['Aratako/Irodori-TTS-v4-Large','Irodori v4 Large (FP32)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int8-weight-only','Irodori Large INT8 (RTX 4070向け)'],['Aratako/Irodori-TTS-v4-Large-Quantized/int4-weight-only','Irodori Large INT4'],['phasefield-audio/Irodori-TTS-v4.1-Anime','Irodori v4.1 Anime'],['phasefield-audio/Irodori-TTS-v4.1-Anime/int8-weight-only','Irodori Anime INT8']],qwen:[['Qwen/Qwen3-TTS-12Hz-1.7B-Base','Qwen3 Base 1.7B'],['Qwen/Qwen3-TTS-12Hz-0.6B-Base','Qwen3 Base 0.6B'],['Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign','Qwen3 Voice Design 1.7B']]};
 function modelSelect(engine,value){return `<select id="lineModel"><option value="">モデルを選択</option>${(models[engine]||models.irodori).map(([id,n])=>`<option value="${esc(id)}" ${value===id?'selected':''}>${esc(n)}</option>`).join('')}<option value="custom" ${value&&!models[engine]?.some(x=>x[0]===value)?'selected':''}>その他（直接入力）</option></select><input id="modelCustom" placeholder="Hugging Face モデルID / 量子化モデルのサブフォルダ" style="${value&&!models[engine]?.some(x=>x[0]===value)?'':'display:none;'}margin-top:6px" value="${value&&!models[engine]?.some(x=>x[0]===value)?esc(value):''}">`}
 function getLineTtsSource(l){
-  const v=state.voices.find(v=>v.name===l.speaker);
+  const v=voiceFor(l.speaker);
   if(l.ttsSource==='line')return 'line';
   if(l.ttsSource==='cast')return v?'cast':'line';
   if(!v)return 'line';
@@ -478,7 +595,7 @@ function getLineTtsSource(l){
   return 'cast';
 }
 function displayLineTts(l){
-  const v=state.voices.find(v=>v.name===l.speaker);
+  const v=voiceFor(l.speaker);
   const source=getLineTtsSource(l), c=source==='cast'?v:l;
   const engine=c?.engine||'irodori',mode=c?.mode||'clone';
   const model=engine==='qwen'&&mode==='design'?'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign':(c?.model||'Aratako/Irodori-TTS-v4.1-Small');
@@ -486,7 +603,7 @@ function displayLineTts(l){
 }
 function renderInspector(){if(!state)return;const inspector=$('inspector'),l=lineById(selectedLine),c=clipById(selectedClip);
  if(c){const a=asset(c.assetId);inspector.innerHTML=`<div class="inspector-grid"><div class="field wide"><label>選択中クリップ（${selectedClips.size}件選択・ドラッグでまとめて移動）</label><div style="font-weight:700">${esc(a?.name||'不明')}</div></div><div class="field"><label>開始（秒）</label><input type="number" id="clipStart" min="0" step="0.1" value="${fnum(c.start,2)}"></div><div class="field"><label>長さ（秒）</label><input type="number" id="clipDuration" min="0.01" step="0.1" value="${fnum(c.duration,2)}"></div><div class="field"><label>音量（%）</label><input type="number" id="clipGain" min="0" max="800" step="5" value="${Math.round((c.gain??1)*100)}"></div><div class="field"><label>フェードイン（秒）</label><input type="number" id="clipFadeIn" min="0" step="0.1" value="${fnum(c.fadeIn,1)}"></div><div class="field"><label>フェードアウト（秒）</label><input type="number" id="clipFadeOut" min="0" step="0.1" value="${fnum(c.fadeOut,1)}"></div><div class="field"><label>トラック</label><select id="clipTrack">${state.tracks.map(t=>`<option value="${esc(t.id)}" ${t.id===c.trackId?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><div class="field"><label>前をカット（秒）</label><input type="number" id="clipTrimStart" min="0" step="0.1" value="${fnum(c.trimStart,1)}"></div><div class="field"><label>末尾カット（秒）</label><input type="number" id="clipTrimEnd" min="0" step="0.1" value="${fnum(c.trimEnd,1)}"></div><div class="field wide"><label><input type="checkbox" id="clipLoop" ${c.loop?'checked':''}> ループ再生（BGM・環境音）</label></div>${c.trackId!=='dialogue'?`<div class="field wide"><label>台詞への追従</label><select id="clipAnchor"><option value="">なし（固定時刻）</option>${activeLines().map(x=>`<option value="${esc(x.id)}" ${c.anchorLineId===x.id?'selected':''}>${esc(x.speaker)}：${esc(x.text.slice(0,24))}</option>`).join('')}</select></div>`:''}<div class="field wide"><label><input type="checkbox" id="clipPinned" ${c.pinned?'checked':''}> 自動整列から除外（位置を固定）</label></div></div><div class="inspect-actions">${button('▶ この位置から再生','id="playClipBtn"')}${button('クリップ削除','id="deleteClipBtn"','danger')}${l?button('台詞・TTS設定','id="inspectLineBtn"'):''}</div>`;return;}
- if(l){const hasAudio=l.takes?.length>0, effective=displayLineTts(l),isOverride=effective.source==='line',statusLabel={ready:'✓ 音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成';inspector.innerHTML=`<section class="take-panel" aria-label="この台詞の音声"><div class="take-head"><span class="take-title">音声 · ${esc(l.speaker||'話者未設定')}</span><span class="line-status ${esc(l.status)}">${statusLabel}</span></div>${hasAudio?`<div class="field"><label>使うテイク</label><select id="lineTake"><option value="">未選択</option>${(l.takes||[]).map((t,i)=>`<option value="${esc(t.id)}" ${t.id===l.selectedTakeId?'selected':''}>テイク ${i+1} · ${esc(t.engine||'import')} · ${esc((t.createdAt||'').slice(0,16))}</option>`).join('')}</select></div>`:'<p class="inspector-note">まだ音声がありません。</p>'}<div class="inspect-actions take-actions">${button('✦ この台詞を生成',`id="generateLineBtn"`,'primary')}${hasAudio?button('▶ 試聴',`id="previewTakeBtn"`)+button('↓ ダウンロード',`id="downloadTakeBtn"`):''}</div></section><div class="inspector-grid"><div class="field wide"><label>台詞</label><div style="font-size:12px">${esc(l.text.slice(0,90)||'（空の台詞）')}</div></div><div class="field wide"><label>声の設定元</label><select id="lineTtsSource"><option value="cast" ${!isOverride?'selected':''}>キャスト設定を使う（推奨）</option><option value="line" ${isOverride?'selected':''}>この台詞だけ個別設定</option></select></div>${!isOverride?`<div class="field wide"><label>実際に使用するモデル</label><div class="inspector-note">${esc(effective.model)}（「02 キャスト・声」で変更できます）</div></div>`:`<div class="field"><label>TTSエンジン</label><select id="lineEngine"><option value="irodori" ${l.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${l.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>声の方式</label><select id="lineMode"><option value="clone" ${l.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${l.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>モデル</label>${modelSelect(l.engine,l.model)}</div>`}</div><div class="inspect-actions">${button('＋ 手持ちの音声を割り当て',`id="attachPickerBtn"`)}${button('✦ 演技指示をAIで提案',`id="suggestCaptionBtn"`)}${hasAudio&&l.selectedTakeId?button('🗑 選択テイクを削除',`id="deleteSelectedTakeBtn"`,'danger'):''}</div><p class="inspector-note" style="margin-top:10px">生成時は、キャスト設定の参照音声・声の説明を利用します。モデルと台詞の変更はテイク履歴に影響せず、再生成を促します。</p>`;return}
+ if(l){const hasAudio=l.takes?.length>0, effective=displayLineTts(l),isOverride=effective.source==='line',statusLabel={ready:'✓ 音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成';inspector.innerHTML=`<section class="take-panel" aria-label="この台詞の音声"><div class="take-head"><span class="take-title">音声 · ${esc(l.speaker||'話者未設定')}</span><span class="line-status ${esc(l.status)}">${statusLabel}</span></div>${hasAudio?`<div class="field"><label>使うテイク</label><select id="lineTake"><option value="">未選択</option>${(l.takes||[]).map((t,i)=>`<option value="${esc(t.id)}" ${t.id===l.selectedTakeId?'selected':''}>テイク ${i+1} · ${esc(t.engine||'import')} · ${esc((t.createdAt||'').slice(0,16))}</option>`).join('')}</select></div>`:'<p class="inspector-note">まだ音声がありません。</p>'}<div class="inspect-actions take-actions">${button('✦ この台詞を生成',`id="generateLineBtn"`,'primary')}${hasAudio?button('▶ 試聴',`id="previewTakeBtn"`)+button('↓ ダウンロード',`id="downloadTakeBtn"`):''}</div></section>${linePronunciationHtml(l)}<div class="inspector-grid"><div class="field wide"><label>台詞</label><div style="font-size:12px">${esc(l.text.slice(0,90)||'（空の台詞）')}</div></div><div class="field wide"><label>声の設定元</label><select id="lineTtsSource"><option value="cast" ${!isOverride?'selected':''}>キャスト設定を使う（推奨）</option><option value="line" ${isOverride?'selected':''}>この台詞だけ個別設定</option></select></div>${!isOverride?`<div class="field wide"><label>実際に使用するモデル</label><div class="inspector-note">${esc(effective.model)}（${esc(voiceLabel(voiceFor(l.speaker)).split(' · ')[0])}・「02 キャスト・声」で変更できます）</div></div>`:`<div class="field"><label>TTSエンジン</label><select id="lineEngine"><option value="irodori" ${l.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${l.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>声の方式</label><select id="lineMode"><option value="clone" ${l.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${l.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>モデル</label>${modelSelect(l.engine,l.model)}</div>`}</div><div class="inspect-actions">${button('＋ 手持ちの音声を割り当て',`id="attachPickerBtn"`)}${button('✦ 演技指示をAIで提案',`id="suggestCaptionBtn"`)}${hasAudio&&l.selectedTakeId?button('🗑 選択テイクを削除',`id="deleteSelectedTakeBtn"`,'danger'):''}</div><p class="inspector-note" style="margin-top:10px">生成時は、キャスト設定の参照音声・声の説明を利用します。モデルと台詞の変更はテイク履歴に影響せず、再生成を促します。</p>`;return}
  inspector.innerHTML=`<div class="inspector-note">タイムラインのクリップか、左側の台詞を選択してください。<br>音声ライブラリからBGM・効果音を追加できます。</div><div class="inspect-actions">${button('＋ BGM / 効果音を取り込む','id="insUploadBtn"')}${button('＋ トラックを追加','id="addTrackBtn"')}</div>`;
 }
 function addClip(aid,track='sfx',atTime=currentTime){const a=asset(aid);if(!a)return;const t=state.tracks.find(x=>x.id===track);if(!t)return;const c={id:newid('clip'),sceneId:selectedScene,trackId:track,assetId:aid,lineId:null,start:Math.max(0,Number(atTime)||0),duration:a.duration,trimStart:0,trimEnd:0,loop:false,gain:1,fadeIn:0,fadeOut:0,pinned:true};state.clips.push(c);selectedClip=c.id;selectedLine=null;dirtyState();renderTimeline();renderInspector();toast(`${a.name} を${t.name}へ追加`)}
@@ -725,7 +842,6 @@ async function importExcel(file){
      <div class="modal-actions">${button('閉じる','data-close="1"','primary')}</div>`);
  }catch(e){toast('Excel取り込みに失敗: '+e.message,true)}
 }
-function addVoice(){const name=prompt('キャラクター名を入力','新しいキャラクター');if(!name?.trim())return;if(state.voices.some(v=>v.name===name.trim())){toast('同じ名前のキャストが登録済み',true);return}state.voices.push({name:name.trim(),engine:'irodori',model:'Aratako/Irodori-TTS-v4.1-Small',mode:'clone',description:'',refs:[],refText:'',language:'Japanese'});dirtyState();renderAll()}
 function openCastDelete(index){
  const voice=state.voices[index];if(!voice)return;
  const count=state.lines.filter(line=>line.speaker===voice.name).length;
@@ -746,8 +862,49 @@ async function deleteCast(name){
  }catch(e){toast('キャストを削除できません: '+e.message,true);if(btn)btn.disabled=false}
 }
 function applyVoice(index){const v=state.voices[index];if(!v)return;let num=0;for(const l of state.lines.filter(l=>l.speaker===v.name)){l.ttsSource='cast';l.status=l.selectedTakeId?'stale':'missing';num++}dirtyState();renderAll();toast(`${v.name} の ${num}件をキャスト設定に切り替えました（${v.model}）`)}
+// One dialog per Voice Design session: results can be regenerated, compared
+// and chosen without closing it. history: [{assetId,text}] in creation order.
+let designSession=null;
 async function designCharacterVoice(index){const voice=state.voices[index];if(!voice)return;const sampleText=prompt('作りたい声で読み上げるサンプル台詞を入力してください','こんにちは！ 今日はどんな素敵なことが起こるのか、楽しみですね。');if(!sampleText?.trim())return;
- try{await saveNow();const job=await req(`/api/projects/${state.id}/voices/design`,json('POST',{speaker:voice.name,sampleText:sampleText.trim()}));showJob(job.id)}catch(e){toast(e.message,true)}
+ designSession={speaker:voice.name,sampleText:sampleText.trim(),history:[],current:null};
+ await startVoiceDesign(designSession);
+}
+async function startVoiceDesign(session){
+ try{
+  await saveNow();
+  // Regenerating replaces the result in use; the first run adds a reference.
+  const job=await req(`/api/projects/${state.id}/voices/design`,json('POST',{speaker:session.speaker,sampleText:session.sampleText,replaceAssetId:session.current}));
+  showJob(job.id,session);
+ }catch(e){toast(e.message,true);if(session===designSession)renderDesignPanel(session,false)}
+}
+function regenerateVoiceDesign(){
+ const session=designSession,text=$('designSampleText')?.value.trim();
+ if(!session)return;
+ if(!text)return toast('読み上げるサンプル台詞を入力してください',true);
+ session.sampleText=text;
+ startVoiceDesign(session);
+}
+function useDesignCandidate(assetId){
+ const session=designSession,voice=state.voices.find(v=>v.name===session?.speaker),chosen=session?.history.find(c=>c.assetId===assetId);
+ if(!voice||!chosen)return;
+ const results=new Set(session.history.map(c=>c.assetId));
+ voice.refs=[...(voice.refs||[]).filter(id=>!results.has(id)),assetId];
+ voice.refText=chosen.text;session.current=assetId;
+ state.lines.filter(l=>l.speaker===voice.name&&getLineTtsSource(l)==='cast').forEach(l=>l.status=l.selectedTakeId?'stale':'missing');
+ dirtyState();renderAll();renderDesignPanel(session,false);
+ toast(`${session.history.indexOf(chosen)+1}回目の声を${voice.name}の参照音声にしました`);
+}
+function renderDesignPanel(session,running){
+ const panel=$('designPanel');if(!panel||session!==designSession)return;
+ const title=$('jobTitle');if(title)title.textContent=(running?'声をデザイン中：':'Voice Designの結果：')+session.speaker;
+ panel.innerHTML=`<div class="field"><label for="designSampleText">サンプル台詞（変更してから再生成できます）</label><textarea id="designSampleText" rows="2" maxlength="500">${esc(session.sampleText)}</textarea></div>
+  ${session.history.length?`<div class="design-candidates">${session.history.map((c,i)=>`<div class="ref-row"><span title="${esc(c.text)}">${i+1}回目「${esc(c.text.slice(0,24))}${c.text.length>24?'…':''}」${c.assetId===session.current?' <b>使用中</b>':''}</span><div>${button('▶ 試聴',`data-preview="${esc(c.assetId)}"`)}${c.assetId===session.current?'':button('これを使う',`data-design-use="${esc(c.assetId)}" ${running?'disabled':''}`)}</div></div>`).join('')}</div>`:''}
+  <p class="small muted">「✦ 再生成」は、使用中の結果をこのキャストの参照音声から外して新しい結果に置き換えます。外した音声は削除せず「参照音声の管理」に残し、ここの「これを使う」で戻せます。</p>`;
+ panel.querySelectorAll('[data-design-use]').forEach(b=>b.onclick=()=>useDesignCandidate(b.dataset.designUse));
+ const actions=panel.closest('.modal')?.querySelector('.modal-actions');
+ let again=$('redesignVoiceBtn');
+ if(!again&&actions){again=document.createElement('button');again.id='redesignVoiceBtn';again.className='btn primary';again.textContent='✦ 再生成';again.onclick=regenerateVoiceDesign;actions.insertBefore(again,actions.lastElementChild)}
+ if(again)again.disabled=running;
 }
 async function generate(ids){
  if(!ids.length)return toast('対象台詞がありません',true);
@@ -766,8 +923,9 @@ async function generate(ids){
   };
  }catch(e){toast('生成前の設定確認に失敗: '+e.message,true)}
 }
-function showJob(jid){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div><div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
- const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
+function showJob(jid,design=null){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2 id="jobTitle">${design?'声をデザイン中：'+esc(design.speaker):'音声生成中'}</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div>${design?'<div id="designPanel" class="design-panel"></div>':''}<div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
+ if(design)renderDesignPanel(design,true);
+ const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){
  try{
   await saveNow();
@@ -1116,7 +1274,11 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='batchLibraryBtn')startBatchPicker('library');
  const drop=target.closest('[data-audio-drop]');if(drop)startBatchPicker(drop.dataset.audioDrop);
  if(target.id==='addLineTop'||target.id==='addLineBottom')addLine();
- if(target.id==='addVoiceBtn')addVoice();
+ if(target.id==='importCharactersBtn')return characterEditor?.openImport();
+ if(target.id==='addCharacterBtn')return characterEditor?.focusAdd();
+ if(target.id==='promoteAllCastsBtn')return characterEditor?.openImport({kind:'drama',id:state.id,keys:state.voices.map(v=>v.name)});
+ const promote=target.closest('[data-cast-promote]');if(promote){const v=state.voices[Number(promote.dataset.castPromote)];if(v)return characterEditor?.openImport({kind:'drama',id:state.id,keys:[v.name]})}
+ const register=target.closest('[data-register-speaker]');if(register)return characterEditor?.create({name:register.dataset.registerSpeaker});
  if(target.id==='generateMissingBtn')generate(activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).map(x=>x.id));
  if(target.id==='uploadAudioBtn')uploadAudio(libraryTab);
  if(target.id==='insUploadBtn')uploadAudio('sfx');
@@ -1138,11 +1300,24 @@ function handleChange(e){if(historyRestoring)return;handleBatchModalChange(e);co
  if(target.dataset.trashSelect){if(target.checked)trashSelection.add(target.dataset.trashSelect);else trashSelection.delete(target.dataset.trashSelect);const btn=$('trashSelectedBtn');if(btn){btn.disabled=!trashSelection.size;btn.textContent=`🗑 選択削除 (${trashSelection.size})`}return}
  const vField=target.dataset.vfield;const card=target.closest('[data-voice]');if(vField&&card){const v=state.voices[Number(card.dataset.voice)];if(!v)return;const old=v.name;v[vField]=target.value;if(vField==='name'){state.lines.filter(l=>l.speaker===old).forEach(l=>l.speaker=v.name)}if(vField==='engine')v.model=(models[v.engine]||models.irodori)[0][0];if(vField!=='name')state.lines.filter(l=>l.speaker===v.name&&getLineTtsSource(l)==='cast').forEach(l=>l.status=l.selectedTakeId?'stale':'missing');dirtyState();if(vField==='engine')renderEditor();renderInspector();return}
  if(target.dataset.ref&&card){const v=state.voices[Number(card.dataset.voice)];v.refs=v.refs||[];if(target.checked&&!v.refs.includes(target.dataset.ref))v.refs.push(target.dataset.ref);if(!target.checked)v.refs=v.refs.filter(x=>x!==target.dataset.ref);state.lines.filter(l=>l.speaker===v.name&&getLineTtsSource(l)==='cast').forEach(l=>l.status=l.selectedTakeId?'stale':'missing');dirtyState();return}
+ if(target.dataset.speakerLink!==undefined){setSpeakerLink(target.dataset.speakerLink,target.value);return}
  const c=clipById(selectedClip),l=lineById(selectedLine);
  const cv={clipStart:['start',Number],clipDuration:['duration',Number],clipGain:['gain',v=>Number(v)/100],clipFadeIn:['fadeIn',Number],clipFadeOut:['fadeOut',Number],clipTrack:['trackId',String],clipTrimStart:['trimStart',Number],clipTrimEnd:['trimEnd',Number],clipLoop:['loop',null],clipPinned:['pinned',null]};
  if(c&&id==='clipAnchor'){c.anchorLineId=target.value||null;const ref=state.clips.find(x=>x.lineId===target.value&&x.trackId==='dialogue');c.anchorOffset=ref?c.start-ref.start:0;dirtyState();renderTimeline();renderInspector();return}
  if(c&&cv[id]){let [prop,fn]=cv[id];c[prop]=fn?fn(target.value):target.checked;if(['start','duration','fadeIn','fadeOut','trimStart','trimEnd','gain'].includes(prop))c[prop]=Math.max(0,c[prop]);if(prop==='trackId'&&c.trackId!=='dialogue')c.pinned=true;dirtyState();renderTimeline();renderInspector();return}
  if(!l)return;
+ if(target.dataset.pronChoice!==undefined){
+   const pd=PD(),dictionary=pronunciation?.dictionary||{},before=pd.apply(l.text,dictionary,l.pronunciationChoices);
+   const choices=pd.withChoice(l.pronunciationChoices,target.dataset.pronChoice,target.value);
+   if(Object.keys(choices).length)l.pronunciationChoices=choices;else delete l.pronunciationChoices;
+   // Only a changed spoken text needs a new take; the server re-checks on save.
+   if(l.selectedTakeId&&pd.apply(l.text,dictionary,l.pronunciationChoices)!==before){
+     l.status='stale';
+     const badge=[...document.querySelectorAll('.script-line')].find(x=>x.dataset.id===l.id)?.querySelector('.line-status');
+     if(badge){badge.className='line-status stale';badge.textContent='要再生成'}
+   }
+   dirtyState();renderInspector();return;
+ }
  if(id==='lineTtsSource'){
    l.ttsSource=target.value==='line'?'line':'cast';
    if(l.ttsSource==='line'){
@@ -1255,7 +1430,7 @@ function wire(){
  $('undoBtn').onclick=undoEdit;$('redoBtn').onclick=redoEdit;historyButtons();
  $('projectButton').onclick=openProjects;$('settingsBtn').onclick=openSettings;$('exportExcelBtn').onclick=async()=>{try{await saveNow();location.href=`/api/projects/${state.id}/excel/export`}catch(e){toast(e.message,true)}};
  $('renderBtn').onclick=renderAudio;$('addSceneBtn').onclick=addScene;
- $('navScript').onclick=()=>setView('script');$('navVoices').onclick=()=>setView('voices');$('navAssets').onclick=()=>setView('assets');
+ $('navScript').onclick=()=>setView('script');$('navVoices').onclick=()=>setView('voices');$('navAssets').onclick=()=>setView('assets');$('navPronunciation').onclick=()=>setView('pronunciation');
  $('rewindBtn').onclick=stop;$('playBtn').onclick=play;$('stopBtn').onclick=()=>{if(playing)pause();else stopNodes()};
  $('reflowBtn').onclick=()=>{reflow();dirtyState();renderTimeline();toast('台詞を順番どおりに再配置しました')};
  $('zoom').oninput=e=>setTimelineZoom(timelineSliderToZoom(e.target.value));

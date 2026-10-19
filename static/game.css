@@ -185,6 +185,11 @@ h1,h2,h3,p{margin:0}
 .dictionary-add-form button{width:100%;margin-top:6px}
 .dictionary-add-form .check-label{display:flex;align-items:center;gap:7px}
 .dict-empty{font-size:12px;color:var(--muted);padding:6px 2px}
+.dict-group.dict-shared{grid-column:1/-1}
+.legacy-dictionary{margin-top:14px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.legacy-dictionary summary{cursor:pointer}
+.legacy-dictionary-row{display:flex;justify-content:space-between;gap:12px;padding:3px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.legacy-dictionary-row:last-child{border-bottom:0}
 
 /* Import view: numbered steps. */
 .import-steps{display:grid;gap:14px;align-content:start}

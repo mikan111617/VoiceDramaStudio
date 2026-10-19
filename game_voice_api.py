@@ -45,7 +45,7 @@ def games():return game.list_games()
 def create_game(body:NewGame):return _errors(game.create_game,body.title)
 
 @router.get('/api/game/projects/{gid}')
-def get_game(gid:str):return _errors(game.get_game,gid)
+def get_game(gid:str):return _errors(game.open_game,gid)
 
 @router.put('/api/game/projects/{gid}')
 def update_game(gid:str,body:ChangeGame):return _errors(game.update_game,gid,body.changes,body.expectedRevision)
@@ -99,6 +99,7 @@ async def _json_upload(file:UploadFile):
 async def import_speech_dictionary(gid:str,kind:str,expectedRevision:int,file:UploadFile=File(...)):
     if kind not in ('pronunciation','prosody'):
         raise HTTPException(400,'読み方辞書かアクセント辞書を指定してください')
+    # 'pronunciation' is answered with guidance to the shared dictionary.
     return _errors(game.import_speech_dictionary,gid,kind,await _json_upload(file),expectedRevision)
 
 

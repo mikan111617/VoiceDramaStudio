@@ -13,6 +13,8 @@ from difflib import SequenceMatcher
 
 import openpyxl
 
+import speech_dict
+
 ROOT = Path(__file__).resolve().parent
 WORKSPACE = Path(os.getenv("VDS_WORKSPACE", str(ROOT / "workspace"))).resolve()
 LOCK = threading.RLock()
@@ -25,6 +27,10 @@ GLOBAL_TTS_DEFAULTS = {
     "qwen_python": "",
 }
 GLOBAL_TTS_KEYS = tuple(GLOBAL_TTS_DEFAULTS)
+# The pronunciation dictionary shares global_settings.json and its revision.
+# Files from older versions have no such key; it then reads as empty.
+PRONUNCIATION_KEY = "pronunciationDictionary"
+PRONUNCIATION_MIGRATION_KEY = "pronunciationMigration"
 
 
 def global_settings_path():
@@ -52,8 +58,9 @@ def load_global_settings():
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict) or any(k not in data for k in GLOBAL_TTS_KEYS):
                 raise ValueError("共通環境設定が破損しています。global_settings.jsonを確認してください")
+            data.setdefault(PRONUNCIATION_KEY, {})
             return data
-        data = {**GLOBAL_TTS_DEFAULTS, "revision": 1}
+        data = {**GLOBAL_TTS_DEFAULTS, "revision": 1, PRONUNCIATION_KEY: {}}
         chosen = set()
         for project in list_projects():
             try:
@@ -86,8 +93,99 @@ def save_global_settings(settings, expected_revision=None):
             new[key] = value.strip()
         if all(old[key] == new[key] for key in GLOBAL_TTS_KEYS):
             return old
-        result = {**new, "revision": old["revision"] + 1}
+        # Keep the pronunciation dictionary and its migration record.
+        result = {**old, **new, "revision": old["revision"] + 1}
         _atomic_save_global(result)
+        return result
+
+
+def _dictionary_view(data):
+    try:
+        dictionary = speech_dict.normalize_dictionary(data.get(PRONUNCIATION_KEY) or {})
+    except ValueError as exc:
+        raise ValueError(f"共通の読み方辞書が破損しています（global_settings.json）: {exc}") from exc
+    return {"revision": data["revision"], "dictionary": dictionary,
+            "migration": data.get(PRONUNCIATION_MIGRATION_KEY)}
+
+
+def _migrate_game_pronunciation(data):
+    """Merge every game project's old dictionary into the shared one, once.
+
+    Different readings of one word are kept as patterns. Project files are only
+    read (they stay as a read-only record). Nothing is written unless the whole
+    merge succeeds; the completion record prevents a second merge.
+    """
+    import game_voice  # game_voice imports core; import lazily.
+    sources, unreadable = game_voice.legacy_pronunciation_dictionaries()
+    normalized = []
+    for source in sources:
+        try:
+            normalized.append((source["title"], speech_dict.normalize_dictionary(source["dictionary"])))
+        except ValueError as exc:
+            raise ValueError("ゲーム音声プロジェクト「" + source["title"] + "」の読み方辞書を共通辞書へ統合できません"
+                             f"（共通辞書は変更していません）: {exc}") from exc
+    try:
+        base = speech_dict.normalize_dictionary(data.get(PRONUNCIATION_KEY) or {})
+        merged, conflicts = speech_dict.merge_dictionaries(base, normalized)
+    except ValueError as exc:
+        raise ValueError(f"ゲーム音声プロジェクトの読み方辞書を共通辞書へ統合できません（共通辞書は変更していません）: {exc}") from exc
+    record = {"completedAt": now(),
+              "projects": [{"id": s["id"], "title": s["title"], "entries": len(d)}
+                           for s, (_, d) in zip(sources, normalized)],
+              "conflicts": conflicts, "unreadable": unreadable}
+    result = {**data, PRONUNCIATION_KEY: merged, PRONUNCIATION_MIGRATION_KEY: record}
+    if merged != base:
+        result["revision"] = data["revision"] + 1
+    _atomic_save_global(result)
+    return result
+
+
+def load_pronunciation_dictionary():
+    """Return the shared dictionary {revision, dictionary, migration}."""
+    with LOCK:
+        data = load_global_settings()
+        if PRONUNCIATION_MIGRATION_KEY not in data:
+            data = _migrate_game_pronunciation(data)
+        return _dictionary_view(data)
+
+
+def _save_dictionary(entries, expected_revision):
+    current = load_pronunciation_dictionary()
+    if expected_revision is None or int(expected_revision) != current["revision"]:
+        raise RuntimeError("共通の読み方辞書が別の画面で変更されました。再読み込みしてください。")
+    if entries == current["dictionary"]:
+        return current
+    data = load_global_settings()
+    result = {**data, PRONUNCIATION_KEY: entries, "revision": data["revision"] + 1}
+    _atomic_save_global(result)
+    return _dictionary_view(result)
+
+
+def save_pronunciation_dictionary(dictionary, expected_revision):
+    """Replace the shared dictionary with revision-checked optimistic locking."""
+    entries = speech_dict.normalize_dictionary(dictionary)
+    with LOCK:
+        return _save_dictionary(entries, expected_revision)
+
+
+def import_pronunciation_dictionary(payload, expected_revision, mode="merge"):
+    """Import legacy or new-format JSON; 'merge' keeps every existing reading."""
+    if mode not in ("merge", "replace"):
+        raise ValueError("取り込み方法が正しくありません")
+    incoming = speech_dict.normalize_dictionary(payload)
+    with LOCK:
+        current = load_pronunciation_dictionary()
+        if expected_revision is None or int(expected_revision) != current["revision"]:
+            raise RuntimeError("共通の読み方辞書が別の画面で変更されました。再読み込みしてください。")
+        if mode == "replace":
+            merged, conflicts = incoming, []
+        else:
+            merged, conflicts = speech_dict.merge_dictionaries(
+                current["dictionary"], [("取り込んだファイル", incoming)])
+        added = sum(surface not in current["dictionary"] for surface in incoming)
+        result = _save_dictionary(merged, expected_revision)
+        result["summary"] = {"mode": mode, "imported": len(incoming), "added": added,
+                             "total": len(merged), "conflicts": conflicts}
         return result
 
 
@@ -351,6 +449,14 @@ def validate_state(s, prev, *, allow_new_assets=False):
         if l.get("sceneId") not in scene_ids: raise ValueError("Line scene mismatch")
         if len(str(l.get("text","")))>10000: raise ValueError("Line too long")
         generated_audio_filename(l)  # Validate optional per-dialogue WAV name.
+        if "pronunciationChoices" in l:
+            speech_dict.normalize_choices(l["pronunciationChoices"])
+    links=s.get("characterLinks",{})
+    if (not isinstance(links,dict) or len(links)>1000 or any(
+            not isinstance(k,str) or not 1<=len(k)<=200
+            or not (v=="project" or (isinstance(v,str) and re.fullmatch(r"chr_[0-9a-f]{16}",v)))
+            for k,v in links.items())):
+        raise ValueError("キャラクターの割り当てが正しくありません")
         for take in l.get("takes",[]):
             if take.get("assetId") not in asset_ids: raise ValueError("Take asset missing")
     track_ids={x["id"] for x in s["tracks"]}
@@ -632,11 +738,11 @@ def new_line(scene_id, speaker="", text="", caption="", after=0.65):
             "engine":"irodori", "model":"Aratako/Irodori-TTS-v4.1-Small", "mode":"clone", "language":"Japanese", "ttsSource":"cast"}
 
 
-def attach_take(s, line, asset, generator=None, *, reflow=True):
+def attach_take(s, line, asset, generator=None, *, reflow=True, dictionary=None, registry=None):
     if asset.get("kind") == "reference":
         raise ValueError("キャラクター参照音声を台詞へ直接割り当てることはできません")
     take={"id":uid("take"),"assetId":asset["id"],"createdAt":now(),"engine":generator or "import",
-          "signature":generation_signature(line, s)}
+          "signature":generation_signature(line, s, dictionary, registry)}
     line.setdefault("takes",[]).append(take)
     line["selectedTakeId"]=take["id"]
     line["status"]="ready"
@@ -669,6 +775,49 @@ def reflow_dialogue(s,scene_id):
 
 
 DEFAULT_IRODORI_MODEL = "Aratako/Irodori-TTS-v4.1-Small"
+
+
+def load_characters():
+    import characters  # characters imports core
+    return characters.load()
+
+
+def resolve_voice(state, speaker, registry=None):
+    """The cast a speaker uses.
+
+    A character chosen for the speaker in this project wins; "project" means
+    this project's own cast. Otherwise a shared character whose name or alias
+    matches is used, then this project's own cast (projects made before
+    shared characters keep working unchanged).
+    """
+    import characters
+    if registry is None:
+        registry = characters.load()
+    link = (state.get("characterLinks") or {}).get(speaker)
+    if link != "project":
+        found = characters.by_id(registry, link) if link else None
+        found = found or characters.match(registry, [speaker])
+        if found:
+            return found
+    return next((v for v in state["voices"] if v.get("name") == speaker), {})
+
+
+def link_characters(project_id, mapping, registry):
+    """Make these speakers use the given shared characters in one project."""
+    import characters
+    with LOCK:
+        state = load_project(project_id)
+        links = dict(state.get("characterLinks") or {})
+        speakers = {line.get("speaker") for line in state["lines"]} | {v.get("name") for v in state["voices"]}
+        linked = 0
+        for speaker, character_id in mapping.items():
+            if speaker in speakers and characters.by_id(registry, character_id):
+                links[speaker] = character_id
+                linked += 1
+        if linked:
+            state["characterLinks"] = links
+            save_project(project_id, state, expected_revision=state["revision"])
+        return linked
 
 
 def line_tts_source(line, voice=None):
@@ -705,21 +854,37 @@ def resolve_line_tts(line, voice=None):
     return {"source": source, "engine": engine, "mode": mode, "model": model, "language": language}
 
 
-def generation_signature(line,s):
+def line_speech_text(line, dictionary):
+    """The text actually given to TTS; line["text"] itself is never changed."""
+    return speech_dict.apply(str(line.get("text") or ""), dictionary, line.get("pronunciationChoices"))
+
+
+def generation_signature(line,s,dictionary=None,registry=None):
     import hashlib
-    voice=next((v for v in s["voices"] if v["name"]==line.get("speaker")),{})
+    voice=resolve_voice(s,line.get("speaker"),registry)
     data={"text":line.get("text"),"caption":line.get("caption"),
           "effectiveTTS":resolve_line_tts(line,voice)}
     data["profile"]={k:voice.get(k) for k in ("refs","description","refText","language","model","engine","mode")}
+    if dictionary is None:
+        dictionary=load_pronunciation_dictionary()["dictionary"]
+    # Only lines whose spoken text differs from the script include it, so
+    # takes made before the shared dictionary keep their old signatures.
+    spoken=line_speech_text(line,dictionary)
+    if spoken!=str(line.get("text") or ""):
+        data["speechText"]=spoken
     return hashlib.sha256(json.dumps(data,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
 
 
-def refresh_staleness(s):
+def refresh_staleness(s, dictionary=None, registry=None):
     for line in s["lines"]:
         take=next((t for t in line.get("takes",[]) if t.get("id")==line.get("selectedTakeId")),None)
         if not take: line["status"]="missing"
-        elif take.get("signature") and take["signature"]!=generation_signature(line,s):
-            line["status"]="stale"
+        elif take.get("signature"):
+            if dictionary is None:
+                dictionary=load_pronunciation_dictionary()["dictionary"]
+            if registry is None:
+                registry=load_characters()
+            line["status"]="stale" if take["signature"]!=generation_signature(line,s,dictionary,registry) else "ready"
         else:line["status"]="ready"
 
 
@@ -967,16 +1132,18 @@ def import_excel(project_id, stream, mode="merge", expected_revision=None):
                 order = {line_id: i for i, line_id in enumerate(imported)}
                 s["lines"].sort(key=lambda line: (0, order[line["id"]]) if line["id"] in order else (1, 0))
             known = {voice.get("name") for voice in s["voices"]}
+            registry = load_characters()
             for line in s["lines"]:
                 speaker = line.get("speaker", "")
-                if speaker and speaker not in known:
+                # Speakers that are shared characters need no per-project cast.
+                if speaker and speaker not in known and not resolve_voice(s, speaker, registry):
                     s["voices"].append({"name": speaker, "engine": "irodori",
                         "model": "Aratako/Irodori-TTS-v4.1-Small", "mode": "clone",
                         "description": "", "language": "Japanese", "refText": "", "refs": []})
                     known.add(speaker)
             for scene in s["scenes"]:
                 reflow_dialogue(s, scene["id"])
-            refresh_staleness(s)
+            refresh_staleness(s, registry=registry)
             removed = len(old_line_ids - {line["id"] for line in s["lines"]})
             removed_scenes = len(old_scene_ids - {scene["id"] for scene in s["scenes"]})
             removed_clips = len(old_clips) - len(s["clips"])
@@ -1148,6 +1315,7 @@ def import_audio_batch(project_id, items, kind="voice", line_ids=None, cast_name
         new_assets = []
         copied = []
         scenes = set()
+        dictionary = load_pronunciation_dictionary()["dictionary"] if any(line_ids) else None
         try:
             for (path, name), duration, line_id in zip(items, durations, line_ids):
                 ext = Path(name.replace('\\', '/')).suffix.lower()
@@ -1162,7 +1330,7 @@ def import_audio_batch(project_id, items, kind="voice", line_ids=None, cast_name
                 state['assets'].append(asset)
                 if line_id:
                     line = lines[line_id]
-                    attach_take(state, line, asset, reflow=False)
+                    attach_take(state, line, asset, reflow=False, dictionary=dictionary)
                     scenes.add(line['sceneId'])
                 if voice is not None:
                     voice.setdefault('refs', []).append(aid)
