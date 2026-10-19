@@ -4,6 +4,9 @@ let game=null,gameProjects=[],castProjects=[],scenarioKey='',focusedVoice='',mar
 let currentView='lines',includeReady=false,activeGameGeneration=null,missingAudioIds=new Set();
 // The pronunciation dictionary is shared with VoiceDrama (not stored per project).
 let pronunciation=null,pronunciationEditor=null;
+// Characters are shared with VoiceDrama; a game-only voice setting can override.
+let characterRegistry=null,characterEditor=null;
+const CH=()=>globalThis.CharacterRegistry;
 const VIEWS=[['lines','navLines','viewLines'],['casts','navCasts','viewCasts'],['pronunciation','navPronunciation','viewPronunciation'],['import','navImport','viewImport']];
 const VIEW_KEY='vds.game.view.v1';
 const $=id=>document.getElementById(id);
@@ -147,6 +150,7 @@ async function openGame(id){
   await refreshAudioHealth(id);
   renderAll();
   pronunciationEditor?.load();
+  characterEditor?.load();
   // Recover progress after refreshing the page or switching back to this project.
   const ongoing=await request('/api/game/projects/'+encodeURIComponent(id)+'/generate/active');
   if(ongoing?.status==='running'&&game?.id===id){
@@ -469,23 +473,41 @@ function renderLocalCastEditor(speaker,cast){
  <div class="game-cast-buttons"><button type="button" data-ref-upload="${esc(speaker)}">＋ 参照音声を登録</button><button type="button" data-ref-design="${esc(speaker)}">✦ Voice Designで声を作成</button></div>
  <p class="helper">参照音声はゲーム音声プロジェクト内に保存します。Voice Designは生成後に参照音声として登録されます。</p></div></div></details>`;
 }
+// Mirrors the server's cast resolution: game-only setting, a chosen shared
+// character, an older VoiceDrama binding (by name), then name/alias matching.
+function resolvedCast(speaker){
+ const key=castKeyFor(speaker),profile=resolveSheetProfile(speaker)?.profile||{},keys=[speaker,key];
+ if(keys.some(k=>game.localCastMode?.[k]==='local'))return {kind:'local'};
+ const binding=keys.map(k=>game.bindings?.[k]).find(Boolean)||{};
+ let found=null;
+ if(binding.characterId)found=CH()?.byId(characterRegistry,binding.characterId);
+ else if(binding.castName)found=CH()?.match(characterRegistry,[binding.castName]);
+ if(!found&&!binding.castName)found=CH()?.match(characterRegistry,[speaker,key,profile.display_name,...(profile.aliases||[])]);
+ if(found)return {kind:'global',character:found};
+ return binding.castName?{kind:'project',binding}:{kind:'none'};
+}
+function legacyCastLabel(binding){
+ const title=castProjects.find(p=>p.id===binding.projectId)?.title||'不明な作品';
+ return `（旧）ボイスドラマ「${title}」のキャスト「${binding.castName}」`;
+}
 function renderBindings(){
- const roster=castRoster();
- const options=[{value:'',label:'キャストを選択'}];
- for(const p of castProjects)for(const cast of p.casts)
-  options.push({value:p.id+'|'+encodeURIComponent(cast.name),
-    label:p.title+' / '+cast.name+' ('+(cast.model?.split('/').at(-1)||cast.engine)+')'});
+ const roster=castRoster(),shared=characterRegistry?.characters||[];
  const draw=item=>{
   const key=castKeyFor(item.speaker);
   const binding=game.bindings?.[item.speaker]||game.bindings?.[key];
-  const selected=binding?binding.projectId+'|'+encodeURIComponent(binding.castName):'';
   const active=game.localCastMode?.[key]==='local'||game.localCastMode?.[item.speaker]==='local';
   const cast=game.localCasts?.[key]||game.localCasts?.[item.speaker]||localCastDefault(key);
   const info=item.active?`<span class="binding-status">台詞 ${item.count}件</span>`
     :'<span class="binding-status sheet-only">シート登録済み · 現在のシナリオに台詞なし</span>';
+  const auto=CH()?.match(characterRegistry,[item.speaker,key,item.profile.display_name,...(item.profile.aliases||[])]);
+  const legacy=binding?.castName&&!binding.characterId?binding:null,resolved=resolvedCast(item.speaker);
+  const using=resolved.kind==='global'?`使用中：共通キャラクター「${resolved.character.name}」（${String(resolved.character.model||'').split('/').at(-1)} · 参照音声${(resolved.character.refs||[]).length}件）`
+    :resolved.kind==='project'?'使用中：'+legacyCastLabel(resolved.binding)
+    :`未設定：共通キャラクターを選ぶか、上の一覧に「${item.profile.display_name||item.speaker}」を追加してください`;
   return `<div class="binding game-cast-card ${item.active?'':'binding-unused'}" data-cast-speaker="${esc(key)}"><label class="cast-name">${esc(item.speaker)} <span class="muted">${esc(item.profile.display_name||'')}</span>${info}</label>
-  <label class="game-cast-source">声の設定元<select data-cast-source="${esc(key)}"><option value="shared" ${!active?'selected':''}>ボイスドラマのキャストを使う</option><option value="local" ${active?'selected':''}>ゲーム音声専用の声設定</option></select></label>
-  ${active?renderLocalCastEditor(key,cast):`<label class="game-shared-cast">使うキャスト（ボイスドラマ側）<select data-bind="${esc(key)}">${options.map(o=>`<option value="${esc(o.value)}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('')}</select></label>`}
+  <label class="game-cast-source">声の設定元<select data-cast-source="${esc(key)}"><option value="shared" ${!active?'selected':''}>共通キャラクター（ボイスドラマと共通）</option><option value="local" ${active?'selected':''}>ゲーム音声専用の声設定</option></select></label>
+  ${active?renderLocalCastEditor(key,cast)+`<button type="button" class="outline" data-cast-promote="${esc(key)}" title="この声設定を全作品で使える共通キャラクターにします">⇧ 共通キャラクターへ取り込む</button>`
+   :`<label class="game-shared-cast">使う共通キャラクター<select data-bind-character="${esc(key)}"><option value="" ${binding?'':'selected'}>自動（名前・別名で一致：${esc(auto?.name||'一致なし')}）</option>${shared.map(c=>`<option value="${esc(c.id)}" ${binding?.characterId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}${legacy?`<option value="__legacy" selected>${esc(legacyCastLabel(legacy))}</option>`:''}</select></label><p class="binding-status">${esc(using)}</p>`}
   </div>`;
  };
  const used=roster.filter(item=>item.active);
@@ -527,22 +549,28 @@ async function designGameCast(speaker){
  const example=prompt('新しい声のサンプル台詞を入力してください','こんにちは。今日もよろしくお願いします。');if(!example?.trim())return;
  try{const job=await request(`/api/game/projects/${game.id}/casts/${encodeURIComponent(speaker)}/design`,json('POST',{sampleText:example}));message('Voice Designを開始しました');poll(job.id)}catch(e){message(e.message,true)}
 }
-async function autoBindCasts(){
- const bindings={...game.bindings};let found=0;
- for(const item of castRoster()){
-  const speaker=item.speaker;
-  if(bindings[speaker]?.castName)continue;
-  const profile=item.profile||{};
-  const names=[speaker,profile.display_name,...(profile.aliases||[])].filter(Boolean)
-       .map(v=>String(v).toLowerCase());
-  const matches=[];
-  for(const p of castProjects)for(const c of p.casts){
-   if(names.includes(c.name.toLowerCase()))matches.push({projectId:p.id,castName:c.name});
-  }
-  if(matches.length===1){bindings[speaker]=matches[0];found++}
- }
- if(!found)return message('一致するキャストが見つかりません。手動で割り当ててください',true);
- if(await update({bindings})){renderBindings();message(`${found}人のキャストを自動対応しました`)}
+// Shared characters: edited on this screen, used by every work.
+function setupCharacterControls(){
+ characterEditor=CH()?.createEditor($('sharedCharacters'),{toast:message,models:voiceModels,
+   classes:{button:'outline',primary:'primary',danger:'outline dict-delete'},
+   usage:c=>{const ids=new Map();let n=0;for(const v of game?.voices||[]){if(!ids.has(v.speaker))ids.set(v.speaker,resolvedCast(v.speaker).character?.id);if(ids.get(v.speaker)===c.id)n++}return n?`このゲームの台詞 ${n}件`:''},
+   onLoad:data=>{characterRegistry=data;renderBindings()},onSaved:charactersSaved})||null;
+}
+async function charactersSaved(data){
+ characterRegistry=data;
+ if(!game)return;
+ // Opening the project again re-checks its audio against the changed characters.
+ try{
+  const pid=game.id,fresh=await request('/api/game/projects/'+encodeURIComponent(pid));
+  if(game?.id!==pid)return;
+  game=fresh;renderVoiceRows();renderScenarios();renderBindings();refreshInspectorKeepingDraft();characterEditor?.refresh();
+ }catch(e){message('台詞の状態を更新できません: '+e.message,true)}
+}
+async function setCharacterBinding(key,value){
+ if(value==='__legacy')return;
+ const next={...(game.bindings||{})};delete next[key];
+ if(value)next[key]={characterId:value};
+ if(await update({bindings:next})){renderBindings();renderVoiceRows();renderScenarios();characterEditor?.refresh();message(`${key}の声を変更しました`)}
 }
 async function update(changes){if(!game)return;busy('保存中…');try{game=await request(`/api/game/projects/${game.id}`,json('PUT',{expectedRevision:game.revision,changes}));busy('保存済み');return true}catch(e){busy('保存エラー');message(e.message,true);return false}}
 async function saveVoice(silent=false){
@@ -559,7 +587,6 @@ async function saveVoice(silent=false){
  }
  return ok;
 }
-async function setBinding(speaker,value){let next={...game.bindings};if(!value)delete next[speaker];else{const [projectId,...rem]=value.split('|');next[speaker]={projectId,castName:decodeURIComponent(rem.join('|'))}}if(await update({bindings:next}))renderBindings();}
 async function uploadFiles(picker,kind){const files=[...picker.files];if(!files.length)return;
  if(kind==='ks'){
   clearImportError();
@@ -705,14 +732,15 @@ function wire(){$('newProject').onclick=()=>createNew();$('finalizeKs').onclick=
  $('includeGeneratedVoices').onchange=e=>{includeReady=e.target.checked;renderScenarios()};
  $('markAllPending').onclick=()=>markAllScenarios('pending');
  $('markAllVoices').onclick=()=>markAllScenarios('all');
- $('clearAllVoiceMarks').onclick=()=>markAllScenarios('clear');$('voiceList').onclick=e=>{const play=e.target.closest('[data-play]');if(play){playVoice(play.dataset.play);return}if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();renderScenarios();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows();renderScenarios()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice();else if(e.target.id==='generateLine')startGeneration([focusedVoice])};$('inspector').oninput=e=>{if(e.target.id==='ttsText')updateSpeechPreview(e.target.value)};$('inspector').onchange=e=>{if(e.target.matches('[data-pron-choice]'))setVoiceChoice(e.target.dataset.pronChoice,e.target.value)};$('autoBindCasts').onclick=autoBindCasts;$('castBindings').onchange=e=>{
- if(e.target.matches('[data-bind]'))setBinding(e.target.dataset.bind,e.target.value);
+ $('clearAllVoiceMarks').onclick=()=>markAllScenarios('clear');$('voiceList').onclick=e=>{const play=e.target.closest('[data-play]');if(play){playVoice(play.dataset.play);return}if(e.target.matches('[data-mark]')){e.target.checked?marked.add(e.target.dataset.mark):marked.delete(e.target.dataset.mark);renderVoiceRows();renderScenarios();return}const row=e.target.closest('[data-voice]');if(row)focusVoice(row.dataset.voice,true)};$('sourceViewer').onclick=e=>{const row=e.target.closest('[data-from-voice]');if(row)focusVoice(row.dataset.fromVoice)};$('selectAll').onchange=e=>{for(const v of voicesOf()){if(e.target.checked)marked.add(v.voiceId);else marked.delete(v.voiceId)}renderVoiceRows();renderScenarios()};$('voiceSearch').oninput=renderVoiceRows;$('inspector').onclick=e=>{if(e.target.id==='saveLine')saveVoice();else if(e.target.id==='generateLine')startGeneration([focusedVoice])};$('inspector').oninput=e=>{if(e.target.id==='ttsText')updateSpeechPreview(e.target.value)};$('inspector').onchange=e=>{if(e.target.matches('[data-pron-choice]'))setVoiceChoice(e.target.dataset.pronChoice,e.target.value)};$('importGameCharacters').onclick=()=>game?characterEditor?.openImport({kind:'game',id:game.id}):message('プロジェクトを作成してください',true);$('castBindings').onchange=e=>{
+ if(e.target.matches('[data-bind-character]'))setCharacterBinding(e.target.dataset.bindCharacter,e.target.value);
  else if(e.target.matches('[data-cast-source]'))setCastSource(e.target.dataset.castSource,e.target.value);
  else if(e.target.matches('[data-local-field]'))setLocalCastField(e.target.closest('[data-cast-speaker]').dataset.castSpeaker,e.target.dataset.localField,e.target.value);
 };
 $('castBindings').onclick=e=>{
  const target=e.target,speaker=target.closest('[data-cast-speaker]')?.dataset.castSpeaker;
- if(target.matches('[data-ref-upload]')){refUploadSpeaker=speaker;$('gameRefPicker').click()}
+ if(target.matches('[data-cast-promote]'))characterEditor?.openImport({kind:'game',id:game.id,keys:[target.dataset.castPromote]});
+ else if(target.matches('[data-ref-upload]')){refUploadSpeaker=speaker;$('gameRefPicker').click()}
  else if(target.matches('[data-ref-play]'))previewGameRef(target.dataset.refPlay);
  else if(target.matches('[data-ref-delete]'))removeGameRef(speaker,target.dataset.refDelete);
  else if(target.matches('[data-ref-design]'))designGameCast(speaker);
@@ -813,4 +841,5 @@ let savedView='lines';try{savedView=localStorage.getItem(VIEW_KEY)||'lines'}catc
 setView(savedView,false);
 installGamePanelResizers();
 setupDictionaryControls();
+setupCharacterControls();
 refreshGames().catch(e=>message(e.message,true));

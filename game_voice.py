@@ -21,6 +21,7 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
+import characters
 import core
 import speech_dict
 
@@ -98,12 +99,13 @@ def get_game(pid):
 
 def open_game(pid):
     """Load a project for the editor, re-checking audio against the shared
-    pronunciation dictionary (it may have been edited from any project).
-    Only the stale flags change; audio files are never removed."""
+    pronunciation dictionary and shared characters (either may have been
+    edited from any project). Only the stale flags change; audio files are
+    never removed."""
     with GAME_LOCK:
         state=_load(pid)
         if any(v.get('audio') and not v.get('stale') for v in state.get('voices',[])):
-            if _refresh_dictionary_staleness(state,core.load_pronunciation_dictionary()['dictionary']):
+            if _refresh_generated_staleness(state,core.load_pronunciation_dictionary()['dictionary'],characters.load()):
                 state['revision']=int(state['revision'])+1
                 _write(pid,state)
         return state
@@ -908,21 +910,32 @@ def _generated_speech_signature(state,voice):
     return _speech_signature(_speech_inputs(state,{'ttsText':voice['ttsText']},legacy))
 
 
-def _refresh_dictionary_staleness(state,dictionary):
-    """Mark audio stale whose TTS input differs from the one it was made from."""
+def _refresh_generated_staleness(state,dictionary,registry):
+    """Mark audio stale whose TTS text or voice differs from what made it."""
     changed=False
+    current=_CastResolver(state,registry)
+    legacy=None
     for v in state.get('voices',[]):
         if not v.get('audio') or v.get('stale'):continue
-        if _generated_speech_signature(state,v)!=_speech_signature(_speech_inputs(state,v,dictionary)):
+        stale=_generated_speech_signature(state,v)!=_speech_signature(_speech_inputs(state,v,dictionary))
+        if not stale:
+            made=v.get('castSignature')
+            if made is None:
+                legacy=legacy or _CastResolver(state,registry,legacy=True)
+                made=_speaker_cast_signature(legacy,v['speaker'])
+            # Audio is left as is when either voice cannot be determined.
+            now=_speaker_cast_signature(current,v['speaker'])
+            stale=made is not None and now is not None and made!=now
+        if stale:
             v['stale']=True
             changed=True
     return changed
 
 
 def _carry_speech_fields(previous,item):
-    # A rebuilt voice keeps its reading choices and the input its audio used.
+    # A rebuilt voice keeps its reading choices and the inputs its audio used.
     if not previous:return
-    for key in ('pronunciationChoices','speechSignature'):
+    for key in ('pronunciationChoices','speechSignature','castSignature'):
         if key in previous:item[key]=copy.deepcopy(previous[key])
 
 
@@ -971,27 +984,31 @@ def update_game(pid,changes,revision):
             before=copy.deepcopy(s)
             s['prosodyDictionary']=_validate_prosody_dictionary(changes['prosodyDictionary'])
             _mark_changed_dictionary_voices(before,s)
+        cast_before=(copy.deepcopy(s) if any(k in changes for k in ('bindings','localCastMode','localCasts'))
+                     else None)
         if 'bindings' in changes:
             bindings=changes['bindings']
             if not isinstance(bindings,dict):raise ValueError('キャスト設定が正しくありません')
+            registry=None
             for speaker,config in bindings.items():
                 _clean_name(speaker)
                 if not isinstance(config,dict):raise ValueError('キャスト設定が正しくありません')
+                if config.get('characterId'):
+                    registry=registry or characters.load()
+                    if characters.by_id(registry,config['characterId']) is None:
+                        raise ValueError('指定した共通キャラクターが見つかりません')
+                    continue
                 project_id=str(config.get('projectId',''))
                 cast_name=str(config.get('castName',''))
                 if project_id or cast_name:
                     orig=core.load_project(project_id)
                     if not any(c.get('name')==cast_name for c in orig['voices']):raise ValueError('指定したキャストが見つかりません')
             s['bindings']=bindings
-        changed_cast_keys=set()
         if 'localCastMode' in changes:
             flags=changes['localCastMode']
             if not isinstance(flags,dict) or len(flags)>250 or any(
                 not isinstance(k,str) or not SAFE_KEY.fullmatch(k) or v not in ('local','shared') for k,v in flags.items()):
                 raise ValueError('声設定の切り替え値が正しくありません')
-            for key in set(flags)|set(s.get('localCastMode',{})):
-                if flags.get(key,'shared')!=s.get('localCastMode',{}).get(key,'shared'):
-                    changed_cast_keys.add(key)
             s['localCastMode']=flags
         if 'localCasts' in changes:
             local=changes['localCasts']
@@ -1003,12 +1020,10 @@ def update_game(pid,changes,revision):
                 _clean_name(key)
                 if key not in active:raise ValueError(f'シナリオに存在しないキャストです: {key}')
                 local[key]=_validate_local_cast(cast,s.get('voiceAssets',[]))
-            for key in set(local)|set(s.get('localCasts',{})):
-                if local.get(key)!=s.get('localCasts',{}).get(key):
-                    changed_cast_keys.add(key)
             s['localCasts']=local
-        for key in changed_cast_keys:
-            _mark_voice_takes_stale_for_cast(s,key)
+        if cast_before is not None:
+            # Only audio whose voice actually changes needs regeneration.
+            _mark_cast_changes(cast_before,s,characters.load())
         if 'voices' in changes:
             dictionary=None
             vmap={v['voiceId']:v for v in s['voices']}
@@ -1177,7 +1192,7 @@ def make_export_zip(pid,destination,format_override=None):
         # Re-check in memory only: the shared dictionary may have changed since
         # the project was opened. Exporting never writes the project.
         if any(v.get('audio') and not v.get('stale') for v in s['voices']):
-            _refresh_dictionary_staleness(s,core.load_pronunciation_dictionary()['dictionary'])
+            _refresh_generated_staleness(s,core.load_pronunciation_dictionary()['dictionary'],characters.load())
         maps={};files=[];missing=[]
         for v in s['voices']:
             rel=_game_audio_relative(v,fmt)
@@ -1273,6 +1288,151 @@ def _game_ref_path(pid, asset):
     if not re.fullmatch(r'ref_[0-9a-f]{16}\.(?:wav|mp3|flac|ogg|m4a|aac|opus)',filename):
         raise ValueError('参照音声ファイル名が不正です')
     return _folder(pid)/'reference_audio'/filename
+
+
+class _CastResolver:
+    """The cast each speaker uses, cached per speaker.
+
+    Order: a game-only voice setting, a shared character chosen for the
+    speaker, the shared character named by an older VoiceDrama binding, a
+    shared character whose name or alias matches the speaker (or its
+    character-sheet names), then the older binding's VoiceDrama project cast.
+    legacy=True applies the rules from before shared characters existed, to
+    judge audio generated back then. Returns (kind, cast, project id).
+    """
+    def __init__(self,state,registry,legacy=False):
+        self.state=state;self.registry=registry;self.legacy=legacy
+        self.cache={};self.projects={}
+
+    def __call__(self,speaker):
+        if speaker not in self.cache:
+            try:self.cache[speaker]=(True,self._resolve(speaker))
+            except (ValueError,OSError,KeyError) as exc:self.cache[speaker]=(False,exc)
+        ok,value=self.cache[speaker]
+        if not ok:raise value
+        return value
+
+    def _resolve(self,speaker):
+        s=self.state
+        sheet_id,profile=_speaker_profile(s,speaker)
+        keys=[speaker]+([sheet_id] if sheet_id else [])
+        # Local game-specific cast overrides everything. Aliases such as
+        # #arther resolve to canonical arthur_king local settings.
+        if any(s.get('localCastMode',{}).get(k)=='local' for k in keys):
+            local=next((s['localCasts'][k] for k in keys if s.get('localCasts',{}).get(k)),None)
+            if local is None:raise ValueError(f'{speaker} のゲーム専用設定がありません')
+            return 'local',_validate_local_cast(local,s.get('voiceAssets',[])),None
+        binding=next((s['bindings'][k] for k in keys if s.get('bindings',{}).get(k)),None) or {}
+        if not self.legacy:
+            found=None
+            if binding.get('characterId'):
+                found=characters.by_id(self.registry,binding['characterId'])
+            elif binding.get('castName'):
+                found=characters.match(self.registry,[binding['castName']])
+            if found is None and not binding.get('castName'):
+                names=[speaker,sheet_id]+([profile.get('display_name',''),*(profile.get('aliases') or [])] if profile else [])
+                found=characters.match(self.registry,names)
+            if found is not None:
+                return 'global',found,None
+        if not binding.get('castName'):
+            raise ValueError(f"キャストが未設定です: {speaker}")
+        project_id=binding.get('projectId')
+        if project_id not in self.projects:
+            self.projects[project_id]=core.load_project(project_id)
+        cast=next((x for x in self.projects[project_id]['voices'] if x['name']==binding['castName']),None)
+        if cast is None:raise ValueError('キャストが見つかりません: '+speaker)
+        return 'project',cast,project_id
+
+
+def _cast_signature(cast):
+    import hashlib
+    engine=cast.get('engine') or 'irodori'
+    data={'engine':engine,'model':cast.get('model') or characters.DEFAULT_MODELS.get(engine,''),
+          'mode':cast.get('mode') or 'clone','language':cast.get('language') or 'Japanese',
+          'description':cast.get('description') or '','refText':cast.get('refText') or '',
+          'refs':list(cast.get('refs') or [])}
+    return hashlib.sha256(json.dumps(data,ensure_ascii=False,sort_keys=True).encode('utf8')).hexdigest()[:24]
+
+
+def _speaker_cast_signature(resolver,speaker):
+    try:return _cast_signature(resolver(speaker)[1])
+    except (ValueError,OSError,KeyError):return None
+
+
+def _mark_cast_changes(before,after,registry):
+    old=_CastResolver(before,registry);new=_CastResolver(after,registry)
+    for voice in after['voices']:
+        if (voice.get('audio') and not voice.get('stale')
+                and _speaker_cast_signature(old,voice['speaker'])!=_speaker_cast_signature(new,voice['speaker'])):
+            voice['stale']=True
+
+
+def character_candidates(state):
+    """Characters this game can contribute to the shared registry.
+
+    One entry per character: a character-sheet ID groups its KS aliases.
+    The shared name is the sheet's display name (VoiceDrama scripts use it);
+    the speaker IDs become aliases, so KS speakers keep matching.
+    """
+    groups={}
+    def group(name):
+        sheet_id,profile=_speaker_profile(state,name)
+        canonical=sheet_id or str(name)
+        entry=groups.setdefault(canonical,{'speakers':[],'profile':profile,'sheet':bool(sheet_id)})
+        return entry
+    for name in state.get('localCasts',{}):group(name)
+    for name in [*state.get('characterSheet',{}),*state.get('referenceCharacters',{})]:group(name)
+    for voice in state.get('voices',[]):
+        entry=group(voice['speaker'])
+        if voice['speaker'] not in entry['speakers']:entry['speakers'].append(voice['speaker'])
+    assets={a['id']:a for a in state.get('voiceAssets',[])}
+    result=[]
+    for canonical,entry in groups.items():
+        if canonical.strip().casefold() in DEFAULT_NON_VOICE_SPEAKERS:continue
+        profile=entry['profile'] or {}
+        name=(str(profile.get('display_name') or '').strip() or canonical)[:60]
+        aliases=[]
+        for alias in [canonical,*entry['speakers'],*(profile.get('aliases') or [])]:
+            alias=str(alias).strip()[:100]
+            if alias and characters.key(alias)!=characters.key(name) and all(
+                    characters.key(alias)!=characters.key(x) for x in aliases):
+                aliases.append(alias)
+        local=next((state['localCasts'][k] for k in [canonical,*entry['speakers']] if state.get('localCasts',{}).get(k)),None)
+        voice=None
+        if local:
+            try:voice=_validate_local_cast(local,state.get('voiceAssets',[]))
+            except ValueError:voice=None
+        refs=[(aid,_game_ref_path(state['id'],assets[aid]),assets[aid].get('name',aid))
+              for aid in (voice or {}).get('refs',[]) if aid in assets]
+        result.append({'key':canonical,'name':name,'aliases':aliases[:characters.MAX_ALIASES],
+                       'hasVoice':voice is not None,'suggested':voice is not None or entry['sheet'],
+                       'voice':{k:voice[k] for k in characters.VOICE_FIELDS} if voice else {},
+                       'refFiles':refs,'speakers':[canonical,*[x for x in entry['speakers'] if x!=canonical]]})
+    return result
+
+
+def link_shared_characters(pid,mapping):
+    """Use the given shared characters for these speakers.
+
+    A game-only voice setting is switched off but kept as a record. Audio is
+    marked stale only where the voice actually changes.
+    """
+    registry=characters.load()
+    with GAME_LOCK:
+        s=_load(pid)
+        before=copy.deepcopy(s)
+        modes=dict(s.get('localCastMode',{}));bindings=dict(s.get('bindings',{}))
+        linked=0
+        for speaker,character_id in mapping.items():
+            if not SAFE_KEY.fullmatch(str(speaker)) or characters.by_id(registry,character_id) is None:continue
+            if modes.get(speaker)=='local':modes[speaker]='shared'
+            bindings[speaker]={'characterId':character_id}
+            linked+=1
+        s['localCastMode']=modes;s['bindings']=bindings
+        _mark_cast_changes(before,s,registry)
+        s['revision']=int(s['revision'])+1
+        _write(pid,s)
+    return linked
 
 
 def _mark_voice_takes_stale_for_cast(state, speaker):
@@ -1399,45 +1559,31 @@ def generation_groups(pid,ids):
         raise ValueError('仮登録中のKSがあります。先にボイスIDを一括確定してください')
     targets=[v for v in s['voices'] if v['voiceId'] in ids]
     plans=[]
-    linked_projects={}
+    registry=characters.load()
+    resolve=_CastResolver(s,registry)
     linked_assets={}
     local_assets={a['id']:a for a in s.get('voiceAssets',[])}
     for v in targets:
-        sheet_id,_=_speaker_profile(s,v['speaker'])
-        # Local game-specific cast overrides a VoiceDrama shared cast. Aliases
-        # such as #arther resolve to canonical arthur_king local settings.
-        active_local=(s.get('localCastMode',{}).get(v['speaker'])=='local'
-                      or bool(sheet_id and s.get('localCastMode',{}).get(sheet_id)=='local'))
-        local=(s.get('localCasts',{}).get(v['speaker'])
-               or (s.get('localCasts',{}).get(sheet_id) if sheet_id else None)) if active_local else None
-        if active_local and local is None:
-            raise ValueError(f'{v["speaker"]} のゲーム専用設定がありません')
-        if local is not None:
-            cast=_validate_local_cast(local,s.get('voiceAssets',[]))
+        kind,cast,project_id=resolve(v['speaker'])
+        if kind=='local':
             engine=cast['engine'];model=cast['model']
             refs=[]
             for aid in cast['refs']:
                 p=_game_ref_path(pid,local_assets[aid])
                 if not p.is_file():raise ValueError(f'{v["speaker"]}の参照音声ファイルがありません: {local_assets[aid]["name"]}')
                 refs.append(str(p))
+        elif kind=='global':
+            engine=cast['engine'];model=cast['model']
+            refs=characters.reference_paths(registry,cast)
         else:
-            binding=(s['bindings'].get(v['speaker'])
-                     or (s['bindings'].get(sheet_id) if sheet_id else None))
-            if not binding or not binding.get('castName'):
-                raise ValueError(f"キャストが未設定です: {v['speaker']}")
-            project_id=binding['projectId']
-            if project_id not in linked_projects:
-                linked_projects[project_id]=core.load_project(project_id)
-                linked_assets[project_id]={a['id']:a for a in linked_projects[project_id]['assets']}
-            source=linked_projects[project_id]
-            cast=next((x for x in source['voices'] if x['name']==binding['castName']),None)
-            if cast is None:raise ValueError('キャストが見つかりません: '+v['speaker'])
             engine=cast.get('engine','irodori')
             model=cast.get('model') or ('Qwen/Qwen3-TTS-12Hz-1.7B-Base' if engine=='qwen' else 'Aratako/Irodori-TTS-v4.1-Small')
+            if project_id not in linked_assets:
+                linked_assets[project_id]={a['id']:a for a in resolve.projects[project_id]['assets']}
             refs=[]
             for aid in cast.get('refs',[]):
                 a=linked_assets[project_id].get(aid)
-                if a:refs.append(str(core.asset_path(source['id'],a)))
+                if a:refs.append(str(core.asset_path(project_id,a)))
         if engine=='qwen' and cast.get('mode','clone')!='design' and not refs:
             raise ValueError(f"{v['speaker']}のQwen用参照音声が登録されていません")
         plans.append((v,engine,model,cast,refs))
@@ -1454,6 +1600,7 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
             groups=generation_groups(pid,set(voice_ids))
             current_state=_load(pid)
             dictionary=core.load_pronunciation_dictionary()['dictionary']
+            registry=characters.load()
         fmt=str(output_format if output_format is not None else current_state.get('format','wav')).lower().lstrip('.')
         if fmt not in AUDIO_FORMATS:
             raise ValueError('音声形式はWAVまたはMP3を指定してください')
@@ -1474,10 +1621,11 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                 with tempfile.TemporaryDirectory(prefix='vds_game_tts_') as temp:
                     d=Path(temp)
                     request=[]
-                    sent={}
+                    sent={};voices_sent={}
                     for v,cast,refs in items:
                         pronunciation_text,prosody_notes=_speech_inputs(current_state,v,dictionary)
                         sent[v['voiceId']]=_speech_signature((pronunciation_text,prosody_notes))
+                        voices_sent[v['voiceId']]=_cast_signature(cast)
                         base_caption=v['caption'] or cast.get('description','')
                         caption=(base_caption+'\n'+prosody_notes).strip() if prosody_notes else base_caption
                         request.append({'id':v['voiceId'],'text':pronunciation_text,'caption':caption,
@@ -1535,10 +1683,12 @@ def generate_game_audio(pid,voice_ids,steps,job,output_format=None):
                                             staging.unlink(missing_ok=True)
                                         target['audio']=rel
                                         target['speechSignature']=sent[v['voiceId']]
-                                        # A changed script should remain marked as needing regeneration.
+                                        target['castSignature']=voices_sent[v['voiceId']]
+                                        # A changed script or voice should remain marked as needing regeneration.
                                         target['stale']=bool(target.get('ttsText')!=v.get('ttsText')
                                             or target.get('caption')!=v.get('caption')
-                                            or _speech_signature(_speech_inputs(state,target,dictionary))!=sent[v['voiceId']])
+                                            or _speech_signature(_speech_inputs(state,target,dictionary))!=sent[v['voiceId']]
+                                            or _speaker_cast_signature(_CastResolver(state,registry),target['speaker']) not in (None,voices_sent[v['voiceId']]))
                                         _save(pid,state,state['revision'])
                                         # Count only audio that was published AND whose
                                         # persisted voice metadata points to the new file.

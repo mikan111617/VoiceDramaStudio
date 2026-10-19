@@ -1,0 +1,56 @@
+/* Shared character editor and its dialogs (VoiceDrama and game voice).
+   Uses the Harbor palette (--surface, --line, --accent, --muted, --red). */
+.ch-editor{display:flex;flex-direction:column;gap:12px;font-size:13px;line-height:1.6;margin-bottom:22px}
+.ch-help,.ch-note{font-size:12px;color:var(--muted)}
+.ch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface2,var(--surface))}
+.ch-count{font-weight:600;margin-right:auto}
+.ch-add{display:flex;gap:6px;align-items:center}
+.ch-add input,.ch-toolbar input[type=search]{width:180px;padding:7px 9px;font-size:13px;border:1px solid var(--line);border-radius:7px}
+.ch-toolbar button,.ch-actions button,.ch-ref button,.ch-dialog-actions button,.ch-import-head button,.ch-conflict button{font-size:12px;padding:7px 11px}
+.ch-conflict{border:1px solid var(--red);color:var(--red);border-radius:9px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.ch-list{display:flex;flex-direction:column;gap:8px}
+.ch-card{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:0 12px}
+.ch-card>summary{cursor:pointer;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;padding:10px 0}
+.ch-card>summary b{font-size:14px}
+.ch-aliases,.ch-meta{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.ch-form{padding:2px 0 12px}
+.ch-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 10px}
+.ch-grid label,.ch-field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);min-width:0}
+.ch-grid .ch-wide{grid-column:1/-1}
+.ch-grid input,.ch-grid select,.ch-grid textarea,.ch-field select,.ch-field textarea{width:100%;padding:7px 9px;font-size:13px;border:1px solid var(--line);border-radius:7px}
+.ch-refs,.ch-results{margin-top:10px;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.ch-refs>b{font-size:12px}
+.ch-ref{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
+.ch-ref:last-child{border-bottom:0}
+.ch-ref>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-ref>span:last-child{display:flex;gap:6px;flex-shrink:0}
+.ch-actions,.ch-dialog-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.ch-dialog-actions{justify-content:flex-end}
+.ch-empty{font-size:12px;color:var(--muted);padding:6px 2px}
+.ch-error{font-size:12px;color:var(--red)}
+.ch-overlay{position:fixed;inset:0;z-index:90;background:#0d2a3a66;display:flex;align-items:center;justify-content:center;padding:20px}
+.ch-dialog{width:min(720px,96vw);max-height:88vh;overflow:auto;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:20px 22px;box-shadow:0 18px 60px #0004;display:flex;flex-direction:column;gap:10px;font-size:13px}
+.ch-dialog h3{margin:0;font-size:17px}
+.ch-status{font-size:12px}
+.ch-import-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+.ch-import-head>span:last-child{display:flex;gap:6px}
+.ch-import-list{border:1px solid var(--line);border-radius:8px;max-height:300px;overflow:auto}
+.ch-import-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+.ch-import-row:last-child{border-bottom:0}
+.ch-import-row input{width:auto;flex:none;margin:0}
+.ch-import-row>span:nth-child(2){display:flex;flex-direction:column;min-width:0;flex:1}
+.ch-import-row small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.ch-tag{font-size:11px;border:1px solid var(--line);border-radius:10px;padding:1px 8px;white-space:nowrap}
+.ch-tag-warn{border-color:var(--gold,#986c33);color:var(--gold,#986c33)}
+.ch-check{display:flex;align-items:flex-start;gap:8px;font-size:12px}
+.ch-check input{width:auto;margin-top:3px}
+.ch-result{border:1px solid var(--accent);border-radius:8px;padding:8px 10px;font-size:12px;overflow-wrap:anywhere}
+/* Speaker-to-character table on the VoiceDrama cast screen. */
+.speaker-links{border:1px solid var(--line);border-radius:9px;padding:12px;margin-bottom:22px}
+.speaker-links h3,.project-casts h3{margin:0 0 4px}
+.speaker-link-row{display:grid;grid-template-columns:minmax(90px,1fr) minmax(180px,2fr) minmax(120px,1.4fr);gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}
+.speaker-link-row:last-child{border-bottom:0}
+.speaker-link-row select{width:100%;padding:6px 8px;font-size:12px}
+.speaker-link-state{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.project-casts{margin-bottom:12px}
+@media(max-width:760px){.ch-grid{grid-template-columns:1fr}.speaker-link-row{grid-template-columns:1fr}}

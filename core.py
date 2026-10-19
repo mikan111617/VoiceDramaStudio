@@ -451,6 +451,12 @@ def validate_state(s, prev, *, allow_new_assets=False):
         generated_audio_filename(l)  # Validate optional per-dialogue WAV name.
         if "pronunciationChoices" in l:
             speech_dict.normalize_choices(l["pronunciationChoices"])
+    links=s.get("characterLinks",{})
+    if (not isinstance(links,dict) or len(links)>1000 or any(
+            not isinstance(k,str) or not 1<=len(k)<=200
+            or not (v=="project" or (isinstance(v,str) and re.fullmatch(r"chr_[0-9a-f]{16}",v)))
+            for k,v in links.items())):
+        raise ValueError("キャラクターの割り当てが正しくありません")
         for take in l.get("takes",[]):
             if take.get("assetId") not in asset_ids: raise ValueError("Take asset missing")
     track_ids={x["id"] for x in s["tracks"]}
@@ -732,11 +738,11 @@ def new_line(scene_id, speaker="", text="", caption="", after=0.65):
             "engine":"irodori", "model":"Aratako/Irodori-TTS-v4.1-Small", "mode":"clone", "language":"Japanese", "ttsSource":"cast"}
 
 
-def attach_take(s, line, asset, generator=None, *, reflow=True, dictionary=None):
+def attach_take(s, line, asset, generator=None, *, reflow=True, dictionary=None, registry=None):
     if asset.get("kind") == "reference":
         raise ValueError("キャラクター参照音声を台詞へ直接割り当てることはできません")
     take={"id":uid("take"),"assetId":asset["id"],"createdAt":now(),"engine":generator or "import",
-          "signature":generation_signature(line, s, dictionary)}
+          "signature":generation_signature(line, s, dictionary, registry)}
     line.setdefault("takes",[]).append(take)
     line["selectedTakeId"]=take["id"]
     line["status"]="ready"
@@ -769,6 +775,49 @@ def reflow_dialogue(s,scene_id):
 
 
 DEFAULT_IRODORI_MODEL = "Aratako/Irodori-TTS-v4.1-Small"
+
+
+def load_characters():
+    import characters  # characters imports core
+    return characters.load()
+
+
+def resolve_voice(state, speaker, registry=None):
+    """The cast a speaker uses.
+
+    A character chosen for the speaker in this project wins; "project" means
+    this project's own cast. Otherwise a shared character whose name or alias
+    matches is used, then this project's own cast (projects made before
+    shared characters keep working unchanged).
+    """
+    import characters
+    if registry is None:
+        registry = characters.load()
+    link = (state.get("characterLinks") or {}).get(speaker)
+    if link != "project":
+        found = characters.by_id(registry, link) if link else None
+        found = found or characters.match(registry, [speaker])
+        if found:
+            return found
+    return next((v for v in state["voices"] if v.get("name") == speaker), {})
+
+
+def link_characters(project_id, mapping, registry):
+    """Make these speakers use the given shared characters in one project."""
+    import characters
+    with LOCK:
+        state = load_project(project_id)
+        links = dict(state.get("characterLinks") or {})
+        speakers = {line.get("speaker") for line in state["lines"]} | {v.get("name") for v in state["voices"]}
+        linked = 0
+        for speaker, character_id in mapping.items():
+            if speaker in speakers and characters.by_id(registry, character_id):
+                links[speaker] = character_id
+                linked += 1
+        if linked:
+            state["characterLinks"] = links
+            save_project(project_id, state, expected_revision=state["revision"])
+        return linked
 
 
 def line_tts_source(line, voice=None):
@@ -810,9 +859,9 @@ def line_speech_text(line, dictionary):
     return speech_dict.apply(str(line.get("text") or ""), dictionary, line.get("pronunciationChoices"))
 
 
-def generation_signature(line,s,dictionary=None):
+def generation_signature(line,s,dictionary=None,registry=None):
     import hashlib
-    voice=next((v for v in s["voices"] if v["name"]==line.get("speaker")),{})
+    voice=resolve_voice(s,line.get("speaker"),registry)
     data={"text":line.get("text"),"caption":line.get("caption"),
           "effectiveTTS":resolve_line_tts(line,voice)}
     data["profile"]={k:voice.get(k) for k in ("refs","description","refText","language","model","engine","mode")}
@@ -826,14 +875,16 @@ def generation_signature(line,s,dictionary=None):
     return hashlib.sha256(json.dumps(data,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
 
 
-def refresh_staleness(s, dictionary=None):
+def refresh_staleness(s, dictionary=None, registry=None):
     for line in s["lines"]:
         take=next((t for t in line.get("takes",[]) if t.get("id")==line.get("selectedTakeId")),None)
         if not take: line["status"]="missing"
         elif take.get("signature"):
             if dictionary is None:
                 dictionary=load_pronunciation_dictionary()["dictionary"]
-            line["status"]="stale" if take["signature"]!=generation_signature(line,s,dictionary) else "ready"
+            if registry is None:
+                registry=load_characters()
+            line["status"]="stale" if take["signature"]!=generation_signature(line,s,dictionary,registry) else "ready"
         else:line["status"]="ready"
 
 
@@ -1081,16 +1132,18 @@ def import_excel(project_id, stream, mode="merge", expected_revision=None):
                 order = {line_id: i for i, line_id in enumerate(imported)}
                 s["lines"].sort(key=lambda line: (0, order[line["id"]]) if line["id"] in order else (1, 0))
             known = {voice.get("name") for voice in s["voices"]}
+            registry = load_characters()
             for line in s["lines"]:
                 speaker = line.get("speaker", "")
-                if speaker and speaker not in known:
+                # Speakers that are shared characters need no per-project cast.
+                if speaker and speaker not in known and not resolve_voice(s, speaker, registry):
                     s["voices"].append({"name": speaker, "engine": "irodori",
                         "model": "Aratako/Irodori-TTS-v4.1-Small", "mode": "clone",
                         "description": "", "language": "Japanese", "refText": "", "refs": []})
                     known.add(speaker)
             for scene in s["scenes"]:
                 reflow_dialogue(s, scene["id"])
-            refresh_staleness(s)
+            refresh_staleness(s, registry=registry)
             removed = len(old_line_ids - {line["id"] for line in s["lines"]})
             removed_scenes = len(old_scene_ids - {scene["id"] for scene in s["scenes"]})
             removed_clips = len(old_clips) - len(s["clips"])

@@ -712,7 +712,8 @@ def test_game_cast_roster_contains_sheet_reference_characters_without_lines():
     assert 'function castRoster()' in src
     assert 'キャラクターシート登録者（台詞未検出' in src
     assert 'シート登録済み · 現在のシナリオに台詞なし' in src
-    assert 'for(const item of castRoster())' in src
+    # The speaker cards (and their shared-character choice) cover the whole roster.
+    assert 'const roster=castRoster()' in src
     assert 'resolveSheetProfile(v.speaker)' in src
     html=(root/'static'/'game.html').read_text(encoding='utf8')
     assert re.search(r'game\.js\?v=\d+',html) and re.search(r'game\.css\?v=\d+',html)
@@ -1112,7 +1113,7 @@ def test_game_voice_views_share_the_voicedrama_layout():
     html=(root/'static/game.html').read_text(encoding='utf8')
     js=(root/'static/game.js').read_text(encoding='utf8')
     assert html.count('id="castBindings"')==1
-    assert html.count('id="autoBindCasts"')==1
+    assert html.count('id="importGameCharacters"')==1 and html.count('id="sharedCharacters"')==1
     left=html.split('<aside class="side">',1)[1].split('</aside>',1)[0]
     for nav in ('navLines','navCasts','navPronunciation','navImport'):
         assert f'id="{nav}"' in left

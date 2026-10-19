@@ -22,12 +22,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import characters
 import core
 import shared_audio
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.4.2")
+app=FastAPI(title="VoiceDrama Studio",version="0.5.0")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -676,9 +677,10 @@ def run_generation(job_id,pid,line_ids,steps):
             state=core.load_project(pid)
             selected=[copy.deepcopy(l) for l in state['lines'] if l['id'] in line_ids and l['text'].strip()]
             asset_map={a['id']:a for a in state['assets']}
-            voices={v['name']:v for v in state['voices']}
-            # One snapshot for both the TTS text and the take signature.
+            # One snapshot for both the TTS input and the take signature.
             dictionary=core.load_pronunciation_dictionary()['dictionary']
+            registry=characters.load()
+            voices={l['speaker']:core.resolve_voice(state,l['speaker'],registry) for l in selected}
         if not selected:raise ValueError('生成する台詞がありません')
         filenames={line["id"]:line.get("outputFilename", "") for line in selected}
         groups={}
@@ -687,10 +689,13 @@ def run_generation(job_id,pid,line_ids,steps):
             resolved=core.resolve_line_tts(line,voice)
             engine,mode,model=resolved['engine'],resolved['mode'],resolved['model']
             # Only the configured engine's native voice references are used.
-            refs=[]
-            for aid in voice.get('refs',[]):
-                asset=asset_map.get(aid)
-                if asset:refs.append(str(core.asset_path(pid,asset)))
+            if characters.is_character(voice):
+                refs=characters.reference_paths(registry,voice)
+            else:
+                refs=[]
+                for aid in voice.get('refs',[]):
+                    asset=asset_map.get(aid)
+                    if asset:refs.append(str(core.asset_path(pid,asset)))
             descriptor=voice.get('description','')
             # Only the TTS input gets the dictionary readings; the script,
             # caption and Excel data keep the original text.
@@ -728,7 +733,7 @@ def run_generation(job_id,pid,line_ids,steps):
                             line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
                             if line:
                                 asset=next(a for a in fresh['assets'] if a['id']==registered['asset']['id'])
-                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}',dictionary=dictionary)
+                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}',dictionary=dictionary,registry=registry)
                                 core.save_project(pid,fresh)
                     job['completed']+=1
         job['message']='生成が完了しました'
@@ -741,13 +746,13 @@ def generate_preview(pid: str, body: Generation):
     """Show the exact model grouping before any GPU work starts."""
     try:
         state=core.load_project(pid)
-        voices={v['name']:v for v in state['voices']}
+        registry=characters.load()
         requested=set(body.lineIds)
         groups={}
         for line in state['lines']:
             if line['id'] not in requested or not line.get('text','').strip():
                 continue
-            config=core.resolve_line_tts(line, voices.get(line.get('speaker'),{}))
+            config=core.resolve_line_tts(line, core.resolve_voice(state,line.get('speaker'),registry))
             key=(config['engine'],config['model'])
             groups[key]=groups.get(key,0)+1
         return {'total':sum(groups.values()), 'groups':[
@@ -838,6 +843,155 @@ def design_voice(pid:str,body:VoiceDesignRequest):
     JOBS[jid]={'id':jid,'status':'running','total':1,'completed':0,'errors':[],'message':'準備中'}
     THREADS.submit(run_voice_design,jid,pid,body.speaker,body.sampleText,body.replaceAssetId)
     return JOBS[jid]
+
+
+def run_character_design(job_id,character_id,text,replace_asset_id=None):
+    """Voice Design for a shared character: the result becomes its reference.
+
+    replace_asset_id: an earlier result to unlink when regenerating; the
+    audio stays in the shared folder.
+    """
+    job=JOBS[job_id]
+    try:
+        character=characters.by_id(characters.load(),character_id)
+        if character is None:raise ValueError('共通キャラクターが見つかりません')
+        engine=character['engine']
+        model=characters.QWEN_DESIGN_MODEL if engine=='qwen' else character['model']
+        interp=python_for(engine,None)
+        job['total']=1
+        job['message']=f'{character["name"]}の新しい声をデザイン中...'
+        with tempfile.TemporaryDirectory(prefix='vds_character_design_') as folder:
+            folder=Path(folder);output=folder/'sample.wav'
+            payload={'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],
+                'items':[{'id':character['id'],'text':text,'caption':character.get('description','') or '自然で聞き取りやすい話し方',
+                    'description':character.get('description',''),'output':str(output),
+                    'mode':'design','refs':[],'language':character.get('language','Japanese'),'num_steps':40}]}
+            jobfile=folder/'job.json';out=folder/'result.json'
+            jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
+            cp=subprocess.run([interp,str(core.ROOT/'tts_worker.py'),str(jobfile),str(out)],cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60*20)
+            if not out.exists():raise RuntimeError('Voice Designの応答がありません: '+(cp.stdout+cp.stderr)[-1500:])
+            result=json.loads(out.read_text(encoding='utf-8'))
+            if not result.get('ok'):raise RuntimeError(result.get('error','VoiceDesign失敗'))
+            item=result['items'][0]
+            if not item.get('ok'):raise RuntimeError(item.get('error','VoiceDesign失敗'))
+            if not output.is_file():raise RuntimeError('音声が生成されませんでした')
+            _,asset=characters.add_reference(character_id,output,f'{character["name"]} - Voice Design.wav',
+                                             replace_asset_id=replace_asset_id,design_text=text)
+            job['completed']=1
+            job['referenceAssetId']=asset['id']
+            job['message']='声のサンプルを生成して共通キャラクターの参照音声に登録しました'
+            job['status']='done'
+    except Exception as exc:
+        job['status']='error';job['message']=str(exc)
+
+
+# PC-wide characters shared by every VoiceDrama project and game project.
+class CharacterSave(BaseModel):
+    character: dict
+    expectedRevision: int
+
+
+class CharacterDesign(BaseModel):
+    sampleText: str = 'こんにちは。今日もよろしくお願いします。'
+    replaceAssetId: str | None = None
+
+
+class CharacterImport(BaseModel):
+    source: dict
+    keys: list
+    conflict: str = 'skip'
+    applyToSource: bool = True
+    expectedRevision: int
+
+
+def _character_errors(func,*args,**kwargs):
+    try:
+        return func(*args,**kwargs)
+    except RuntimeError as exc:
+        raise HTTPException(409,str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(404,str(exc))
+    except (ValueError,OSError) as exc:
+        raise HTTPException(400,str(exc))
+
+
+@app.get('/api/characters')
+def characters_get():
+    return _character_errors(characters.load)
+
+
+@app.post('/api/characters')
+def character_create(body:CharacterSave):
+    return _character_errors(characters.create_character,body.character,body.expectedRevision)[0]
+
+
+@app.put('/api/characters/{cid}')
+def character_update(cid:str,body:CharacterSave):
+    return _character_errors(characters.update_character,cid,body.character,body.expectedRevision)[0]
+
+
+@app.delete('/api/characters/{cid}')
+def character_delete(cid:str,expectedRevision:int):
+    return _character_errors(characters.delete_character,cid,expectedRevision)
+
+
+@app.post('/api/characters/{cid}/references')
+async def character_reference_upload(cid:str,expectedRevision:int,file:UploadFile=File(...)):
+    name=Path(str(file.filename or '').replace('\\','/')).name
+    if Path(name).suffix.lower() not in characters.AUDIO_EXTS:
+        raise HTTPException(400,'WAV / MP3 / FLAC / OGG / M4A / AAC / OPUSのみ対応')
+    with tempfile.TemporaryDirectory(prefix='vds_character_ref_') as folder:
+        path=Path(folder)/('upload'+Path(name).suffix.lower())
+        total=0
+        with path.open('wb') as out:
+            while True:
+                chunk=await file.read(1024*1024)
+                if not chunk:break
+                total+=len(chunk)
+                if total>characters.MAX_REFERENCE_BYTES:raise HTTPException(400,'参照音声は50MB以内にしてください')
+                out.write(chunk)
+        if not total:raise HTTPException(400,'空のファイルです')
+        return _character_errors(characters.add_reference,cid,path,name,expectedRevision)[0]
+
+
+@app.delete('/api/characters/{cid}/references/{aid}')
+def character_reference_remove(cid:str,aid:str,expectedRevision:int):
+    return _character_errors(characters.remove_reference,cid,aid,expectedRevision)
+
+
+@app.get('/api/characters/assets/{aid}')
+def character_reference_audio(aid:str):
+    try:
+        asset=next((a for a in characters.load()['assets'] if a['id']==aid),None)
+        if asset is None:raise FileNotFoundError('参照音声が見つかりません')
+        path=characters.asset_path(asset)
+        if not path.is_file():raise FileNotFoundError('参照音声ファイルが見つかりません')
+        return FileResponse(path,filename=asset['name'],content_disposition_type='inline')
+    except (ValueError,FileNotFoundError) as exc:
+        raise HTTPException(404,str(exc))
+
+
+@app.post('/api/characters/{cid}/design')
+def character_design(cid:str,body:CharacterDesign):
+    if not body.sampleText.strip():raise HTTPException(400,'読み上げるサンプル台詞を入力してください')
+    if characters.by_id(_character_errors(characters.load),cid) is None:
+        raise HTTPException(404,'共通キャラクターが見つかりません')
+    jid=core.uid('job')
+    JOBS[jid]={'id':jid,'status':'running','total':1,'completed':0,'errors':[],'message':'準備中'}
+    THREADS.submit(run_character_design,jid,cid,body.sampleText.strip(),body.replaceAssetId)
+    return JOBS[jid]
+
+
+@app.get('/api/characters/sources')
+def character_sources():
+    return _character_errors(characters.list_sources)
+
+
+@app.post('/api/characters/import')
+def character_import(body:CharacterImport):
+    registry,summary=_character_errors(characters.import_characters,body.source,body.keys,body.conflict,
+                                       body.expectedRevision,body.applyToSource)
+    return {'registry':registry,'summary':summary}
 
 
 @app.get('/api/jobs/{jid}')
