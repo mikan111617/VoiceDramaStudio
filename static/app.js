@@ -787,8 +787,49 @@ async function deleteCast(name){
  }catch(e){toast('キャストを削除できません: '+e.message,true);if(btn)btn.disabled=false}
 }
 function applyVoice(index){const v=state.voices[index];if(!v)return;let num=0;for(const l of state.lines.filter(l=>l.speaker===v.name)){l.ttsSource='cast';l.status=l.selectedTakeId?'stale':'missing';num++}dirtyState();renderAll();toast(`${v.name} の ${num}件をキャスト設定に切り替えました（${v.model}）`)}
+// One dialog per Voice Design session: results can be regenerated, compared
+// and chosen without closing it. history: [{assetId,text}] in creation order.
+let designSession=null;
 async function designCharacterVoice(index){const voice=state.voices[index];if(!voice)return;const sampleText=prompt('作りたい声で読み上げるサンプル台詞を入力してください','こんにちは！ 今日はどんな素敵なことが起こるのか、楽しみですね。');if(!sampleText?.trim())return;
- try{await saveNow();const job=await req(`/api/projects/${state.id}/voices/design`,json('POST',{speaker:voice.name,sampleText:sampleText.trim()}));showJob(job.id)}catch(e){toast(e.message,true)}
+ designSession={speaker:voice.name,sampleText:sampleText.trim(),history:[],current:null};
+ await startVoiceDesign(designSession);
+}
+async function startVoiceDesign(session){
+ try{
+  await saveNow();
+  // Regenerating replaces the result in use; the first run adds a reference.
+  const job=await req(`/api/projects/${state.id}/voices/design`,json('POST',{speaker:session.speaker,sampleText:session.sampleText,replaceAssetId:session.current}));
+  showJob(job.id,session);
+ }catch(e){toast(e.message,true);if(session===designSession)renderDesignPanel(session,false)}
+}
+function regenerateVoiceDesign(){
+ const session=designSession,text=$('designSampleText')?.value.trim();
+ if(!session)return;
+ if(!text)return toast('読み上げるサンプル台詞を入力してください',true);
+ session.sampleText=text;
+ startVoiceDesign(session);
+}
+function useDesignCandidate(assetId){
+ const session=designSession,voice=state.voices.find(v=>v.name===session?.speaker),chosen=session?.history.find(c=>c.assetId===assetId);
+ if(!voice||!chosen)return;
+ const results=new Set(session.history.map(c=>c.assetId));
+ voice.refs=[...(voice.refs||[]).filter(id=>!results.has(id)),assetId];
+ voice.refText=chosen.text;session.current=assetId;
+ state.lines.filter(l=>l.speaker===voice.name&&getLineTtsSource(l)==='cast').forEach(l=>l.status=l.selectedTakeId?'stale':'missing');
+ dirtyState();renderAll();renderDesignPanel(session,false);
+ toast(`${session.history.indexOf(chosen)+1}回目の声を${voice.name}の参照音声にしました`);
+}
+function renderDesignPanel(session,running){
+ const panel=$('designPanel');if(!panel||session!==designSession)return;
+ const title=$('jobTitle');if(title)title.textContent=(running?'声をデザイン中：':'Voice Designの結果：')+session.speaker;
+ panel.innerHTML=`<div class="field"><label for="designSampleText">サンプル台詞（変更してから再生成できます）</label><textarea id="designSampleText" rows="2" maxlength="500">${esc(session.sampleText)}</textarea></div>
+  ${session.history.length?`<div class="design-candidates">${session.history.map((c,i)=>`<div class="ref-row"><span title="${esc(c.text)}">${i+1}回目「${esc(c.text.slice(0,24))}${c.text.length>24?'…':''}」${c.assetId===session.current?' <b>使用中</b>':''}</span><div>${button('▶ 試聴',`data-preview="${esc(c.assetId)}"`)}${c.assetId===session.current?'':button('これを使う',`data-design-use="${esc(c.assetId)}" ${running?'disabled':''}`)}</div></div>`).join('')}</div>`:''}
+  <p class="small muted">「✦ 再生成」は、使用中の結果をこのキャストの参照音声から外して新しい結果に置き換えます。外した音声は削除せず「参照音声の管理」に残し、ここの「これを使う」で戻せます。</p>`;
+ panel.querySelectorAll('[data-design-use]').forEach(b=>b.onclick=()=>useDesignCandidate(b.dataset.designUse));
+ const actions=panel.closest('.modal')?.querySelector('.modal-actions');
+ let again=$('redesignVoiceBtn');
+ if(!again&&actions){again=document.createElement('button');again.id='redesignVoiceBtn';again.className='btn primary';again.textContent='✦ 再生成';again.onclick=regenerateVoiceDesign;actions.insertBefore(again,actions.lastElementChild)}
+ if(again)again.disabled=running;
 }
 async function generate(ids){
  if(!ids.length)return toast('対象台詞がありません',true);
@@ -807,8 +848,9 @@ async function generate(ids){
   };
  }catch(e){toast('生成前の設定確認に失敗: '+e.message,true)}
 }
-function showJob(jid){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2>音声生成中</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div><div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
- const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
+function showJob(jid,design=null){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2 id="jobTitle">${design?'声をデザイン中：'+esc(design.speaker):'音声生成中'}</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div>${design?'<div id="designPanel" class="design-panel"></div>':''}<div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
+ if(design)renderDesignPanel(design,true);
+ const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){
  try{
   await saveNow();

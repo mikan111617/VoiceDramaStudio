@@ -27,7 +27,7 @@ import shared_audio
 from core import WORKSPACE, LOCK
 from render import render_project, ffmpeg_bin
 
-app=FastAPI(title="VoiceDrama Studio",version="0.4.1")
+app=FastAPI(title="VoiceDrama Studio",version="0.4.2")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
 THREADS=ThreadPoolExecutor(max_workers=1)
 JOBS={}
@@ -772,10 +772,17 @@ def generate(pid:str,body:Generation):
 class VoiceDesignRequest(BaseModel):
     speaker:str
     sampleText:str='こんにちは。今日もよろしくお願いします。'
+    # Regenerating from the result dialog swaps out the previous result.
+    replaceAssetId:str|None=None
 
 
-def run_voice_design(job_id,pid,speaker,text):
-    """Design one reference voice and attach it to the cast for subsequent cloning."""
+def run_voice_design(job_id,pid,speaker,text,replace_asset_id=None):
+    """Design one reference voice and attach it to the cast for subsequent cloning.
+
+    replace_asset_id: an earlier design result to take out of the cast's
+    references. Only the reference link is removed; the audio stays in the
+    library, so it can be selected again.
+    """
     job=JOBS[job_id]
     try:
         s=core.load_project(pid)
@@ -806,7 +813,10 @@ def run_voice_design(job_id,pid,speaker,text):
                 latest=core.load_project(pid)
                 dest=next((v for v in latest['voices'] if v['name']==speaker),None)
                 if dest:
-                    dest.setdefault('refs',[]).append(registered['asset']['id'])
+                    refs=dest.setdefault('refs',[])
+                    if replace_asset_id in refs:
+                        refs.remove(replace_asset_id)
+                    refs.append(registered['asset']['id'])
                     dest['refText']=text
                     dest['mode']='clone'
                     if engine=='qwen':dest['model']='Qwen/Qwen3-TTS-12Hz-1.7B-Base'
@@ -826,7 +836,7 @@ def design_voice(pid:str,body:VoiceDesignRequest):
     except Exception as exc:raise HTTPException(404,str(exc))
     jid=core.uid('job')
     JOBS[jid]={'id':jid,'status':'running','total':1,'completed':0,'errors':[],'message':'準備中'}
-    THREADS.submit(run_voice_design,jid,pid,body.speaker,body.sampleText)
+    THREADS.submit(run_voice_design,jid,pid,body.speaker,body.sampleText,body.replaceAssetId)
     return JOBS[jid]
 
 

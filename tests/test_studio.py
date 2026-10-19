@@ -1310,6 +1310,64 @@ def test_voice_design_generated_reference_has_preview_id_and_correct_location(cl
     assert 'data-preview=' in js
 
 
+def test_voice_design_regenerate_replaces_only_the_previous_result(client,monkeypatch):
+    """Regenerating from the open dialog swaps the result in use; files stay."""
+    import app as api
+    import json
+    s=project(client);pid=s['id']
+    recorded=upload(client,pid,220,'reference')
+    s=client.get(f'/api/projects/{pid}').json()
+    s['voices']=[{'name':'愛理','engine':'irodori','model':'Aratako/Irodori-TTS-v4.1-Small',
+                'mode':'design','description':'さわやかな声','language':'Japanese','refText':'','refs':[recorded['id']]}]
+    s=client.put(f'/api/projects/{pid}',json={'state':s,'expectedRevision':s['revision']}).json()
+    monkeypatch.setattr(api,'python_for',lambda *_:sys.executable)
+    texts=[]
+    def fake_run(cmd,**kwargs):
+        job=json.loads(Path(cmd[-2]).read_text(encoding='utf8'))
+        item=job['items'][0];texts.append(item['text']);assert item['mode']=='design'
+        sf.write(item['output'],np.zeros(4410,dtype='float32'),44100)
+        Path(cmd[-1]).write_text(json.dumps({'ok':True,'items':[{'id':item['id'],'ok':True,'output':item['output']}]}))
+        return type('Completed',(),{'returncode':0})()
+    monkeypatch.setattr(api.subprocess,'run',fake_run)
+    def design(text,replace=None):
+        jid=core.uid('job');api.JOBS[jid]={'status':'running','total':1,'completed':0,'errors':[],'message':''}
+        api.run_voice_design(jid,pid,'愛理',text,replace)
+        assert api.JOBS[jid]['status']=='done',api.JOBS[jid]
+        return api.JOBS[jid]['referenceAssetId']
+    first=design('こんにちは')
+    assert client.get(f'/api/projects/{pid}').json()['voices'][0]['refs']==[recorded['id'],first]
+    second=design('おはようございます',first)
+    state=client.get(f'/api/projects/{pid}').json()
+    voice=state['voices'][0]
+    assert voice['refs']==[recorded['id'],second] and voice['refText']=='おはようございます'
+    assert voice['mode']=='clone' and texts==['こんにちは','おはようございます']
+    # The replaced result is only unlinked: still a playable reference asset.
+    old=next(a for a in state['assets'] if a['id']==first)
+    assert old['kind']=='reference' and core.asset_path(pid,old).is_file()
+    # An id that is no longer linked is ignored, so nothing else is removed.
+    third=design('こんばんは','asset_0000000000000000')
+    assert client.get(f'/api/projects/{pid}').json()['voices'][0]['refs']==[recorded['id'],second,third]
+    # The HTTP request carries the result to replace into the design job.
+    submitted=[]
+    monkeypatch.setattr(api.THREADS,'submit',lambda *args:submitted.append(args))
+    r=client.post(f'/api/projects/{pid}/voices/design',json={'speaker':'愛理','sampleText':'もう一度','replaceAssetId':third})
+    assert r.status_code==200,r.text
+    assert submitted[0][1:]==(r.json()['id'],pid,'愛理','もう一度',third)
+
+
+def test_voice_design_dialog_regenerates_without_closing():
+    js=(Path(__file__).resolve().parents[1]/'static'/'app.js').read_text(encoding='utf-8')
+    panel=js[js.index('function renderDesignPanel('):js.index('function showJob(')]
+    assert "again.id='redesignVoiceBtn'" in panel and 'again.onclick=regenerateVoiceDesign' in panel
+    assert 'id="designSampleText"' in panel and 'data-design-use=' in panel
+    start=js[js.index('async function startVoiceDesign('):js.index('function regenerateVoiceDesign(')]
+    assert 'replaceAssetId:session.current' in start and 'showJob(job.id,session)' in start
+    # The finished dialog stays open and records each result for comparison.
+    job=js[js.index('function showJob('):js.index('async function renderAudio(')]
+    assert 'design.history.push(' in job and 'renderDesignPanel(design,false)' in job
+    assert "'<div id=\"designPanel\"" in job
+
+
 def test_cast_audio_preview_and_controls_stay_within_one_card():
     root = Path(__file__).resolve().parents[1]
     js = (root / 'static' / 'app.js').read_text(encoding='utf-8')
