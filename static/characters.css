@@ -58,6 +58,7 @@
 .speaker-link-row{display:grid;grid-template-columns:minmax(90px,1fr) minmax(180px,2fr) minmax(120px,1.4fr);gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)}
 .speaker-link-row:last-child{border-bottom:0}
 .speaker-link-row select{width:100%;padding:6px 8px;font-size:12px}
-.speaker-link-state{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.speaker-link-state{font-size:11px;color:var(--muted);overflow-wrap:anywhere;min-width:0}
+.speaker-link-state button{white-space:normal;max-width:100%;margin-top:4px;text-align:left}
 .project-casts{margin-bottom:12px}
 @media(max-width:760px){.ch-grid{grid-template-columns:1fr}.speaker-link-row{grid-template-columns:1fr}.ch-import-row{flex-wrap:wrap}.ch-import-target{max-width:100%;width:100%;align-items:stretch}.ch-import-target select{max-width:none}}

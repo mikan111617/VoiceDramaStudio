@@ -379,7 +379,7 @@ function renderDictionaries(){
  if(!game)return;
  const prosody=game.prosodyDictionary||{};
  renderLegacyPronunciation();
- $('prosodyEntries').innerHTML=Object.entries(prosody).map(([source,item])=>`<form class="dict-entry" data-dict-kind="prosody" data-dict-key="${esc(source)}"><details><summary>${esc(source)} ${item.enabled===false?'（無効）':''}</summary><label>有効 <input type="checkbox" name="enabled" ${item.enabled===false?'':'checked'} style="width:auto"></label><label>読み<input name="reading" maxlength="120" value="${esc(item.reading||'')}"></label><label>アクセントの位置<input name="accent" maxlength="80" value="${esc(item.accent||'')}"></label><label>別名（読点区切り）<input name="aliases" value="${esc((item.aliases||[]).join('、'))}"></label><label>発音指示<textarea name="instruction" maxlength="500" rows="3">${esc(item.instruction||'')}</textarea></label><div class="dict-actions"><button type="submit">保存</button><button class="dict-delete" type="button" data-dict-delete="prosody">削除</button></div></details></form>`).join('')||'<p class="dict-empty">発音指示の登録はありません。</p>';
+ $('prosodyEntries').innerHTML=Object.entries(prosody).map(([source,item])=>`<form class="dict-entry" data-dict-kind="prosody" data-dict-key="${esc(source)}"><details><summary>${esc(source)} ${item.enabled===false?'（無効）':''}</summary><label>有効 <input type="checkbox" name="enabled" ${item.enabled===false?'':'checked'} style="width:auto"></label><label>読み<input name="reading" maxlength="120" value="${esc(item.reading||'')}"></label><label>アクセントの位置<input name="accent" maxlength="80" value="${esc(item.accent||'')}"></label><label>別名（読点区切り）<input name="aliases" value="${esc((item.aliases||[]).join('、'))}"></label><label>発音指示<textarea name="instruction" maxlength="500" rows="3">${esc(item.instruction||'')}</textarea></label><div class="dict-actions"><button type="submit">このアクセント設定を保存</button><button class="dict-delete" type="button" data-dict-delete="prosody">この語を削除</button></div></details></form>`).join('')||'<p class="dict-empty">発音指示の登録はありません。</p>';
 }
 async function uploadSpeechDictionary(kind,file){
  if(!game)return;
@@ -632,7 +632,7 @@ async function cancelGameGeneration(){
  if(!activeGameGeneration)return;
  try{
   await request('/api/game/jobs/'+activeGameGeneration.jobId+'/cancel',{method:'POST'});
-  message('停止を要求しました。現在の処理が終了した後で停止します');
+  message('生成の停止を受け付けました。処理中の台詞が終わったあとで停止します');
  }catch(e){message(e.message,true)}
 }
 function poll(id,pid=game?.id){
@@ -793,7 +793,7 @@ function resetGamePanels(){
 function setSourceCollapsed(collapsed,remember=true){
  $('viewLines').classList.toggle('source-collapsed',collapsed);
  const button=$('toggleGameSource');
- button.textContent=collapsed?'原文を表示':'原文を隠す';
+ button.textContent=collapsed?'KS原文を表示':'KS原文を隠す';
  button.setAttribute('aria-expanded',String(!collapsed));
  if(remember){try{localStorage.setItem(SOURCE_COLLAPSED_KEY,String(collapsed))}catch(_){}}
  if(!collapsed)applyGamePanels(gamePanelSizes||measureGamePanels());

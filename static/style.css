@@ -140,8 +140,10 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .side-nav .nav-text{display:flex;flex-direction:column;min-width:0;flex:1}
 .side-nav .nav-text b{font-size:14px;font-weight:600}
 .side-nav .nav-text small{font-size:11px;font-weight:400;color:var(--muted);line-height:1.4;margin-top:1px;white-space:normal}
-.heading-actions{flex-direction:column;align-items:flex-start}
-.heading-actions .action-group{display:flex;flex-wrap:wrap;gap:8px}
+/* Action buttons flow in rows and wrap; descriptive labels never stack one per line. */
+.heading-actions{flex-direction:row;flex-wrap:wrap;align-items:center;width:100%}
+.heading-actions .action-group{display:flex;flex-wrap:wrap;gap:8px;width:100%}
+.heading-actions .action-group:not(.action-main) .btn{padding:7px 10px;font-size:11px}
 .heading-actions .action-main{padding-bottom:8px;border-bottom:1px dashed var(--line);width:100%}
 .take-panel{border:1px solid #9bbfd1;border-radius:9px;background:var(--surface);padding:12px 13px;margin-bottom:14px}
 .take-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
@@ -156,3 +158,4 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .design-candidates .ref-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .scene-gen-list{display:grid;gap:8px;max-height:300px;overflow:auto;margin:12px 0 16px}
 .scene-gen-scope{display:grid;gap:6px;margin-bottom:6px}.scene-gen-scope .batch-check{margin:0}.scene-gen-scope input{width:auto;flex:none}
+.side-section-title .add-scene-button{font-size:11px;letter-spacing:0;font-weight:700;padding:4px 8px;border:1px solid currentColor;border-radius:6px;white-space:nowrap}
