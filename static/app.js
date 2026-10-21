@@ -111,7 +111,7 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み';loadPronunciation();loadCharacters()}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み';loadPronunciation();loadCharacters();resumeGeneration()}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker),...(characterRegistry?.characters||[]).map(c=>c.name)].filter(Boolean))]}
@@ -470,7 +470,7 @@ function renderEditor(){if(!state)return;if(view!=='voices')characterEditor=null
   pronunciationEditor=null;
   key.textContent='台本・台詞';title.textContent=sceneName(selectedScene);sub.textContent=`${activeLines().length} セリフ · 編集すると音声の更新を検出`;
   const pendingCount=activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).length;
-  act.innerHTML=`<div class="action-group action-main">${button('＋ セリフを追加','id="addLineTop"')}${button(pendingCount?`✦ 未生成の${pendingCount}件をまとめて生成`:'✦ 未生成をまとめて生成', `id="generateMissingBtn" ${pendingCount?'':'disabled'} title="このシーンの未生成・要再生成の台詞を生成します"`,'primary')}</div><div class="action-group">${button('↑ Excel取込','id="importExcelBtn"')}${button('↓ Excelひな形','id="downloadExcelTemplateBtn"')}${button('↓ 手持ちの音声を台詞に割り当て','id="batchAssignBtn"')}${button('↓ このシーンの台詞音声（ZIP）','id="downloadSceneTakesZipBtn"')}${button('🗑 台本を全削除','id="openClearScriptBtn"','danger')}</div>`;
+  act.innerHTML=`<div class="action-group action-main">${button('＋ セリフを追加','id="addLineTop"')}${button(pendingCount?`✦ 未生成の${pendingCount}件をまとめて生成`:'✦ 未生成をまとめて生成', `id="generateMissingBtn" ${pendingCount?'':'disabled'} title="このシーンの未生成・要再生成の台詞を生成します"`,'primary')}${button('✦ シーンを選んでまとめて生成','id="generateScenesBtn" title="複数のシーンや全シーンの台詞をまとめて生成します"')}</div><div class="action-group">${button('↑ Excel取込','id="importExcelBtn"')}${button('↓ Excelひな形','id="downloadExcelTemplateBtn"')}${button('↓ 手持ちの音声を台詞に割り当て','id="batchAssignBtn"')}${button('↓ このシーンの台詞音声（ZIP）','id="downloadSceneTakesZipBtn"')}${button('🗑 台本を全削除','id="openClearScriptBtn"','danger')}</div>`;
   $('editorContent').innerHTML=bulkDropZone('assign')+activeLines().map((l,i)=>`<article class="script-line ${selectedLine===l.id?'active':''}" data-id="${esc(l.id)}"><div class="line-top"><span class="line-number">${String(i+1).padStart(2,'0')}</span><input class="speaker-select" data-line-field="speaker" list="speakers" value="${esc(l.speaker)}" title="話者を入力"><span class="line-status ${esc(l.status)}">${{ready:'音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成'}</span><div class="line-actions"><button class="icon-btn" data-move="-1" title="上へ">↑</button><button class="icon-btn" data-move="1" title="下へ">↓</button><button class="icon-btn" data-delete="line" title="削除">×</button></div></div><textarea class="line-text" data-line-field="text" placeholder="ここに台詞を入力">${esc(l.text)}</textarea><div class="caption-box"><span class="caption-tag">演技指示</span><textarea data-line-field="caption" placeholder="例：声をひそめて、辺りを警戒しながら…">${esc(l.caption)}</textarea></div><div class="file-name-box"><label>生成音声のファイル名（任意） <input data-line-field="outputFilename" type="text" maxlength="120" value="${esc(l.outputFilename||'')}" placeholder="未指定なら自動命名 · 例: mahoru_001.wav" spellcheck="false"></label></div><div class="line-footer"><label>次の台詞まで <input class="gap-input" type="number" min="0" max="60" step="0.1" data-line-field="after" value="${fnum(l.after,1)}"> 秒</label><span>${l.selectedTakeId?'<button data-action="preview" title="選択中のテイクを試聴">▶ 試聴</button>　':''}<button type="button" data-action="seek" title="対応する台詞クリップの開始位置へ再生ヘッドを移動">↪ 再生位置へ</button>　<button type="button" data-action="playFrom" title="この台詞の開始位置へ移動して再生">▶ ここから再生</button>　<button data-action="addBelow">＋ 次に追加</button>　<button data-action="select" title="右側の「選択中の台詞・クリップ」で生成・試聴・テイク選択">${l.takes?.length||0} テイク　→</button></span></div></article>`).join('')+`<button class="editor-bigaction" id="addLineBottom">＋ セリフを追加</button><datalist id="speakers">${getVoices().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`;
  }else if(view==='voices'){
   key.textContent='キャスト・声';title.textContent='キャスト・声';sub.textContent='共通キャラクターは、すべての作品とゲーム音声で使えます。台詞音声は音声ライブラリへ';act.innerHTML=button('⇩ 作品・ゲームから取り込む','id="importCharactersBtn"')+button('＋ キャラクター','id="addCharacterBtn"','primary');
@@ -913,6 +913,50 @@ function renderDesignPanel(session,running){
  if(!again&&actions){again=document.createElement('button');again.id='redesignVoiceBtn';again.className='btn primary';again.textContent='✦ 再生成';again.onclick=regenerateVoiceDesign;actions.insertBefore(again,actions.lastElementChild)}
  if(again)again.disabled=running;
 }
+// Several scenes at once: only what is missing, or every line again.
+function sceneGenerationTargets(sceneIds,scope){
+ const order=new Map(state.scenes.map((s,i)=>[s.id,i])),chosen=new Set(sceneIds);
+ return state.lines.map((l,i)=>[l,i]).filter(([l])=>chosen.has(l.sceneId)&&l.text.trim()&&(scope==='all'||l.status!=='ready'))
+  .sort((a,b)=>order.get(a[0].sceneId)-order.get(b[0].sceneId)||a[1]-b[1]).map(([l])=>l);
+}
+function openSceneGeneration(){
+ const stats=state.scenes.map(s=>{const lines=state.lines.filter(l=>l.sceneId===s.id&&l.text.trim());return {id:s.id,name:s.name,total:lines.length,pending:lines.filter(l=>l.status!=='ready').length}});
+ const picked=new Set(stats.filter(x=>x.pending).map(x=>x.id));
+ if(!picked.size&&selectedScene)picked.add(selectedScene);
+ modal(`<h2>シーンをまとめて生成</h2><p>選んだシーンの台詞をまとめて音声にします。40件ずつ順番に処理し、終わった分から台本とタイムラインに反映します。途中で停止でき、画面を再読み込みしても進捗に再接続できます。</p>
+  <div class="buttonline">${button('すべて選択','id="sceneGenAll"')}${button('未生成があるシーン','id="sceneGenPending"')}${button('選択解除','id="sceneGenNone"')}</div>
+  <div class="scene-gen-list">${stats.map(x=>`<label class="cast-copy-item"><input type="checkbox" data-scene-gen="${esc(x.id)}" ${picked.has(x.id)?'checked':''}><span><b>${esc(x.name)}</b><small>台詞 ${x.total}件 · 未生成・要再生成 ${x.pending}件</small></span></label>`).join('')}</div>
+  <div class="scene-gen-scope"><b class="small">生成する台詞</b>
+   <label class="batch-check"><input type="radio" name="sceneGenScope" value="pending" checked> 未生成・要再生成の台詞だけ</label>
+   <label class="batch-check"><input type="radio" name="sceneGenScope" value="all"> シーンの全台詞（生成済みも作り直します。以前のテイクは残ります）</label></div>
+  <p id="sceneGenSummary" class="small muted"></p>
+  <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('次へ（モデルを確認）','id="sceneGenNext"','primary')}</div>`);
+ const boxes=()=>[...document.querySelectorAll('[data-scene-gen]')];
+ const scope=()=>document.querySelector('input[name="sceneGenScope"]:checked')?.value||'pending';
+ const chosen=()=>boxes().filter(b=>b.checked).map(b=>b.dataset.sceneGen);
+ const refresh=()=>{
+  const n=sceneGenerationTargets(chosen(),scope()).length;
+  $('sceneGenSummary').textContent=n?`${chosen().length}シーン・${n}件の台詞を生成します。`:'生成する台詞がありません。シーンか「生成する台詞」を選び直してください。';
+  $('sceneGenNext').disabled=!n;
+ };
+ const set=test=>{boxes().forEach(b=>{b.checked=test(stats.find(x=>x.id===b.dataset.sceneGen))});refresh()};
+ $('sceneGenAll').onclick=()=>set(()=>true);
+ $('sceneGenPending').onclick=()=>set(x=>x.pending>0);
+ $('sceneGenNone').onclick=()=>set(()=>false);
+ document.querySelectorAll('[data-scene-gen],input[name="sceneGenScope"]').forEach(el=>el.onchange=refresh);
+ $('sceneGenNext').onclick=()=>generate(sceneGenerationTargets(chosen(),scope()).map(l=>l.id));
+ refresh();
+}
+// A long run attaches takes as it goes; follow it unless the user is editing.
+async function refreshDuringJob(){
+ if(!state||dirty||saving||playing)return;
+ const focused=document.activeElement;
+ if(focused&&/^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)&&!focused.closest('.modal'))return;
+ try{const fresh=await req(`/api/projects/${state.id}`);if(dirty||saving||fresh.id!==state.id)return;state=fresh;clearEditHistory();renderAll()}catch(_){}
+}
+async function resumeGeneration(){
+ try{const job=await req(`/api/projects/${state.id}/generate/active`);if(job?.id){showJob(job.id);toast('実行中の音声生成に再接続しました')}}catch(_){}
+}
 async function generate(ids){
  if(!ids.length)return toast('対象台詞がありません',true);
  try{
@@ -932,7 +976,7 @@ async function generate(ids){
 }
 function showJob(jid,design=null){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2 id="jobTitle">${design?'声をデザイン中：'+esc(design.speaker):'音声生成中'}</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div>${design?'<div id="designPanel" class="design-panel"></div>':''}<div class="modal-actions">${button('停止を要求',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
  if(design)renderDesignPanel(design,true);
- const check=async()=>{try{const j=await req('/api/jobs/'+jid);if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`終了: ${j.completed}件処理`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
+ let seen=0;const check=async()=>{try{const j=await req('/api/jobs/'+jid);if(j.status==='running'&&!design&&j.completed!==seen){seen=j.completed;await refreshDuringJob()}if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`${j.message||'終了'}（${j.completed}件処理）${j.errors?.length?'　最初のエラー: '+String(j.errors[0].error||'').slice(0,300):''}`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){
  try{
   await saveNow();
@@ -1288,6 +1332,7 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='promoteAllCastsBtn')return characterEditor?.openImport({kind:'drama',id:state.id,keys:state.voices.map(v=>v.name)});
  const promote=target.closest('[data-cast-promote]');if(promote){const v=state.voices[Number(promote.dataset.castPromote)];if(v)return characterEditor?.openImport({kind:'drama',id:state.id,keys:[v.name]})}
  const register=target.closest('[data-register-speaker]');if(register)return characterEditor?.create({name:register.dataset.registerSpeaker});
+ if(target.id==='generateScenesBtn')return openSceneGeneration();
  if(target.id==='generateMissingBtn')generate(activeLines().filter(x=>x.status!=='ready'&&x.text.trim()).map(x=>x.id));
  if(target.id==='uploadAudioBtn')uploadAudio(libraryTab);
  if(target.id==='insUploadBtn')uploadAudio('sfx');

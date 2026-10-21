@@ -658,6 +658,11 @@ class Generation(BaseModel):
     numSteps:int=40
 
 
+# One TTS worker call handles at most this many lines (as game voice does).
+GENERATION_BATCH=40
+MAX_GENERATION_LINES=10000
+
+
 def python_for(engine,s):
     settings=core.load_global_settings()
     if engine=='irodori':
@@ -705,39 +710,57 @@ def run_generation(job_id,pid,line_ids,steps):
                   'schedule':'linear','sway_coeff':-1.0}
             groups.setdefault((engine,model),[]).append(spec)
         job['total']=len(selected)
-        for (engine,model),items in groups.items():
+        job['succeeded']=0
+        for (engine,model),all_items in groups.items():
             if job.get('cancel'):break
             with LOCK:latest=core.load_project(pid)
             interp=python_for(engine,latest)
-            with tempfile.TemporaryDirectory(prefix='vds_tts_') as fdir:
-                folder=Path(fdir)
-                for it in items:it['output']=str(folder/(it['id']+'.wav'))
-                payload={'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],'items':items}
-                jobfile=folder/'request.json';resfile=folder/'response.json'
-                jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
-                job['message']=f'{engine}: {model} を実行中 ({len(items)} 件)'
-                cp=subprocess.run([interp,str(core.ROOT/'tts_worker.py'),str(jobfile),str(resfile)],
-                                  cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60*45)
-                if not resfile.exists():
-                    raise RuntimeError(f'TTSが応答を返しませんでした。\n{(cp.stdout+cp.stderr)[-2000:]}')
-                result=json.loads(resfile.read_text(encoding='utf-8'))
-                if not result.get('ok'):raise RuntimeError(result.get('error','Unknown error')+'\n'+result.get('traceback','')[-1200:])
-                for row in result.get('items',[]):
-                    if not row.get('ok'):
-                        job['errors'].append({'lineId':row.get('id'),'error':row.get('error','Generation failed')})
-                    else:
-                        src=Path(row['output'])
-                        registered=core.register_asset(pid,src,core.generated_audio_filename({"id":row["id"],"outputFilename":filenames.get(row["id"])},engine),'voice')
-                        with LOCK:
-                            fresh=core.load_project(pid)
-                            line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
-                            if line:
-                                asset=next(a for a in fresh['assets'] if a['id']==registered['asset']['id'])
-                                core.attach_take(fresh,line,asset,generator=f'{engine}:{model}',dictionary=dictionary,registry=registry)
-                                core.save_project(pid,fresh)
-                    job['completed']+=1
-        job['message']='生成が完了しました'
+            # Whole scenes run as bounded batches: progress is saved after each
+            # one, a stop request takes effect at the next batch, and a crashed
+            # batch is reported without discarding the rest.
+            for offset in range(0,len(all_items),GENERATION_BATCH):
+                if job.get('cancel'):break
+                items=all_items[offset:offset+GENERATION_BATCH]
+                with tempfile.TemporaryDirectory(prefix='vds_tts_') as fdir:
+                    folder=Path(fdir)
+                    for it in items:it['output']=str(folder/(it['id']+'.wav'))
+                    payload={'engine':engine,'model':model,'irodori_dir':core.load_global_settings()['irodori_dir'],'items':items}
+                    jobfile=folder/'request.json';resfile=folder/'response.json'
+                    jobfile.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
+                    job['message']=f'{model}: {job["completed"]}/{job["total"]}件完了・次の{len(items)}件を生成中'
+                    try:
+                        cp=subprocess.run([interp,str(core.ROOT/'tts_worker.py'),str(jobfile),str(resfile)],
+                                          cwd=str(core.ROOT),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60*45)
+                        if not resfile.exists():
+                            raise RuntimeError(f'TTSが応答を返しませんでした。\n{(cp.stdout+cp.stderr)[-2000:]}')
+                        result=json.loads(resfile.read_text(encoding='utf-8'))
+                        if not result.get('ok'):raise RuntimeError(result.get('error','Unknown error')+'\n'+result.get('traceback','')[-1200:])
+                    except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as exc:
+                        error=f'{model}: {type(exc).__name__}: {str(exc)[-1500:]}'
+                        job['errors'].extend({'lineId':it['id'],'error':error} for it in items)
+                        job['completed']+=len(items)
+                        continue
+                    rows={row.get('id'):row for row in result.get('items',[])}
+                    for it in items:
+                        row=rows.get(it['id'])
+                        if not row or not row.get('ok'):
+                            job['errors'].append({'lineId':it['id'],'error':(row or {}).get('error','生成結果がありません')})
+                        else:
+                            src=Path(row['output'])
+                            registered=core.register_asset(pid,src,core.generated_audio_filename({"id":row["id"],"outputFilename":filenames.get(row["id"])},engine),'voice')
+                            with LOCK:
+                                fresh=core.load_project(pid)
+                                line=next((l for l in fresh['lines'] if l['id']==row['id']),None)
+                                if line:
+                                    asset=next(a for a in fresh['assets'] if a['id']==registered['asset']['id'])
+                                    core.attach_take(fresh,line,asset,generator=f'{engine}:{model}',dictionary=dictionary,registry=registry)
+                                    core.save_project(pid,fresh)
+                                    job['succeeded']+=1
+                        job['completed']+=1
         job['status']='cancelled' if job.get('cancel') else ('done_with_errors' if job['errors'] else 'done')
+        job['message']={'cancelled':f'生成を停止しました（{job["completed"]}/{job["total"]}件処理）',
+                        'done_with_errors':f'生成は終了しましたが、{len(job["errors"])}件で失敗しました',
+                        'done':'生成が完了しました'}[job['status']]
     except Exception as e:
         job['status']='error';job['message']=str(e)
 
@@ -764,15 +787,32 @@ def generate_preview(pid: str, body: Generation):
         raise HTTPException(400,str(e))
 
 
+def _running_generation(pid):
+    return next((j for j in reversed(list(JOBS.values()))
+                 if j.get('kind')=='generate' and j.get('projectId')==pid and j.get('status')=='running'),None)
+
+
 @app.post('/api/projects/{pid}/generate')
 def generate(pid:str,body:Generation):
-    try:core.load_project(pid)
+    try:state=core.load_project(pid)
     except Exception as e:raise HTTPException(404,str(e))
-    if not body.lineIds or len(body.lineIds)>500:raise HTTPException(400,'生成する台詞数が不正です')
+    if not 1<=len(body.lineIds)<=MAX_GENERATION_LINES or len(set(body.lineIds))!=len(body.lineIds):
+        raise HTTPException(400,f'生成する台詞を1〜{MAX_GENERATION_LINES}件で指定してください')
+    if not set(body.lineIds)<={l['id'] for l in state['lines']}:
+        raise HTTPException(400,'台本にない台詞が含まれています。再読み込みしてください')
+    if _running_generation(pid):
+        raise HTTPException(409,'この作品では既に音声生成中です。終わるまで待つか、停止してください')
     jid=core.uid('job')
-    JOBS[jid]={'id':jid,'status':'running','total':0,'completed':0,'errors':[],'message':'生成準備中'}
+    JOBS[jid]={'id':jid,'kind':'generate','projectId':pid,'status':'running','total':len(body.lineIds),
+               'completed':0,'succeeded':0,'errors':[],'message':'生成準備中'}
     THREADS.submit(run_generation,jid,pid,body.lineIds,max(1,min(80,body.numSteps)))
     return JOBS[jid]
+
+
+@app.get('/api/projects/{pid}/generate/active')
+def generate_active(pid:str):
+    """The running generation of this project, so a reloaded page can follow it."""
+    return _running_generation(pid)
 
 class VoiceDesignRequest(BaseModel):
     speaker:str
@@ -1004,7 +1044,7 @@ def get_job(jid:str):
 def cancel_job(jid:str):
     if jid not in JOBS:raise HTTPException(404,'Job not found')
     JOBS[jid]['cancel']=True
-    return {'ok':True,'message':'現在実行中のモデル処理が終了した時点で停止します'}
+    return {'ok':True,'message':f'処理中の{GENERATION_BATCH}件が終わった時点で停止します'}
 
 class CaptionRequest(BaseModel):
     lineId:str
