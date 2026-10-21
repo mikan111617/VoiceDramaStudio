@@ -1385,7 +1385,7 @@ def character_candidates(state):
     for voice in state.get('voices',[]):
         entry=group(voice['speaker'])
         if voice['speaker'] not in entry['speakers']:entry['speakers'].append(voice['speaker'])
-    assets={a['id']:a for a in state.get('voiceAssets',[])}
+    resolver=_CastResolver(state,characters.load())
     result=[]
     for canonical,entry in groups.items():
         if canonical.strip().casefold() in DEFAULT_NON_VOICE_SPEAKERS:continue
@@ -1397,18 +1397,50 @@ def character_candidates(state):
             if alias and characters.key(alias)!=characters.key(name) and all(
                     characters.key(alias)!=characters.key(x) for x in aliases):
                 aliases.append(alias)
-        local=next((state['localCasts'][k] for k in [canonical,*entry['speakers']] if state.get('localCasts',{}).get(k)),None)
-        voice=None
-        if local:
-            try:voice=_validate_local_cast(local,state.get('voiceAssets',[]))
-            except ValueError:voice=None
-        refs=[(aid,_game_ref_path(state['id'],assets[aid]),assets[aid].get('name',aid))
-              for aid in (voice or {}).get('refs',[]) if aid in assets]
+        voice,refs,origin=_candidate_voice(state,resolver,[*entry['speakers'],canonical])
         result.append({'key':canonical,'name':name,'aliases':aliases[:characters.MAX_ALIASES],
                        'hasVoice':voice is not None,'suggested':voice is not None or entry['sheet'],
-                       'voice':{k:voice[k] for k in characters.VOICE_FIELDS} if voice else {},
-                       'refFiles':refs,'speakers':[canonical,*[x for x in entry['speakers'] if x!=canonical]]})
+                       'voice':{k:voice.get(k) for k in characters.VOICE_FIELDS} if voice else {},
+                       'refFiles':refs,'voiceSource':origin,
+                       'speakers':[canonical,*[x for x in entry['speakers'] if x!=canonical]]})
     return result
+
+
+def _candidate_voice(state,resolver,speakers):
+    """(voice, reference files, where it comes from) for one importable character.
+
+    The voice the speaker actually uses is copied, so the imported character
+    sounds the same right away: a game-only setting, a shared character, or a
+    VoiceDrama cast bound before shared characters existed, each with its
+    reference audio. A switched-off game-only setting is the fallback.
+    """
+    for speaker in speakers:
+        try:kind,cast,project_id=resolver(speaker)
+        except (ValueError,OSError,KeyError):continue
+        if kind=='local':
+            return cast,_local_ref_files(state,cast),'ゲーム専用の声設定'
+        if kind=='global':
+            registry_assets={a['id']:a for a in resolver.registry['assets']}
+            refs=[(aid,characters.asset_path(registry_assets[aid]),registry_assets[aid].get('name',aid))
+                  for aid in cast.get('refs',[]) if aid in registry_assets]
+            return cast,refs,f'共通キャラクター「{cast["name"]}」'
+        project=resolver.projects[project_id]
+        assets={a['id']:a for a in project['assets']}
+        refs=[(aid,core.asset_path(project_id,assets[aid]),assets[aid].get('name',aid))
+              for aid in cast.get('refs',[]) if aid in assets]
+        return cast,refs,f'ボイスドラマ「{project.get("title","")}」のキャスト「{cast["name"]}」'
+    local=next((state['localCasts'][k] for k in speakers if state.get('localCasts',{}).get(k)),None)
+    if local:
+        try:cast=_validate_local_cast(local,state.get('voiceAssets',[]))
+        except ValueError:return None,[],''
+        return cast,_local_ref_files(state,cast),'ゲーム専用の声設定（未使用）'
+    return None,[],''
+
+
+def _local_ref_files(state,cast):
+    assets={a['id']:a for a in state.get('voiceAssets',[])}
+    return [(aid,_game_ref_path(state['id'],assets[aid]),assets[aid].get('name',aid))
+            for aid in cast['refs'] if aid in assets]
 
 
 def link_shared_characters(pid,mapping):
