@@ -42,6 +42,13 @@
 .ch-import-row small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .ch-tag{font-size:11px;border:1px solid var(--line);border-radius:10px;padding:1px 8px;white-space:nowrap}
 .ch-tag-warn{border-color:var(--gold,#986c33);color:var(--gold,#986c33)}
+.ch-import-target{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none;max-width:44%}
+.ch-import-target select{width:100%;max-width:220px;padding:4px 6px;font-size:11px;border:1px solid var(--line);border-radius:6px}
+.ch-library{margin-top:6px;border-top:1px solid var(--line);padding-top:4px}
+.ch-library>summary{cursor:pointer;font-size:12px;color:var(--muted);padding:4px 0}
+.ch-library small{font-size:11px;color:var(--muted)}
+.cast-shared-voice .cast-reference-heading h4{color:var(--text)}
+.cast-shared-warning{color:var(--red);font-size:12px;margin:6px 0}
 .ch-check{display:flex;align-items:flex-start;gap:8px;font-size:12px}
 .ch-check input{width:auto;margin-top:3px}
 .ch-result{border:1px solid var(--accent);border-radius:8px;padding:8px 10px;font-size:12px;overflow-wrap:anywhere}
@@ -53,4 +60,4 @@
 .speaker-link-row select{width:100%;padding:6px 8px;font-size:12px}
 .speaker-link-state{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .project-casts{margin-bottom:12px}
-@media(max-width:760px){.ch-grid{grid-template-columns:1fr}.speaker-link-row{grid-template-columns:1fr}}
+@media(max-width:760px){.ch-grid{grid-template-columns:1fr}.speaker-link-row{grid-template-columns:1fr}.ch-import-row{flex-wrap:wrap}.ch-import-target{max-width:100%;width:100%;align-items:stretch}.ch-import-target select{max-width:none}}

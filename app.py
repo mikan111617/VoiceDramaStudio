@@ -901,6 +901,7 @@ class CharacterImport(BaseModel):
     keys: list
     conflict: str = 'skip'
     applyToSource: bool = True
+    targets: dict = {}
     expectedRevision: int
 
 
@@ -990,7 +991,7 @@ def character_sources():
 @app.post('/api/characters/import')
 def character_import(body:CharacterImport):
     registry,summary=_character_errors(characters.import_characters,body.source,body.keys,body.conflict,
-                                       body.expectedRevision,body.applyToSource)
+                                       body.expectedRevision,body.applyToSource,body.targets)
     return {'registry':registry,'summary':summary}
 
 

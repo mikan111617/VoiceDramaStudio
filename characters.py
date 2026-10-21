@@ -376,19 +376,24 @@ def _free_name(data, base):
     raise ValueError('別名で追加できる名前が見つかりません')
 
 
-def import_characters(source, keys, conflict, expected_revision, apply_to_source=True):
+def import_characters(source, keys, conflict, expected_revision, apply_to_source=True, targets=None):
     """Copy characters from a VoiceDrama or game project into the registry.
 
     conflict decides what happens when the name (or an alias) is already a
     character: 'skip' keeps it, 'overwrite' replaces its voice settings and
     references with the source's (aliases are merged; a source without
     references keeps the existing ones), 'rename' adds a copy.
+    targets maps a source key to a character to overwrite even though the
+    names differ (警察 into 警察官); the source name becomes its alias.
     Reference audio keeps its ID. With apply_to_source, the source project's
     speakers are linked to the resulting characters. Nothing is written if
     any step fails.
     """
     if conflict not in CONFLICT_MODES:
         raise ValueError('同じ名前のキャラクターの扱いが正しくありません')
+    targets = targets or {}
+    if not isinstance(targets, dict) or any(not isinstance(v, str) for v in targets.values()):
+        raise ValueError('取り込み先の指定が正しくありません')
     if not isinstance(keys, list) or not keys or len(keys) > MAX_CHARACTERS:
         raise ValueError('取り込むキャラクターを選んでください')
     kind, _, items = _source(source)
@@ -425,12 +430,19 @@ def import_characters(source, keys, conflict, expected_revision, apply_to_source
                 return kept
 
             for item in chosen:
-                target = match(data, [item['name'], *item['aliases']])
-                if target and conflict == 'skip':
+                mode = conflict
+                if targets.get(item['key']):
+                    target = by_id(data, targets[item['key']])
+                    if target is None:
+                        raise ValueError(f'{item["name"]}の取り込み先の共通キャラクターが見つかりません')
+                    mode = 'overwrite'
+                else:
+                    target = match(data, [item['name'], *item['aliases']])
+                if target and mode == 'skip':
                     summary['skipped'].append(item['name'])
                     links[item['key']] = target['id']
                     continue
-                if target and conflict == 'overwrite':
+                if target and mode == 'overwrite':
                     spec = dict(target)
                     if item['hasVoice']:
                         spec.update({k: v for k, v in item['voice'].items() if v is not None})

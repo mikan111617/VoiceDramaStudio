@@ -450,6 +450,38 @@ def test_name_only_character_gets_voice_and_references_by_overwriting_from_voice
     assert characters.reference_paths(response.json()['registry'], repaired)
 
 
+def test_import_into_a_differently_named_character_carries_references(client):
+    state = client.post('/api/game/projects', json={'title': '舞黒館'}).json()
+    response = client.post(f'/api/game/projects/{state["id"]}/import-ks?expectedRevision={state["revision"]}',
+                           files=[('files', ('scene1.ks', '#警察\n動かないでください！[p]\n'.encode('utf8'), 'text/plain'))])
+    assert response.status_code == 200, response.text
+    state = put_game(client, response.json(), localCasts={'警察': {**game.default_local_cast('警察'), 'model': ANIME,
+                     'description': 'ゲームの警察'}}, localCastMode={'警察': 'local'})
+    state = client.post(f'/api/game/projects/{state["id"]}/casts/警察/reference?expectedRevision={state["revision"]}',
+                        files={'file': ('police.wav', wav_bytes(), 'audio/wav')}).json()
+    ref_id = state['localCasts']['警察']['refs'][0]
+    officer = create(client, name='警察官', description='ボイスドラマの警察官')
+    project = drama(client, ['警察官'])
+    source = next(s for s in client.get('/api/characters/sources').json() if s['id'] == state['id'])
+    assert source['characters'][0]['existing'] is None          # 警察 ≠ 警察官 by name
+
+    def run(targets):
+        return client.post('/api/characters/import', json={'source': {'kind': 'game', 'id': state['id']},
+            'keys': ['警察'], 'conflict': 'skip', 'applyToSource': True, 'targets': targets,
+            'expectedRevision': registry(client)['revision']})
+    assert run({'警察': 'chr_0000000000000000'}).status_code == 400
+    response = run({'警察': officer['id']})
+    assert response.status_code == 200, response.text
+    assert response.json()['summary']['updated'] == ['警察官'] and response.json()['summary']['added'] == []
+    shared = response.json()['registry']['characters']
+    assert [c['id'] for c in shared] == [officer['id']]
+    assert shared[0]['refs'] == [ref_id] and shared[0]['model'] == ANIME and shared[0]['aliases'] == ['警察']
+    assert game.get_game(state['id'])['bindings']['警察'] == {'characterId': officer['id']}
+    # The VoiceDrama speaker 警察官 now generates with the game's reference audio.
+    voice = core.resolve_voice(client.get(f'/api/projects/{project["id"]}').json(), '警察官')
+    assert voice['id'] == officer['id'] and characters.reference_paths(registry(client), voice)
+
+
 def test_shared_character_voice_design_regenerates_in_place(client, monkeypatch):
     import app as api
     character = add_reference(client, create(client, name='零度', engine='qwen', mode='design',
@@ -490,8 +522,13 @@ def test_both_screens_load_the_shared_character_editor():
     for html, script in ((index, 'app.js'), (game_html, 'game.js')):
         assert 'characters.css' in html and html.index('characters.js') < html.index(script)
     for term in ('function renderCastsView', 'data-speaker-link', 'importCharactersBtn', 'addCharacterBtn',
-                 'data-cast-promote', 'promoteAllCastsBtn', 'data-register-speaker', 'function voiceFor'):
+                 'data-cast-promote', 'promoteAllCastsBtn', 'data-register-speaker', 'function voiceFor',
+                 'function sharedVoiceHtml', 'data-preview-character'):
         assert term in app_js
+    # The import dialog can overwrite a differently named character, and
+    # unlinked reference audio can be linked again.
+    for term in ('data-ch-target', 'targets:picks', 'function libraryHtml', 'data-ch-link'):
+        assert term in shared
     for term in ('setupCharacterControls', 'data-bind-character', 'importGameCharacters', 'function resolvedCast',
                  'data-cast-promote', 'characterEditor?.load()'):
         assert term in game_js
