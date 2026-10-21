@@ -79,7 +79,7 @@
  function showFocus(on){
   document.body.classList.toggle('harbor-focus',on);
   button.setAttribute('aria-pressed',String(on));
-  button.textContent=on?'通常表示':'集中表示';
+  button.textContent=on?'⤡ 通常の表示に戻す':'⤢ 編集エリアを広げる';
   updateChrome();
  }
  try{showFocus(localStorage.getItem(focusKey)==='true')}catch(_){showFocus(false)}

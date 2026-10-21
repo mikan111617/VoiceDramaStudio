@@ -106,7 +106,7 @@
      <label>名前<input name="label" maxlength="40" value="${esc(p.label)}" placeholder="${i?'別読み':DEFAULT_LABEL}"></label>
      <label>読み<input name="reading" maxlength="120" required value="${esc(p.reading)}"></label>
      ${many?btn('×',`data-pd-remove-pattern="${i}" title="この読みパターンを削除" aria-label="この読みパターンを削除"`):''}</div>`).join('')}</div>
-    <div class="pd-entry-actions">${btn('＋ 読みパターンを追加','data-pd-add-pattern')}${btn('保存','','primary','submit')}${btn('語を削除','data-pd-delete','danger')}</div></form>`;
+    <div class="pd-entry-actions">${btn('＋ 読みパターンを追加','data-pd-add-pattern')}${btn('この単語を保存','','primary','submit')}${btn('この単語を削除','data-pd-delete','danger')}</div></form>`;
   }
   function renderList(){
    const list=root.querySelector('[data-pd-list]');if(!list||!data)return;

@@ -307,3 +307,14 @@ test('script play-from action seeks before starting multitrack playback',()=>{
  assert.equal(e.get('currentTime'),45);
  assert.equal(e.get('startedAt'),45);
 });
+
+test('choosing a scene in the scene list opens its script from any screen',()=>{
+ const e=editor();
+ for(const screen of ['voices','assets','pronunciation']){
+  e.run(`view='${screen}';selectedScene='s';selectScene('other')`);
+  assert.equal(e.get('view'),'script');assert.equal(e.get('selectedScene'),'other');
+ }
+ // The scene already shown behind another screen also opens its script.
+ e.run("view='voices';selectScene('other')");
+ assert.equal(e.get('view'),'script');assert.equal(e.get('selectedScene'),'other');
+});

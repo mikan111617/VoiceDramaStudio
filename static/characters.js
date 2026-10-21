@@ -68,8 +68,8 @@
       <label class="ch-wide">声の説明（Voice Design・演技の基礎）<textarea name="description" rows="2" maxlength="2000">${esc(d.description||'')}</textarea></label>
       <label class="ch-wide">参照音声の書き起こし（Qwen Base・任意）<textarea name="refText" rows="2" maxlength="4000">${esc(d.refText||'')}</textarea></label>
      </div>
-     <div class="ch-refs"><b>${esc(c.name)} の参照音声（${(c.refs||[]).length}件）</b>${(c.refs||[]).map(id=>refs.get(id)).filter(Boolean).map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('外す',`data-ch-unref="${esc(a.id)}" title="このキャラクターの参照音声から外します（ファイルは残ります）"`)}</span></div>`).join('')||'<p class="ch-empty">参照音声はまだありません。</p>'}${libraryHtml(c)}</div>
-     <div class="ch-actions">${btn('保存','','primary','submit')}${btn('＋ 参照音声を登録','data-ch-upload')}${btn('✦ Voice Designで声を作成','data-ch-design')}${extra}${btn('削除','data-ch-delete','danger')}</div>
+     <div class="ch-refs"><b>${esc(c.name)} の参照音声（${(c.refs||[]).length}件）</b>${(c.refs||[]).map(id=>refs.get(id)).filter(Boolean).map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('参照から外す',`data-ch-unref="${esc(a.id)}" title="このキャラクターの参照音声から外します（ファイルは残ります）"`)}</span></div>`).join('')||'<p class="ch-empty">参照音声はまだありません。</p>'}${libraryHtml(c)}</div>
+     <div class="ch-actions">${btn('キャラクター設定を保存','','primary','submit')}${btn('＋ 参照音声ファイルを登録','data-ch-upload')}${btn('✦ Voice Designで声を作成','data-ch-design')}${extra}${btn('このキャラクターを削除','data-ch-delete','danger')}</div>
      <input type="file" hidden multiple accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" data-ch-file>
     </form></details>`;
   }
@@ -80,7 +80,7 @@
    for(const other of data.characters)for(const id of other.refs||[])if(other.id!==c.id)users.set(id,[...(users.get(id)||[]),other.name]);
    const rest=(data.assets||[]).filter(a=>!linked.has(a.id)).sort((a,b)=>(users.has(a.id)?1:0)-(users.has(b.id)?1:0));
    if(!rest.length)return '';
-   return `<details class="ch-library"><summary>保存済みの参照音声から追加（${rest.length}件）</summary>${rest.map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒${users.has(a.id)?` <small>（${esc(users.get(a.id).join('、'))}で使用中）</small>`:''}</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('＋ 追加',`data-ch-link="${esc(a.id)}"`)}</span></div>`).join('')}</details>`;
+   return `<details class="ch-library"><summary>保存済みの参照音声から追加（${rest.length}件）</summary>${rest.map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒${users.has(a.id)?` <small>（${esc(users.get(a.id).join('、'))}で使用中）</small>`:''}</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('＋ 参照音声に追加',`data-ch-link="${esc(a.id)}"`)}</span></div>`).join('')}</details>`;
   }
   async function linkReference(id,aid){
    const c=byId(data,id);if(!c||(c.refs||[]).includes(aid))return;
@@ -93,7 +93,7 @@
    const q=norm(filter);
    const shown=data.characters.filter(c=>!q||[c.name,...(c.aliases||[])].some(n=>norm(n).includes(q)));
    list.innerHTML=shown.slice(0,LIST_LIMIT).map(cardHtml).join('')||
-    `<p class="ch-empty">${q?'絞り込みに一致するキャラクターがありません。':'共通キャラクターはまだありません。名前を入力して追加するか、「⇩ 作品・ゲームから取り込む」で既存のキャストを取り込んでください。'}</p>`;
+    `<p class="ch-empty">${q?'絞り込みに一致するキャラクターがありません。':'共通キャラクターはまだありません。名前を入力して追加するか、「⇩ 他の作品・ゲームから取り込む」で既存のキャストを取り込んでください。'}</p>`;
    if(shown.length>LIST_LIMIT)list.insertAdjacentHTML('beforeend',`<p class="ch-empty">ほか ${shown.length-LIST_LIMIT}人。絞り込みで表示してください。</p>`);
   }
   function render(){
@@ -105,8 +105,8 @@
     <p class="ch-help">ボイスドラマとゲーム音声のすべての作品で共通のキャラクターです。台詞の話者が名前か別名と一致すると、このキャラクターの声で生成します。変更はすべての作品に反映され、声が変わる台詞は「要再生成」になります。</p>
     ${conflict?`<div class="ch-conflict" role="alert">別の画面で共通キャラクターが変更されたため、保存しませんでした。再読み込みしてから編集し直してください。${btn('↻ 再読み込み','data-ch-action="reload"','primary')}</div>`:''}
     <div class="ch-toolbar"><span class="ch-count">共通キャラクター ${data.characters.length}人</span>
-     <form class="ch-add" data-ch-add><input name="name" maxlength="60" required placeholder="新しいキャラクター名" aria-label="新しいキャラクター名">${btn('＋ 追加','','primary','submit')}</form>
-     ${btn('⇩ 作品・ゲームから取り込む','data-ch-action="import"')}${btn('↻ 再読み込み','data-ch-action="reload"')}
+     <form class="ch-add" data-ch-add><input name="name" maxlength="60" required placeholder="新しいキャラクター名" aria-label="新しいキャラクター名">${btn('＋ 共通キャラクターを追加','','primary','submit')}</form>
+     ${btn('⇩ 他の作品・ゲームから取り込む','data-ch-action="import"')}${btn('↻ 再読み込み','data-ch-action="reload"')}
      <input type="search" data-ch-filter value="${esc(filter)}" placeholder="名前・別名で絞り込み" aria-label="キャラクターを絞り込み"></div>
     <div class="ch-list" data-ch-list></div></div>`;
    renderList();
@@ -221,8 +221,8 @@
    const s=design;
    body.innerHTML=`<h3>${s.running?'声をデザイン中':'Voice Design'}：${esc(s.name)}</h3><p class="ch-status" role="status">${esc(s.message)}</p>
     <label class="ch-field">サンプル台詞（変更してから生成できます）<textarea data-ch-design-text rows="2" maxlength="500">${esc(s.sampleText)}</textarea></label>
-    ${s.history.length?`<div class="ch-results">${s.history.map((r,i)=>`<div class="ch-ref"><span title="${esc(r.text)}">${i+1}回目「${esc(r.text.slice(0,24))}${r.text.length>24?'…':''}」${r.assetId===s.current?' <b>使用中</b>':''}</span><span>${btn('▶ 試聴',`data-ch-play="${esc(r.assetId)}"`)}${r.assetId===s.current?'':btn('これを使う',`data-ch-use="${esc(r.assetId)}" ${s.running?'disabled':''}`)}</span></div>`).join('')}</div>`:''}
-    <p class="ch-note">${s.history.length?'「✦ 再生成」は、使用中の結果をこのキャラクターの参照音声から外して新しい結果に置き換えます。外した音声は削除せず、「これを使う」で戻せます。':'生成した声は、このキャラクターの参照音声に追加されます。'}</p>
+    ${s.history.length?`<div class="ch-results">${s.history.map((r,i)=>`<div class="ch-ref"><span title="${esc(r.text)}">${i+1}回目「${esc(r.text.slice(0,24))}${r.text.length>24?'…':''}」${r.assetId===s.current?' <b>使用中</b>':''}</span><span>${btn('▶ 試聴',`data-ch-play="${esc(r.assetId)}"`)}${r.assetId===s.current?'':btn('この声を使う',`data-ch-use="${esc(r.assetId)}" ${s.running?'disabled':''}`)}</span></div>`).join('')}</div>`:''}
+    <p class="ch-note">${s.history.length?'「✦ 再生成」は、使用中の結果をこのキャラクターの参照音声から外して新しい結果に置き換えます。外した音声は削除せず、「この声を使う」で戻せます。':'生成した声は、このキャラクターの参照音声に追加されます。'}</p>
     <div class="ch-dialog-actions">${btn(s.history.length?'✦ 再生成':'✦ 生成',`data-ch-generate ${s.running?'disabled':''}`,'primary')}${btn('閉じる','data-ch-close')}</div>`;
    body.querySelector('[data-ch-generate]').onclick=generateDesign;
    body.querySelectorAll('[data-ch-play]').forEach(b=>b.onclick=()=>play(b.dataset.chPlay));
@@ -280,7 +280,7 @@
      <option value="rename" ${conflictMode==='rename'?'selected':''}>名前を変えて別のキャラクターとして追加</option></select></label>
     <label class="ch-check"><input type="checkbox" data-ch-apply ${apply?'checked':''}> 取り込み元のシナリオでも、取り込んだ共通キャラクターを使う${source.kind==='game'?'（ゲーム専用の声設定から切り替えます。設定は記録として残ります）':''}</label>
     ${result?`<div class="ch-result" role="status">${result}</div>`:''}
-    <div class="ch-dialog-actions">${btn('取り込む',`data-ch-run ${chosen.size?'':'disabled'}`,'primary')}${btn('閉じる','data-ch-close')}</div>`;
+    <div class="ch-dialog-actions">${btn('選んだキャラクターを取り込む',`data-ch-run ${chosen.size?'':'disabled'}`,'primary')}${btn('閉じる','data-ch-close')}</div>`;
    body.querySelector('[data-ch-source]').onchange=e=>{picked=Number(e.target.value);chosen=new Set(sources[picked].characters.filter(c=>c.suggested).map(c=>c.key));targets=new Map();renderImport()};
    body.querySelectorAll('[data-ch-target]').forEach(select=>select.onchange=()=>{const k=select.dataset.chTarget;if(select.value){targets.set(k,select.value);chosen.add(k)}else targets.delete(k);renderImport()});
    body.querySelectorAll('[data-ch-key]').forEach(box=>box.onchange=()=>{if(box.checked)chosen.add(box.dataset.chKey);else chosen.delete(box.dataset.chKey);body.querySelector('[data-ch-run]').disabled=!chosen.size});

@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ゲーム音声 | VoiceDrama Studio</title>
-<link rel="stylesheet" href="/static/harbor.css?v=0313"><link rel="stylesheet" href="/static/game.css?v=0500"><link rel="stylesheet" href="/static/pronunciation.css?v=0401"><link rel="stylesheet" href="/static/characters.css?v=0501"></head>
+<link rel="stylesheet" href="/static/harbor.css?v=0313"><link rel="stylesheet" href="/static/game.css?v=0500"><link rel="stylesheet" href="/static/pronunciation.css?v=0401"><link rel="stylesheet" href="/static/characters.css?v=0600"></head>
 <body class="game-mode">
-<header class="harbor-masthead"><canvas class="harbor-art" aria-hidden="true"></canvas><div class="harbor-brand"><strong>HARBOR ATELIER</strong><span>VoiceDrama Studio · 音声制作のアトリエ</span></div><button type="button" id="harborFocus" class="harbor-focus-button" aria-pressed="false">集中表示</button></header>
+<header class="harbor-masthead"><canvas class="harbor-art" aria-hidden="true"></canvas><div class="harbor-brand"><strong>HARBOR ATELIER</strong><span>VoiceDrama Studio · 音声制作のアトリエ</span></div><button type="button" id="harborFocus" class="harbor-focus-button" aria-pressed="false">⤢ 編集エリアを広げる</button></header>
 <header class="bar topbar">
  <nav class="modes" aria-label="制作モード"><a href="/">🎧 ボイスドラマ</a><a href="/game" class="active" aria-current="page">🎮 ゲーム音声</a></nav>
  <button type="button" id="projectButton" class="project-name" title="プロジェクトの切り替え・新規作成・名前変更"><span class="project-title" id="projectTitle">読み込み中…</span><span class="project-chevron">⌄</span></button>
- <div class="top-actions"><span id="saveNotice" class="save-state">準備中…</span><button type="button" id="settingsBtn" class="outline">⚙ 設定</button><button type="button" id="exportZip" class="primary" title="ゲーム用シナリオ・ボイスID一覧・音声ファイルをZIPで書き出します">↧ ゲーム用に書き出す（ZIP）</button></div>
+ <div class="top-actions"><span id="saveNotice" class="save-state">準備中…</span><button type="button" id="settingsBtn" class="outline">⚙ 生成とTTS環境の設定</button><button type="button" id="exportZip" class="primary" title="ゲーム用シナリオ・ボイスID一覧・音声ファイルをZIPで書き出します">↧ ゲーム用に書き出す（ZIP）</button></div>
 </header>
 <div class="shell">
 <aside class="side">
@@ -22,7 +22,7 @@
  <div class="side-scroll">
   <div class="side-section-title"><span>シナリオ一覧</span><span id="scenarioCount" class="side-count"></span></div>
   <p class="side-help scenario-help">名前をクリックで表示、チェックでそのファイルの台詞をまとめて生成の対象にします。</p>
-  <div class="scenario-bulk" aria-label="全シナリオの選択"><span>全シナリオから</span><button id="markAllPending" class="outline" type="button" title="全シナリオの未生成・要再生成の台詞を選択">未生成を選択</button><button id="markAllVoices" class="outline" type="button" title="全シナリオの全台詞を選択">全台詞</button><button id="clearAllVoiceMarks" class="outline" type="button" title="全シナリオの選択を解除">解除</button></div>
+  <div class="scenario-bulk" aria-label="全シナリオの選択"><span>全シナリオから</span><button id="markAllPending" class="outline" type="button" title="全シナリオの未生成・要再生成の台詞を選択">未生成の台詞を選択</button><button id="markAllVoices" class="outline" type="button" title="全シナリオの全台詞を選択">全台詞を選択</button><button id="clearAllVoiceMarks" class="outline" type="button" title="全シナリオの選択を解除">選択を解除</button></div>
   <div id="scenarioList" class="scenario-list"></div>
   <label class="small-label scenario-include"><input type="checkbox" id="includeGeneratedVoices"> チェックで選ぶとき、生成済みの台詞も含める</label>
  </div>
@@ -34,13 +34,13 @@
   <div class="pane-head"><div><div class="micro">台本・台詞</div><h1 id="scenarioTitle">ゲームのシナリオ</h1><p id="scenarioMeta">「04 ファイルの取り込み」でKSを読み込んでください</p></div><div class="toolset"><input id="voiceSearch" type="search" placeholder="話者・台詞・IDで絞り込み" aria-label="台詞を絞り込み"></div></div>
   <div id="pendingBanner" class="notice-banner" role="status" hidden><span id="pendingBannerText"></span><button type="button" class="outline" data-goto-view="import">取り込み画面を開く</button></div>
   <div class="generate-bar" aria-label="まとめて生成">
-   <div class="select-row"><label class="small-label"><input id="selectAll" type="checkbox"> このシナリオの台詞をすべて選択</label><span class="speaker-select-tools"><label for="speakerSelect">話者ごとに選ぶ：</label><select id="speakerSelect" aria-label="このシナリオの話者"></select><button id="speakerSelectAll" type="button" class="outline">選択</button><button id="speakerDeselectAll" type="button" class="outline">解除</button></span></div>
+   <div class="select-row"><label class="small-label"><input id="selectAll" type="checkbox"> このシナリオの台詞をすべて選択</label><span class="speaker-select-tools"><label for="speakerSelect">話者ごとに選ぶ：</label><select id="speakerSelect" aria-label="このシナリオの話者"></select><button id="speakerSelectAll" type="button" class="outline">この話者を選択</button><button id="speakerDeselectAll" type="button" class="outline">この話者を解除</button></span></div>
    <div class="generate-row"><div class="selection-summary"><strong id="totalGenerationSelection" role="status">0件を選択中</strong><span id="voiceSelectionCount" class="voice-selected-count">このシナリオ 0/0件</span></div><div class="generate-actions"><button id="analyzeSelected" type="button" class="outline" title="選択した台詞の演技指示（キャプション）をOllamaで自動作成します">✦ 演技指示をAIで提案</button><button id="cancelGameGeneration" type="button" class="outline" hidden>■ 生成を止める</button><button id="generateSelected" type="button" class="primary">✦ 選択した台詞を生成</button></div></div>
    <div class="job-area"><div class="progress" hidden id="progressWrap"><div id="progressBar"></div></div><p id="jobStatus" class="helper" hidden></p><p id="generationSummary" class="generation-summary" role="status" aria-live="polite" hidden></p><p id="audioHealthNotice" class="helper" hidden></p><details id="generationIssues" hidden><summary>失敗したボイスID・エラー内容を表示</summary><pre id="generationIssueLog"></pre></details></div>
   </div>
   <div class="voice-pane"><div class="list-head"><span>台詞一覧</span><span id="voiceCount" class="side-count">0</span><span class="list-hint">行をクリックすると右側で編集・生成・試聴できます</span></div><div class="voice-list" id="voiceList"></div></div>
   <div id="resizeGameSource" class="game-resizer horizontal" role="separator" aria-orientation="horizontal" aria-label="台詞一覧とKS原文の高さを調整" tabindex="0"></div>
-  <section class="source-pane"><div class="source-head"><span class="micro">KS原文（読み取り専用）</span><button id="toggleGameSource" type="button" class="outline compact-panel-button" aria-expanded="true">原文を隠す</button></div><div class="source-area" id="sourceViewer"><div class="empty">シナリオを取り込むと、ここに原文が表示されます。</div></div></section>
+  <section class="source-pane"><div class="source-head"><span class="micro">KS原文（読み取り専用）</span><button id="toggleGameSource" type="button" class="outline compact-panel-button" aria-expanded="true">KS原文を隠す</button></div><div class="source-area" id="sourceViewer"><div class="empty">シナリオを取り込むと、ここに原文が表示されます。</div></div></section>
  </section>
  <section id="viewCasts" class="view" role="tabpanel" aria-labelledby="navCasts" hidden>
   <div class="pane-head"><div><div class="micro">キャスト・声</div><h1>話者ごとの声</h1><p>話者の名前・別名と一致する共通キャラクター（ボイスドラマと共通）の声を使います。話者ごとに別のキャラクターや、ゲーム音声専用の声設定も選べます。</p></div><div class="toolset"><button id="importGameCharacters" class="outline" type="button" title="このゲームのキャラクター（専用の声設定・キャラクターシート）を共通キャラクターへ取り込みます">⇧ このゲームのキャラクターを共通キャラクターへ</button></div></div>
@@ -71,13 +71,13 @@
     <p class="side-help">KSではなくボイスリストJSONから作る場合：</p><div class="button-row"><button id="importJson" type="button" class="outline">＋ ボイスリスト JSON を取り込む</button></div></div></section>
    <section class="import-card"><div class="step-no">2</div><div class="step-body"><h3>キャラクター情報（推奨）</h3>
     <p id="speakerFilterInfo" class="side-help" role="status">キャラクターシート未登録：TIPSのみ自動除外します。</p>
-    <div class="button-row"><button id="importSheet" type="button" class="outline">↥ キャラクターシート</button><button id="importStory" type="button" class="outline">↥ 作品コンテキスト JSON</button></div></div></section>
+    <div class="button-row"><button id="importSheet" type="button" class="outline">↥ キャラクターシート（JSON）を取り込む</button><button id="importStory" type="button" class="outline">↥ 作品コンテキスト（JSON）を取り込む</button></div></div></section>
    <section class="import-card"><div class="step-no">3</div><div class="step-body"><h3>以前のボイスID（任意）</h3>
     <p class="side-help">過去に発行したボイスIDを引き継ぐときに読み込みます。</p>
     <div class="button-row"><button id="importState" type="button" class="outline">↥ ボイスID履歴を読み込む</button></div></div></section>
    <section class="import-card"><div class="step-no">4</div><div class="step-body"><h3>演技指示をCSVでまとめて記入（任意）</h3>
     <p class="side-help">CSVを書き出し、ChatGPTやClaudeに「キャプション」列だけ記入してもらって読み込みます。反映前に差分を確認します。空欄は既存の値を残します。</p>
-    <div class="button-row"><button id="exportCaptionsScene" type="button" class="outline">↓ 表示中のシナリオのCSV</button><button id="exportCaptionsAll" type="button" class="outline">↓ 全シナリオのCSV</button><button id="copyCaptionPrompt" type="button" class="outline">⧉ AIへの依頼文をコピー</button><button id="importCaptions" type="button">↑ 記入済みCSVを反映</button></div></div></section>
+    <div class="button-row"><button id="exportCaptionsScene" type="button" class="outline">↓ 表示中シナリオのキャプションCSVを書き出す</button><button id="exportCaptionsAll" type="button" class="outline">↓ 全シナリオのキャプションCSVを書き出す</button><button id="copyCaptionPrompt" type="button" class="outline">⧉ キャプション作成用のAI依頼文をコピー</button><button id="importCaptions" type="button">↑ 記入済みキャプションCSVを取り込む</button></div></div></section>
   </div>
  </section>
 </main>
@@ -112,5 +112,5 @@
 <input id="captionPicker" type="file" accept=".csv,text/csv" hidden>
 <input id="ksPicker" type="file" accept=".ks" multiple hidden><input id="jsonPicker" type="file" accept=".json,application/json" hidden><input id="statePicker" type="file" accept=".json,application/json" hidden><input id="sheetPicker" type="file" accept=".json,application/json" hidden><input id="storyPicker" type="file" accept=".json,application/json" hidden>
 <div id="toasts" class="toasts"></div>
-<script src="/static/harbor.js?v=0313" defer></script><script src="/static/pronunciation.js?v=0401" defer></script><script src="/static/characters.js?v=0502" defer></script><script src="/static/game.js?v=0501" defer></script>
+<script src="/static/harbor.js?v=0600" defer></script><script src="/static/pronunciation.js?v=0600" defer></script><script src="/static/characters.js?v=0600" defer></script><script src="/static/game.js?v=0600" defer></script>
 </body></html>
