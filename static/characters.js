@@ -68,10 +68,25 @@
       <label class="ch-wide">声の説明（Voice Design・演技の基礎）<textarea name="description" rows="2" maxlength="2000">${esc(d.description||'')}</textarea></label>
       <label class="ch-wide">参照音声の書き起こし（Qwen Base・任意）<textarea name="refText" rows="2" maxlength="4000">${esc(d.refText||'')}</textarea></label>
      </div>
-     <div class="ch-refs"><b>${esc(c.name)} の参照音声（${(c.refs||[]).length}件）</b>${(c.refs||[]).map(id=>refs.get(id)).filter(Boolean).map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('外す',`data-ch-unref="${esc(a.id)}" title="このキャラクターの参照音声から外します（ファイルは残ります）"`)}</span></div>`).join('')||'<p class="ch-empty">参照音声はまだありません。</p>'}</div>
+     <div class="ch-refs"><b>${esc(c.name)} の参照音声（${(c.refs||[]).length}件）</b>${(c.refs||[]).map(id=>refs.get(id)).filter(Boolean).map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('外す',`data-ch-unref="${esc(a.id)}" title="このキャラクターの参照音声から外します（ファイルは残ります）"`)}</span></div>`).join('')||'<p class="ch-empty">参照音声はまだありません。</p>'}${libraryHtml(c)}</div>
      <div class="ch-actions">${btn('保存','','primary','submit')}${btn('＋ 参照音声を登録','data-ch-upload')}${btn('✦ Voice Designで声を作成','data-ch-design')}${extra}${btn('削除','data-ch-delete','danger')}</div>
      <input type="file" hidden multiple accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.opus,audio/*" data-ch-file>
     </form></details>`;
+  }
+  // Reference audio stays in the shared library when it is unlinked (or a
+  // later import replaces it), so it can be linked again from here.
+  function libraryHtml(c){
+   const linked=new Set(c.refs||[]),users=new Map();
+   for(const other of data.characters)for(const id of other.refs||[])if(other.id!==c.id)users.set(id,[...(users.get(id)||[]),other.name]);
+   const rest=(data.assets||[]).filter(a=>!linked.has(a.id)).sort((a,b)=>(users.has(a.id)?1:0)-(users.has(b.id)?1:0));
+   if(!rest.length)return '';
+   return `<details class="ch-library"><summary>保存済みの参照音声から追加（${rest.length}件）</summary>${rest.map(a=>`<div class="ch-ref"><span title="${esc(a.name)}">${esc(a.name)} · ${Number(a.duration||0).toFixed(1)}秒${users.has(a.id)?` <small>（${esc(users.get(a.id).join('、'))}で使用中）</small>`:''}</span><span>${btn('▶ 試聴',`data-ch-play="${esc(a.id)}"`)}${btn('＋ 追加',`data-ch-link="${esc(a.id)}"`)}</span></div>`).join('')}</details>`;
+  }
+  async function linkReference(id,aid){
+   const c=byId(data,id);if(!c||(c.refs||[]).includes(aid))return;
+   const asset=assets().get(aid);
+   await mutate(rev=>call(`${API}/${encodeURIComponent(id)}`,jsonBody('PUT',{character:{...c,refs:[...(c.refs||[]),aid]},expectedRevision:rev})),
+    `「${asset?.name||aid}」を${c.name}の参照音声に追加しました`);
   }
   function renderList(){
    const list=root.querySelector('[data-ch-list]');if(!list||!data)return;
@@ -242,12 +257,12 @@
   }
 
   // Import from any VoiceDrama or game project without opening it.
-  let sources=[],picked=0,chosen=new Set();
+  let sources=[],picked=0,chosen=new Set(),targets=new Map();
   async function openImport(preset=null){
    try{sources=await call(API+'/sources')}catch(e){return opt.toast('取り込み元を読み込めません: '+e.message,true)}
    if(!sources.length)return opt.toast('取り込めるキャラクターがある作品・ゲームがありません',true);
    picked=Math.max(0,preset?sources.findIndex(s=>s.kind===preset.kind&&s.id===preset.id):0);
-   chosen=new Set(preset?.keys||sources[picked].characters.filter(c=>c.suggested).map(c=>c.key));
+   chosen=new Set(preset?.keys||sources[picked].characters.filter(c=>c.suggested).map(c=>c.key));targets=new Map();
    showDialog('<div data-ch-import-body></div>');renderImport();
   }
   function renderImport(result=''){
@@ -258,7 +273,7 @@
     <p class="ch-note">選んだ作品やゲームを開かずに、キャラクターの声の設定と参照音声を共通キャラクターへコピーします。参照音声は取り込み元に残ります。</p>
     <label class="ch-field">取り込み元<select data-ch-source>${sources.map((s,i)=>`<option value="${i}" ${i===picked?'selected':''}>${s.kind==='game'?'ゲーム音声':'ボイスドラマ'}：${esc(s.title)}（${s.characters.length}人）</option>`).join('')}</select></label>
     <div class="ch-import-head"><span>${source.characters.length}人${existing?` · 同じ名前の共通キャラクターあり ${existing}人`:''}</span><span>${btn('すべて選択','data-ch-all')}${btn('選択解除','data-ch-none')}</span></div>
-    <div class="ch-import-list">${source.characters.map(c=>`<label class="ch-import-row"><input type="checkbox" data-ch-key="${esc(c.key)}" ${chosen.has(c.key)?'checked':''}><span><b>${esc(c.name)}</b>${c.aliases.length?`<small>別名：${esc(c.aliases.join('、'))}</small>`:''}<small>${c.hasVoice?`${esc(c.engine==='qwen'?'Qwen3-TTS':'Irodori-TTS')} · ${esc(String(c.model).split('/').pop())} · 参照音声 ${c.refs}件${c.voiceSource?` · 元：${esc(c.voiceSource)}`:''}`:'名前のみ（声の設定なし）'}</small></span><span class="ch-tag ${c.existing?'ch-tag-warn':''}">${c.existing?`同名あり：${esc(c.existing)}`:'新規'}</span></label>`).join('')}</div>
+    <div class="ch-import-list">${source.characters.map(c=>`<label class="ch-import-row"><input type="checkbox" data-ch-key="${esc(c.key)}" ${chosen.has(c.key)?'checked':''}><span><b>${esc(c.name)}</b>${c.aliases.length?`<small>別名：${esc(c.aliases.join('、'))}</small>`:''}<small>${c.hasVoice?`${esc(c.engine==='qwen'?'Qwen3-TTS':'Irodori-TTS')} · ${esc(String(c.model).split('/').pop())} · 参照音声 ${c.refs}件${c.voiceSource?` · 元：${esc(c.voiceSource)}`:''}`:'名前のみ（声の設定なし）'}</small></span><span class="ch-import-target"><span class="ch-tag ${c.existing||targets.get(c.key)?'ch-tag-warn':''}">${targets.get(c.key)?`上書き：${esc(byId(data,targets.get(c.key))?.name||'')}`:c.existing?`同名あり：${esc(c.existing)}`:'新規'}</span><select data-ch-target="${esc(c.key)}" aria-label="${esc(c.name)}の取り込み先" title="名前が違う共通キャラクター（例：警察 → 警察官）へ上書きするときに選びます"><option value="">取り込み先：自動（${c.existing?'同名「'+esc(c.existing)+'」':'新規追加'}）</option>${data.characters.map(x=>`<option value="${esc(x.id)}" ${targets.get(c.key)===x.id?'selected':''}>「${esc(x.name)}」へ上書き</option>`).join('')}</select></span></label>`).join('')}</div>
     <label class="ch-field">同じ名前（または別名）の共通キャラクターがある場合<select data-ch-conflict>
      <option value="skip" ${conflictMode==='skip'?'selected':''}>スキップ（今の共通キャラクターを残す）</option>
      <option value="overwrite" ${conflictMode==='overwrite'?'selected':''}>上書き更新（声の設定・参照音声を取り込み元に合わせ、別名を追加）</option>
@@ -266,7 +281,8 @@
     <label class="ch-check"><input type="checkbox" data-ch-apply ${apply?'checked':''}> 取り込み元のシナリオでも、取り込んだ共通キャラクターを使う${source.kind==='game'?'（ゲーム専用の声設定から切り替えます。設定は記録として残ります）':''}</label>
     ${result?`<div class="ch-result" role="status">${result}</div>`:''}
     <div class="ch-dialog-actions">${btn('取り込む',`data-ch-run ${chosen.size?'':'disabled'}`,'primary')}${btn('閉じる','data-ch-close')}</div>`;
-   body.querySelector('[data-ch-source]').onchange=e=>{picked=Number(e.target.value);chosen=new Set(sources[picked].characters.filter(c=>c.suggested).map(c=>c.key));renderImport()};
+   body.querySelector('[data-ch-source]').onchange=e=>{picked=Number(e.target.value);chosen=new Set(sources[picked].characters.filter(c=>c.suggested).map(c=>c.key));targets=new Map();renderImport()};
+   body.querySelectorAll('[data-ch-target]').forEach(select=>select.onchange=()=>{const k=select.dataset.chTarget;if(select.value){targets.set(k,select.value);chosen.add(k)}else targets.delete(k);renderImport()});
    body.querySelectorAll('[data-ch-key]').forEach(box=>box.onchange=()=>{if(box.checked)chosen.add(box.dataset.chKey);else chosen.delete(box.dataset.chKey);body.querySelector('[data-ch-run]').disabled=!chosen.size});
    body.querySelector('[data-ch-all]').onclick=()=>{chosen=new Set(source.characters.map(c=>c.key));renderImport()};
    body.querySelector('[data-ch-none]').onclick=()=>{chosen.clear();renderImport()};
@@ -276,13 +292,14 @@
    const body=overlay?.querySelector('[data-ch-import-body]'),source=sources[picked];
    if(!body||!chosen.size)return;
    const conflictMode=body.querySelector('[data-ch-conflict]').value,apply=body.querySelector('[data-ch-apply]').checked;
-   if(conflictMode==='overwrite'&&source.characters.some(c=>chosen.has(c.key)&&c.existing)&&
-     !confirm('同じ名前の共通キャラクターの声の設定と参照音声を、取り込み元の内容で上書きします。\nこのキャラクターを使うすべての作品に反映されます。続行しますか？'))return;
+   const picks=Object.fromEntries([...targets].filter(([k])=>chosen.has(k)));
+   if(((conflictMode==='overwrite'&&source.characters.some(c=>chosen.has(c.key)&&c.existing))||Object.keys(picks).length)&&
+     !confirm('選んだ共通キャラクターの声の設定と参照音声を、取り込み元の内容で上書きします（取り込み元に参照音声がなければ今の参照音声を残します）。\nこのキャラクターを使うすべての作品に反映されます。続行しますか？'))return;
    body.querySelector('[data-ch-run]').disabled=true;
    await opt.beforeImport();
    const info={source:{kind:source.kind,id:source.id}};
    // The host is told what was imported (and from where) when it refreshes.
-   const result=await mutate(rev=>call(API+'/import',jsonBody('POST',{source:info.source,keys:[...chosen],conflict:conflictMode,applyToSource:apply,expectedRevision:rev}))
+   const result=await mutate(rev=>call(API+'/import',jsonBody('POST',{source:info.source,keys:[...chosen],conflict:conflictMode,applyToSource:apply,targets:picks,expectedRevision:rev}))
      .then(r=>{info.summary=r.summary;return r}),null,info);
    if(!result){renderImport();return}
    const s=result.summary;
@@ -291,6 +308,7 @@
     (s.renamed.length?`<br>名前を変えて追加：${s.renamed.map(r=>esc(r.from)+' → '+esc(r.to)).join('、')}`:'')+
     (s.droppedAliases.length?`<br>ほかのキャラクターと重なるため付けなかった別名：${esc(s.droppedAliases.join('、'))}`:'');
    opt.toast(`キャラクターを取り込みました（追加 ${s.added.length}・上書き ${s.updated.length}・スキップ ${s.skipped.length}）`);
+   targets=new Map();
    try{sources=await call(API+'/sources');picked=Math.max(0,sources.findIndex(x=>x.kind===info.source.kind&&x.id===info.source.id))}catch(_){}
    renderImport(text);
   }
@@ -303,6 +321,7 @@
    const id=card.dataset.chId;
    const playButton=e.target.closest('[data-ch-play]');if(playButton)return play(playButton.dataset.chPlay);
    const unrefButton=e.target.closest('[data-ch-unref]');if(unrefButton)return unref(id,unrefButton.dataset.chUnref);
+   const linkButton=e.target.closest('[data-ch-link]');if(linkButton)return linkReference(id,linkButton.dataset.chLink);
    if(e.target.closest('[data-ch-upload]'))return card.querySelector('[data-ch-file]').click();
    if(e.target.closest('[data-ch-design]'))return openDesign(id);
    if(e.target.closest('[data-ch-delete]'))return remove(id);
