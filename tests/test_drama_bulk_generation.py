@@ -134,3 +134,16 @@ def test_script_screen_offers_scene_selection_and_reconnects_to_a_running_job():
                  'data-scene-gen', 'name="sceneGenScope"', '/generate/active', 'function resumeGeneration',
                  'loadCharacters();resumeGeneration()', 'function refreshDuringJob'):
         assert term in js, term
+
+
+def test_characters_can_be_generated_on_their_own_from_three_places():
+    js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+    # The bulk dialog filters by speaker as well as by scene.
+    for term in ('data-speaker-gen=', 'id="speakerGenAll"', 'function speakersUsing',
+                 'sceneGenerationTargets(scenes(),scope(),speakers())'):
+        assert term in js, term
+    # Entry points: script toolbar, a speaker row on the cast screen, a shared character card.
+    for term in ('id="generateSpeakersBtn"', "openSceneGeneration({pickSpeakers:true})",
+                 'data-generate-speaker=', "openSceneGeneration({speakers:[speakerGen.dataset.generateSpeaker]})",
+                 '✦ この作品のこのキャラクターの台詞を生成'):
+        assert term in js, term

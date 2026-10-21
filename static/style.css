@@ -156,6 +156,8 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .design-panel{margin-top:14px}
 .design-candidates{margin:4px 0 8px;border:1px solid var(--border);border-radius:8px;padding:0 10px}
 .design-candidates .ref-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.scene-gen-list{display:grid;gap:8px;max-height:300px;overflow:auto;margin:12px 0 16px}
+.scene-gen-list{display:grid;gap:8px;max-height:220px;overflow:auto;margin:8px 0 14px}
+.gen-pick-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}.gen-pick-head .btn{padding:6px 10px;font-size:11px}
+.speaker-link-state button{display:block}
 .scene-gen-scope{display:grid;gap:6px;margin-bottom:6px}.scene-gen-scope .batch-check{margin:0}.scene-gen-scope input{width:auto;flex:none}
 .side-section-title .add-scene-button{font-size:11px;letter-spacing:0;font-weight:700;padding:4px 8px;border:1px solid currentColor;border-radius:6px;white-space:nowrap}
