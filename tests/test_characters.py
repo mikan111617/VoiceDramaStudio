@@ -317,7 +317,9 @@ def test_game_import_overwrites_same_name_and_switches_scenario_without_stale(cl
     candidates = {c['key']: c for c in source['characters']}
     assert candidates['mahoru']['name'] == '真歩流' and candidates['mahoru']['existing'] == '真歩流'
     assert candidates['mahoru']['hasVoice'] and candidates['mahoru']['aliases'] == ['mahoru', 'まほる']
-    assert candidates['airi']['hasVoice'] is False and candidates['airi']['existing'] == '愛理'
+    # airi already uses the shared 愛理 (name match), so that voice is offered.
+    assert candidates['airi']['hasVoice'] and candidates['airi']['refs'] == 1
+    assert candidates['airi']['voiceSource'] == '共通キャラクター「愛理」' and candidates['airi']['existing'] == '愛理'
     response = client.post('/api/characters/import', json={'source': {'kind': 'game', 'id': state['id']},
         'keys': ['mahoru', 'airi'], 'conflict': 'overwrite', 'applyToSource': True,
         'expectedRevision': registry(client)['revision']})
@@ -328,7 +330,7 @@ def test_game_import_overwrites_same_name_and_switches_scenario_without_stale(cl
     assert shared['真歩流']['id'] == old['id'] and shared['真歩流']['model'] == ANIME
     assert shared['真歩流']['description'] == 'ゲームの真歩流' and shared['真歩流']['refs'] == [ref_id]
     assert shared['真歩流']['aliases'] == ['mahoru', 'まほる']
-    # A name-only character keeps its voice settings when overwritten.
+    # Overwriting 愛理 with the voice it already uses changes nothing.
     assert shared['愛理']['description'] == '共通の愛理' and shared['愛理']['aliases'] == ['airi']
     assert shared['愛理']['refs'] == airi['refs']
     # The game now uses the shared characters; identical voice, so no regeneration.
@@ -368,12 +370,84 @@ def test_import_skip_rename_and_failure_leave_registry_consistent(client):
     # A missing reference file aborts the import without copying anything.
     state = client.post(f'/api/game/projects/{state["id"]}/casts/mahoru/reference?expectedRevision={game.get_game(state["id"])["revision"]}',
                         files={'file': ('mahoru.wav', wav_bytes(), 'audio/wav')}).json()
+    state = put_game(client, state, localCastMode={'mahoru': 'local'})
     asset = state['voiceAssets'][0]
     game._game_ref_path(state['id'], asset).unlink()
     before = registry(client)
     failed = run('overwrite')
     assert failed.status_code == 404 and registry(client) == before
     assert not (core.WORKSPACE / 'characters' / 'reference_audio' / asset['filename']).exists()
+
+
+def test_game_import_copies_the_voicedrama_cast_a_speaker_uses_with_its_references(client, monkeypatch):
+    project = client.post('/api/projects', json={'title': '第一作'}).json()
+    ref = client.post(f'/api/projects/{project["id"]}/assets', data={'kind': 'reference'},
+                      files={'file': ('mahoru.wav', wav_bytes(), 'audio/wav')}).json()['asset']
+    project = client.get(f'/api/projects/{project["id"]}').json()
+    project['voices'] = [{'name': '真歩流', 'engine': 'irodori', 'model': ANIME, 'mode': 'clone',
+                          'language': 'Japanese', 'description': '元気', 'refText': '', 'refs': [ref['id']]}]
+    saved = client.put(f'/api/projects/{project["id"]}', json={'state': project, 'expectedRevision': project['revision']})
+    assert saved.status_code == 200, saved.text
+    state = game_with_sheet(client)
+    state = put_game(client, state, bindings={'mahoru': {'projectId': project['id'], 'castName': '真歩流'}})
+    mahoru_line = next(v for v in state['voices'] if v['speaker'] == 'mahoru')
+    sent = []
+    fake_tts(monkeypatch, game, sent)
+    job = {'status': 'running', 'total': 0, 'completed': 0, 'message': '', 'errors': []}
+    game.generate_game_audio(state['id'], [mahoru_line['voiceId']], 40, job)
+    assert job['status'] == 'done', job
+    assert sent[0]['refs'] == [str(core.asset_path(project['id'], ref))]
+    # The import dialog shows the VoiceDrama cast and its reference, not a name-only entry.
+    source = next(s for s in client.get('/api/characters/sources').json() if s['id'] == state['id'])
+    candidates = {c['key']: c for c in source['characters']}
+    assert candidates['mahoru']['hasVoice'] and candidates['mahoru']['refs'] == 1
+    assert candidates['mahoru']['model'] == ANIME and candidates['mahoru']['existing'] is None
+    assert candidates['mahoru']['voiceSource'] == 'ボイスドラマ「第一作」のキャスト「真歩流」'
+    assert candidates['airi']['hasVoice'] is False and candidates['airi']['refs'] == 0
+    response = client.post('/api/characters/import', json={'source': {'kind': 'game', 'id': state['id']},
+        'keys': ['mahoru'], 'conflict': 'skip', 'applyToSource': True, 'expectedRevision': registry(client)['revision']})
+    assert response.status_code == 200, response.text
+    assert response.json()['summary']['added'] == ['真歩流'] and response.json()['summary']['applied'] == 1
+    shared = response.json()['registry']['characters'][0]
+    assert shared['refs'] == [ref['id']] and shared['model'] == ANIME and shared['description'] == '元気'
+    copied = characters.asset_path(response.json()['registry']['assets'][0])
+    assert copied.read_bytes() == core.asset_path(project['id'], ref).read_bytes()
+    # The game switches to the shared character right away: same voice, so the
+    # audio stays current, and generation reads the shared copy of the reference.
+    state = client.get(f'/api/game/projects/{state["id"]}').json()
+    assert state['bindings']['mahoru'] == {'characterId': shared['id']}
+    assert next(v for v in state['voices'] if v['speaker'] == 'mahoru')['stale'] is False
+    plan = game.generation_groups(state['id'], {mahoru_line['voiceId']})
+    assert plan[0][4] == [str(copied)]
+
+
+def test_overwrite_from_a_cast_without_references_keeps_the_shared_recordings(client):
+    shared = add_reference(client, create(client, name='零度', description='共通の零度'))
+    project = drama(client, ['零度'], [{'name': '零度', 'engine': 'irodori', 'model': ANIME, 'mode': 'clone',
+                                        'language': 'Japanese', 'description': '作品の零度', 'refText': '', 'refs': []}])
+    response = client.post('/api/characters/import', json={'source': {'kind': 'drama', 'id': project['id']},
+        'keys': ['零度'], 'conflict': 'overwrite', 'applyToSource': False, 'expectedRevision': registry(client)['revision']})
+    assert response.status_code == 200, response.text
+    updated = characters.by_id(response.json()['registry'], shared['id'])
+    assert updated['description'] == '作品の零度' and updated['model'] == ANIME
+    assert updated['refs'] == shared['refs']
+
+
+def test_name_only_character_gets_voice_and_references_by_overwriting_from_voicedrama(client):
+    empty = create(client, name='愛理', aliases=['airi'])
+    project = client.post('/api/projects', json={'title': '第一作'}).json()
+    ref = client.post(f'/api/projects/{project["id"]}/assets', data={'kind': 'reference'},
+                      files={'file': ('airi.wav', wav_bytes(), 'audio/wav')}).json()['asset']
+    project = client.get(f'/api/projects/{project["id"]}').json()
+    project['voices'] = [{'name': '愛理', 'engine': 'irodori', 'model': ANIME, 'mode': 'clone',
+                          'language': 'Japanese', 'description': '理知的', 'refText': '', 'refs': [ref['id']]}]
+    assert client.put(f'/api/projects/{project["id"]}', json={'state': project, 'expectedRevision': project['revision']}).status_code == 200
+    response = client.post('/api/characters/import', json={'source': {'kind': 'drama', 'id': project['id']},
+        'keys': ['愛理'], 'conflict': 'overwrite', 'applyToSource': False, 'expectedRevision': registry(client)['revision']})
+    assert response.status_code == 200, response.text
+    repaired = characters.by_id(response.json()['registry'], empty['id'])
+    assert repaired['refs'] == [ref['id']] and repaired['model'] == ANIME and repaired['aliases'] == ['airi']
+    assert characters.reference_paths(response.json()['registry'], repaired)
 
 
 def test_shared_character_voice_design_regenerates_in_place(client, monkeypatch):

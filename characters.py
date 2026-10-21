@@ -317,7 +317,7 @@ def _drama_candidates(project_id):
                 for aid in voice.get('refs', []) if aid in assets]
         result.append({'key': name, 'name': name, 'aliases': [], 'hasVoice': True, 'suggested': True,
                        'voice': {k: voice.get(k) for k in VOICE_FIELDS}, 'refFiles': refs,
-                       'speakers': [name]})
+                       'voiceSource': 'この作品のキャスト', 'speakers': [name]})
     return state, result
 
 
@@ -339,7 +339,8 @@ def _public(item, data):
     return {'key': item['key'], 'name': item['name'], 'aliases': item['aliases'],
             'hasVoice': item['hasVoice'], 'suggested': item['suggested'],
             'engine': voice.get('engine') or 'irodori', 'model': voice.get('model') or '',
-            'refs': len(item['refFiles']), 'existing': existing['name'] if existing else None}
+            'refs': len(item['refFiles']), 'voiceSource': item.get('voiceSource', ''),
+            'existing': existing['name'] if existing else None}
 
 
 def list_sources():
@@ -380,7 +381,8 @@ def import_characters(source, keys, conflict, expected_revision, apply_to_source
 
     conflict decides what happens when the name (or an alias) is already a
     character: 'skip' keeps it, 'overwrite' replaces its voice settings and
-    references with the source's (aliases are merged), 'rename' adds a copy.
+    references with the source's (aliases are merged; a source without
+    references keeps the existing ones), 'rename' adds a copy.
     Reference audio keeps its ID. With apply_to_source, the source project's
     speakers are linked to the resulting characters. Nothing is written if
     any step fails.
@@ -432,7 +434,9 @@ def import_characters(source, keys, conflict, expected_revision, apply_to_source
                     spec = dict(target)
                     if item['hasVoice']:
                         spec.update({k: v for k, v in item['voice'].items() if v is not None})
-                        spec['refs'] = references(item)
+                        # A source with no reference audio must not leave the
+                        # shared character without its recordings.
+                        spec['refs'] = references(item) or list(target.get('refs', []))
                     extra = [n for n in (item['name'], *item['aliases'])
                              if key(n) != key(target['name']) and all(key(n) != key(a) for a in target['aliases'])]
                     spec['aliases'] = target['aliases'] + free_aliases(item, extra, target['id'])
