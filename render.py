@@ -44,16 +44,29 @@ def to_pcm(src,out):
     sf.write(str(out),data,SR,subtype='FLOAT')
 
 
-def render_project(s,project_root,out_path,format_name='wav',scene_id=None,*,title='',artist='',cover_bytes=None,cover_ext=None):
-    """Mix independent tracks by placing decoded segments into a disk-backed float32 buffer."""
-    clips=[dict(c) for c in s['clips'] if scene_id is None or c.get('sceneId')==scene_id]
-    # 'All scenes' means concatenate scenes, not overlay them at t=0.
-    if scene_id is None:
-        cursor=0.0
-        for scene in s['scenes']:
-            sc=[c for c in clips if c.get('sceneId')==scene['id']]
+def render_project(s,project_root,out_path,format_name='wav',scene_id=None,*,scene_ids=None,scene_gap=0.5,
+                   title='',artist='',cover_bytes=None,cover_ext=None):
+    """Mix independent tracks by placing decoded segments into a disk-backed float32 buffer.
+
+    scene_id renders one scene. Otherwise scenes are joined one after another:
+    scene_ids in that order (default: every scene in the project's order),
+    with scene_gap seconds of silence between them.
+    """
+    sections=[]
+    if scene_id is not None:
+        clips=[dict(c) for c in s['clips'] if c.get('sceneId')==scene_id]
+    else:
+        # Joining means placing each scene after the previous one, not overlaying them at t=0.
+        order=list(scene_ids) if scene_ids is not None else [scene['id'] for scene in s['scenes']]
+        names={scene['id']:scene.get('name','') for scene in s['scenes']}
+        clips=[];cursor=0.0
+        for sid in order:
+            sc=[dict(c) for c in s['clips'] if c.get('sceneId')==sid]
             for c in sc:c['start']=max(0,float(c.get('start',0)))+cursor
-            cursor+=max([float(c.get('start',0))+float(c.get('duration',0)) for c in s['clips'] if c.get('sceneId')==scene['id']] or [0])+0.5
+            clips.extend(sc)
+            end=max([float(c.get('start',0))+float(c.get('duration',0)) for c in s['clips'] if c.get('sceneId')==sid] or [0])
+            sections.append({'sceneId':sid,'name':names.get(sid,''),'start':round(cursor,3)})
+            cursor+=end+scene_gap
     if not clips:raise ValueError('書き出す音声クリップがありません')
     clips=[c for c in clips if float(c.get('duration',0))>0]
     if not clips:raise ValueError('音声の長さがありません')
@@ -148,4 +161,4 @@ def render_project(s,project_root,out_path,format_name='wav',scene_id=None,*,tit
             command.extend(['-id3v2_version','3',str(out_path)])
             cp=subprocess.run(command,capture_output=True,text=True)
             if cp.returncode:raise RuntimeError('FFmpeg MP3 encode error: '+cp.stderr[-600:])
-    return {"duration":round(end,2),"clips":len(clips),"peak":round(peak,3)}
+    return {"duration":round(end,2),"clips":len(clips),"peak":round(peak,3),"scenes":sections}

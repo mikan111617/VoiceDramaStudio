@@ -499,6 +499,9 @@ def reflow(pid:str,sceneid:str):
 
 class MixRequest(BaseModel):
     sceneId: str | None = None
+    # Scenes to join into one finished file, in this order (default: all).
+    sceneIds: list[str] | None = None
+    sceneGap: float = 0.5
     format: str = 'wav'
     title: str | None = None
     artist: str | None = None
@@ -569,6 +572,14 @@ def mix(pid: str, body: MixRequest):
             raise ValueError('ジャケット画像を埋め込むにはMP3形式を選択してください')
         if body.sceneId is not None and not any(sc['id'] == body.sceneId for sc in s['scenes']):
             raise ValueError('出力するシーンが見つかりません')
+        if body.sceneIds is not None:
+            known = {sc['id'] for sc in s['scenes']}
+            if body.sceneId is not None:
+                raise ValueError('1つのシーンか、つなげるシーンのどちらかを指定してください')
+            if not body.sceneIds or len(set(body.sceneIds)) != len(body.sceneIds) or not set(body.sceneIds) <= known:
+                raise ValueError('つなげるシーンを選び直してください（同じシーンは1回まで）')
+        if not 0 <= body.sceneGap <= 60:
+            raise ValueError('シーンの間の無音は0〜60秒で指定してください')
         filename = _export_download_name(title, body.format)
         EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
         out = EXPORTS_DIR / filename
@@ -585,6 +596,7 @@ def mix(pid: str, body: MixRequest):
         temporary = EXPORTS_DIR / ('.render_' + uuid.uuid4().hex + '.' + body.format)
         try:
             result = render_project(s, core.workdir(pid), temporary, body.format, body.sceneId,
+                                    scene_ids=body.sceneIds, scene_gap=body.sceneGap,
                                     title=title, artist=artist, cover_bytes=cover, cover_ext=cover_ext)
             os.replace(temporary, out)
         finally:

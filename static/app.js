@@ -1009,7 +1009,15 @@ async function renderAudio(){
   await saveNow();
   let coverData=null,coverReadVersion=0,exporting=false;
   modal(`<h2>完成音声を書き出す</h2><p>すべてのトラックを同時にミックスし、フェードやループを反映します。</p>
-   <div class="field"><label for="exportScope">出力範囲</label><select id="exportScope"><option value="scene">現在のシーン (${esc(sceneName(selectedScene))})</option><option value="all">全シーン（順番に連結）</option></select></div>
+   <div class="scene-gen-scope"><b class="small">出力範囲</b>
+    <label class="batch-check"><input type="radio" name="exportScope" value="scene" checked> 表示中のシーンだけ（${esc(sceneName(selectedScene))}）</label>
+    <label class="batch-check"><input type="radio" name="exportScope" value="join"> 複数のシーンをつなげて1本の完成音声にする</label></div>
+   <div id="exportJoin" class="export-join" hidden>
+    <div class="gen-pick-head"><b class="small">つなげるシーンと順番</b><span class="buttonline">${button('すべて選択','id="exportJoinAll"')}${button('音声があるシーン','id="exportJoinAudio"')}${button('選択解除','id="exportJoinNone"')}</span></div>
+    <div id="exportSceneList" class="scene-gen-list"></div>
+    <div class="field"><label for="exportSceneGap">シーンとシーンの間の無音（秒）</label><input type="number" id="exportSceneGap" min="0" max="60" step="0.5" value="1"></div>
+    <p id="exportJoinSummary" class="small muted"></p>
+   </div>
    <div class="field"><label for="exportFormat">出力形式</label><select id="exportFormat"><option value="wav">WAV / PCM16</option><option value="mp3">MP3 / 192kbps（FFmpeg必要）</option></select></div>
    <div class="field"><label for="exportTitle">作品タイトル</label><input type="text" id="exportTitle" maxlength="160" value="${esc(state.title||'')}" placeholder="ボイスドラマのタイトル"></div>
    <div class="field"><label for="exportArtist">制作名義・アーティスト（任意）</label><input type="text" id="exportArtist" maxlength="160" placeholder="例：制作サークル名"></div>
@@ -1020,6 +1028,27 @@ async function renderAudio(){
    <button type="button" class="btn ghost" id="openExportFolderBtn">📁 保存先フォルダを開く</button></div>
    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('完成音声を書き出す','id="renderConfirmBtn"','primary')}</div>`);
   const confirm=$('renderConfirmBtn'),picker=$('exportCover'),preview=$('exportCoverPreview');
+  // Joining scenes: choose which ones and their order for one finished file.
+  const sceneLength=id=>Math.max(0,...state.clips.filter(c=>c.sceneId===id).map(c=>Number(c.start||0)+Number(c.duration||0)));
+  const joinOrder=state.scenes.map(sc=>sc.id),joinPicked=new Set(joinOrder.filter(id=>sceneLength(id)>0));
+  const scope=()=>document.querySelector('input[name="exportScope"]:checked')?.value||'scene';
+  const joinIds=()=>joinOrder.filter(id=>joinPicked.has(id));
+  const renderJoin=()=>{
+   $('exportJoin').hidden=scope()!=='join';
+   $('exportSceneList').innerHTML=joinOrder.map((id,i)=>{const len=sceneLength(id);return `<div class="export-scene-row"><label class="cast-copy-item"><input type="checkbox" data-export-scene="${esc(id)}" ${joinPicked.has(id)?'checked':''}><span><b>${joinPicked.has(id)?joinIds().indexOf(id)+1+'. ':''}${esc(sceneName(id))}</b><small>${len?'長さ '+fmt(len):'音声がありません'}</small></span></label><span class="export-scene-move">${button('↑',`data-export-move="${i}:-1" title="前へ" ${i?'':'disabled'}`)}${button('↓',`data-export-move="${i}:1" title="後ろへ" ${i<joinOrder.length-1?'':'disabled'}`)}</span></div>`}).join('');
+   const ids=joinIds(),gap=Math.max(0,Number($('exportSceneGap').value)||0);
+   const total=ids.reduce((sum,id)=>sum+sceneLength(id),0)+gap*Math.max(0,ids.length-1);
+   $('exportJoinSummary').textContent=ids.length?`${ids.length}シーンをこの順につなげます（合計 約${fmt(total)}）：${ids.map(sceneName).join(' → ')}`:'つなげるシーンを選んでください。';
+  };
+  document.querySelectorAll('input[name="exportScope"]').forEach(el=>el.onchange=renderJoin);
+  $('exportSceneGap').oninput=renderJoin;
+  $('exportSceneList').onchange=e=>{const id=e.target.dataset.exportScene;if(!id)return;if(e.target.checked)joinPicked.add(id);else joinPicked.delete(id);renderJoin()};
+  $('exportSceneList').onclick=e=>{const b=e.target.closest('[data-export-move]');if(!b)return;const [i,d]=b.dataset.exportMove.split(':').map(Number);[joinOrder[i],joinOrder[i+d]]=[joinOrder[i+d],joinOrder[i]];renderJoin()};
+  const pickScenes=test=>{joinPicked.clear();joinOrder.filter(test).forEach(id=>joinPicked.add(id));renderJoin()};
+  $('exportJoinAll').onclick=()=>pickScenes(()=>true);
+  $('exportJoinAudio').onclick=()=>pickScenes(id=>sceneLength(id)>0);
+  $('exportJoinNone').onclick=()=>pickScenes(()=>false);
+  renderJoin();
   $('openExportFolderBtn').onclick=async()=>{
    try{await req('/api/exports/open-folder',{method:'POST'})}
    catch(e){toast('保存先フォルダを開けません: '+e.message,true)}
@@ -1048,13 +1077,15 @@ async function renderAudio(){
   $('exportCoverClear').onclick=()=>{coverReadVersion++;picker.value='';coverData=null;preview.hidden=true;$('exportCoverImage').removeAttribute('src');if(!exporting)confirm.disabled=false};
   confirm.onclick=async()=>{
    if(exporting)return;
-   const format=$('exportFormat').value,sceneId=$('exportScope').value==='scene'?selectedScene:null;
+   const format=$('exportFormat').value,join=scope()==='join';
    const title=$('exportTitle').value.trim(),artist=$('exportArtist').value.trim();
    if(!title)return toast('作品タイトルを入力してください',true);
+   if(join&&!joinIds().length)return toast('つなげるシーンを選んでください',true);
    if(coverData&&format!=='mp3')return toast('ジャケット画像を埋め込むにはMP3形式を選択してください',true);
    exporting=true;confirm.disabled=true;confirm.textContent='処理中…';
    try{
-    const payload={sceneId,format,title,artist,coverData};
+    const range=join?{sceneIds:joinIds(),sceneGap:Math.min(60,Math.max(0,Number($('exportSceneGap').value)||0))}:{sceneId:selectedScene};
+    const payload={...range,format,title,artist,coverData};
     const send=overwrite=>req(`/api/projects/${state.id}/render`,json('POST',{...payload,overwrite}));
     let result;
     try{result=await send(false)}
@@ -1062,13 +1093,13 @@ async function renderAudio(){
      if(!e.message.includes('同名ファイルが既に存在します'))throw e;
      const filename=title.toLowerCase().endsWith('.'+format)?title:title+'.'+format;
      if(!window.confirm(`「${filename}」は保存先に既にあります。上書きしますか？`)){
-      exporting=false;confirm.disabled=false;confirm.textContent='書き出す';return;
+      exporting=false;confirm.disabled=false;confirm.textContent='完成音声を書き出す';return;
      }
      result=await send(true);
     }
     closeModal();const a=document.createElement('a');a.href=result.url;a.download=result.file;
     document.body.append(a);a.click();a.remove();
-    toast(`共通exportsに保存しました · ${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
+    toast(`共通exportsに保存しました · ${join?result.info.scenes.length+'シーンをつなげて ':''}${fmt(result.info.duration)} · ${result.info.clips}クリップ`);
    }catch(e){toast(e.message,true);exporting=false;if(confirm.isConnected){confirm.disabled=false;confirm.textContent='再試行'}}
   };
  }catch(e){toast(e.message,true)}

@@ -161,3 +161,5 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .speaker-link-state button{display:block}
 .scene-gen-scope{display:grid;gap:6px;margin-bottom:6px}.scene-gen-scope .batch-check{margin:0}.scene-gen-scope input{width:auto;flex:none}
 .side-section-title .add-scene-button{font-size:11px;letter-spacing:0;font-weight:700;padding:4px 8px;border:1px solid currentColor;border-radius:6px;white-space:nowrap}
+.export-join{border:1px solid var(--line,#384254);border-radius:10px;padding:10px 12px;margin:4px 0 14px}
+.export-scene-row{display:flex;align-items:stretch;gap:6px}.export-scene-row .cast-copy-item{flex:1;min-width:0}.export-scene-move{display:flex;flex-direction:column;gap:4px}.export-scene-move .btn{padding:3px 9px;font-size:11px}
