@@ -156,6 +156,13 @@ body.vds-resizing-rows,body.vds-resizing-rows *{cursor:row-resize!important}
 .design-panel{margin-top:14px}
 .design-candidates{margin:4px 0 8px;border:1px solid var(--border);border-radius:8px;padding:0 10px}
 .design-candidates .ref-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.scene-gen-list{display:grid;gap:8px;max-height:300px;overflow:auto;margin:12px 0 16px}
+.scene-gen-list{display:grid;gap:8px;max-height:220px;overflow:auto;margin:8px 0 14px}
+.gen-pick-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}.gen-pick-head .btn{padding:6px 10px;font-size:11px}
+.speaker-link-state button{display:block}
 .scene-gen-scope{display:grid;gap:6px;margin-bottom:6px}.scene-gen-scope .batch-check{margin:0}.scene-gen-scope input{width:auto;flex:none}
 .side-section-title .add-scene-button{font-size:11px;letter-spacing:0;font-weight:700;padding:4px 8px;border:1px solid currentColor;border-radius:6px;white-space:nowrap}
+.export-join{border:1px solid var(--line,#384254);border-radius:10px;padding:10px 12px;margin:4px 0 14px}
+.export-scene-row{display:flex;align-items:stretch;gap:6px}.export-scene-row .cast-copy-item{flex:1;min-width:0}.export-scene-move{display:flex;flex-direction:column;gap:4px}.export-scene-move .btn{padding:3px 9px;font-size:11px}
+.export-join-bulk{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:8px 0;font-size:12px}.export-join-bulk input,.export-gap-row input{width:72px;padding:5px 7px;text-align:right}.export-join-bulk .btn{padding:6px 10px;font-size:11px}
+.export-gap-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-2px 0 2px 28px;padding:6px 10px;border-left:3px solid var(--accent,#b58b50);font-size:12px}.export-gap-row .btn{padding:5px 10px;font-size:11px}
+.export-scene-list{max-height:360px}
