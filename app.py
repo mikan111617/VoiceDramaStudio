@@ -18,7 +18,7 @@ from starlette.background import BackgroundTask
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -26,7 +26,7 @@ import characters
 import core
 import shared_audio
 from core import WORKSPACE, LOCK
-from render import render_project, ffmpeg_bin
+from render import render_project, ffmpeg_bin, scene_end
 
 app=FastAPI(title="VoiceDrama Studio",version="0.5.0")
 app.mount('/static',StaticFiles(directory=str(core.ROOT/'static')),name='static')
@@ -502,6 +502,8 @@ class MixRequest(BaseModel):
     # Scenes to join into one finished file, in this order (default: all).
     sceneIds: list[str] | None = None
     sceneGap: float = 0.5
+    # Silence after each joined scene except the last (overrides sceneGap).
+    sceneGaps: list[float] | None = None
     format: str = 'wav'
     title: str | None = None
     artist: str | None = None
@@ -580,6 +582,11 @@ def mix(pid: str, body: MixRequest):
                 raise ValueError('つなげるシーンを選び直してください（同じシーンは1回まで）')
         if not 0 <= body.sceneGap <= 60:
             raise ValueError('シーンの間の無音は0〜60秒で指定してください')
+        if body.sceneGaps is not None:
+            if body.sceneIds is None or len(body.sceneGaps) != len(body.sceneIds) - 1:
+                raise ValueError('シーンの間の無音は、つなげるシーンの切れ目の数だけ指定してください')
+            if any(not 0 <= gap <= 60 for gap in body.sceneGaps):
+                raise ValueError('シーンの間の無音は0〜60秒で指定してください')
         filename = _export_download_name(title, body.format)
         EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
         out = EXPORTS_DIR / filename
@@ -596,7 +603,7 @@ def mix(pid: str, body: MixRequest):
         temporary = EXPORTS_DIR / ('.render_' + uuid.uuid4().hex + '.' + body.format)
         try:
             result = render_project(s, core.workdir(pid), temporary, body.format, body.sceneId,
-                                    scene_ids=body.sceneIds, scene_gap=body.sceneGap,
+                                    scene_ids=body.sceneIds, scene_gap=body.sceneGap, scene_gaps=body.sceneGaps,
                                     title=title, artist=artist, cover_bytes=cover, cover_ext=cover_ext)
             os.replace(temporary, out)
         finally:
@@ -612,6 +619,44 @@ def mix(pid: str, body: MixRequest):
         }
     except (ValueError, RuntimeError, OSError) as e:
         raise HTTPException(400, str(e)) from e
+
+
+class TransitionPreview(BaseModel):
+    fromSceneId: str
+    toSceneId: str
+    gap: float = 1.0
+    before: float = 5.0
+    after: float = 5.0
+
+
+@app.post('/api/projects/{pid}/render/transition')
+def preview_transition(pid: str, body: TransitionPreview):
+    """The end of one scene, the silence, and the start of the next, mixed
+    exactly as a joined export would be (WAV, nothing is saved)."""
+    try:
+        with LOCK:
+            s = core.load_project(pid)
+        known = {sc['id'] for sc in s['scenes']}
+        if body.fromSceneId not in known or body.toSceneId not in known or body.fromSceneId == body.toSceneId:
+            raise ValueError('試聴するシーンを選び直してください')
+        if not 0 <= body.gap <= 60:
+            raise ValueError('シーンの間の無音は0〜60秒で指定してください')
+        if not (1 <= body.before <= 30 and 1 <= body.after <= 30):
+            raise ValueError('試聴する長さは前後それぞれ1〜30秒で指定してください')
+        boundary = scene_end(s, body.fromSceneId)
+        start = max(0.0, boundary - body.before)
+        with tempfile.TemporaryDirectory(prefix='vds_transition_') as folder:
+            out = Path(folder) / 'transition.wav'
+            render_project(s, core.workdir(pid), out, 'wav', scene_ids=[body.fromSceneId, body.toSceneId],
+                           scene_gap=body.gap, window=(start, boundary + body.gap + body.after))
+            data = out.read_bytes()
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from e
+    except (ValueError, RuntimeError, OSError) as e:
+        raise HTTPException(400, str(e)) from e
+    # Where the next scene begins inside the preview, for the screen to show.
+    return Response(data, media_type='audio/wav', headers={
+        'X-Scene-Change': f'{boundary - start:.3f}', 'X-Next-Scene': f'{boundary - start + body.gap:.3f}'})
 
 
 @app.get('/api/projects/{pid}/exports/{filename}')

@@ -451,6 +451,16 @@ def validate_state(s, prev, *, allow_new_assets=False):
         generated_audio_filename(l)  # Validate optional per-dialogue WAV name.
         if "pronunciationChoices" in l:
             speech_dict.normalize_choices(l["pronunciationChoices"])
+    join=(s.get("settings") or {}).get("sceneJoin")
+    if join is not None:
+        def seconds(v,low,high):return isinstance(v,(int,float)) and not isinstance(v,bool) and low<=v<=high
+        if (not isinstance(join,dict)
+                or any(not isinstance(join.get(k,[]),list) or len(join.get(k,[]))>1000
+                       or any(not isinstance(x,str) for x in join.get(k,[])) for k in ("order","picked"))
+                or not isinstance(join.get("gaps",{}),dict) or len(join.get("gaps",{}))>1000
+                or any(not isinstance(k,str) or not seconds(v,0,60) for k,v in join.get("gaps",{}).items())
+                or not seconds(join.get("defaultGap",1),0,60) or not seconds(join.get("previewSeconds",5),1,30)):
+            raise ValueError("シーンをつなげる設定が正しくありません")
     links=s.get("characterLinks",{})
     if (not isinstance(links,dict) or len(links)>1000 or any(
             not isinstance(k,str) or not 1<=len(k)<=200

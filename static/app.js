@@ -1014,8 +1014,11 @@ async function renderAudio(){
     <label class="batch-check"><input type="radio" name="exportScope" value="join"> 複数のシーンをつなげて1本の完成音声にする</label></div>
    <div id="exportJoin" class="export-join" hidden>
     <div class="gen-pick-head"><b class="small">つなげるシーンと順番</b><span class="buttonline">${button('すべて選択','id="exportJoinAll"')}${button('音声があるシーン','id="exportJoinAudio"')}${button('選択解除','id="exportJoinNone"')}</span></div>
-    <div id="exportSceneList" class="scene-gen-list"></div>
-    <div class="field"><label for="exportSceneGap">シーンとシーンの間の無音（秒）</label><input type="number" id="exportSceneGap" min="0" max="60" step="0.5" value="1"></div>
+    <div class="export-join-bulk">
+     <label>シーンの間の無音をまとめて設定 <input type="number" id="exportGapAll" min="0" max="60" step="0.5"> 秒</label>${button('すべての切れ目に適用','id="exportGapApply"')}
+     <label>切り替わりの試聴：前後それぞれ <input type="number" id="exportPreviewSeconds" min="1" max="30" step="1"> 秒</label>
+    </div>
+    <div id="exportSceneList" class="scene-gen-list export-scene-list"></div>
     <p id="exportJoinSummary" class="small muted"></p>
    </div>
    <div class="field"><label for="exportFormat">出力形式</label><select id="exportFormat"><option value="wav">WAV / PCM16</option><option value="mp3">MP3 / 192kbps（FFmpeg必要）</option></select></div>
@@ -1028,26 +1031,64 @@ async function renderAudio(){
    <button type="button" class="btn ghost" id="openExportFolderBtn">📁 保存先フォルダを開く</button></div>
    <div class="modal-actions">${button('キャンセル','data-close="1"')}${button('完成音声を書き出す','id="renderConfirmBtn"','primary')}</div>`);
   const confirm=$('renderConfirmBtn'),picker=$('exportCover'),preview=$('exportCoverPreview');
-  // Joining scenes: choose which ones and their order for one finished file.
+  // Joining scenes: which ones, their order, and the silence after each
+  // scene. Saved with the project (settings.sceneJoin) for the next export.
   const sceneLength=id=>Math.max(0,...state.clips.filter(c=>c.sceneId===id).map(c=>Number(c.start||0)+Number(c.duration||0)));
-  const joinOrder=state.scenes.map(sc=>sc.id),joinPicked=new Set(joinOrder.filter(id=>sceneLength(id)>0));
+  const saved=state.settings?.sceneJoin||{},known=new Set(state.scenes.map(sc=>sc.id));
+  const joinOrder=[...(saved.order||[]).filter(id=>known.has(id))];
+  for(const sc of state.scenes)if(!joinOrder.includes(sc.id))joinOrder.push(sc.id);
+  const joinPicked=new Set(saved.picked?saved.picked.filter(id=>known.has(id)):joinOrder.filter(id=>sceneLength(id)>0));
+  const gaps={...(saved.gaps||{})};let defaultGap=saved.defaultGap??1,previewSeconds=saved.previewSeconds??5;
+  const clampGap=v=>Math.min(60,Math.max(0,Number(v)||0));
+  const gapAfter=id=>gaps[id]??defaultGap;
   const scope=()=>document.querySelector('input[name="exportScope"]:checked')?.value||'scene';
   const joinIds=()=>joinOrder.filter(id=>joinPicked.has(id));
+  const nextPicked=id=>{const ids=joinIds();return ids[ids.indexOf(id)+1]};
+  const saveJoin=()=>{state.settings={...state.settings,sceneJoin:{order:[...joinOrder],picked:joinIds(),gaps:{...gaps},defaultGap,previewSeconds}};dirtyState('sceneJoin')};
+  const summarize=()=>{
+   const ids=joinIds(),total=ids.reduce((sum,id,i)=>sum+sceneLength(id)+(i<ids.length-1?gapAfter(id):0),0);
+   const route=ids.map((id,i)=>i<ids.length-1?`${sceneName(id)} →（無音${gapAfter(id)}秒）→ `:sceneName(id)).join('');
+   $('exportJoinSummary').textContent=ids.length?`${ids.length}シーンをこの順につなげます（合計 約${fmt(total)}）：${route}`:'つなげるシーンを選んでください。';
+  };
   const renderJoin=()=>{
    $('exportJoin').hidden=scope()!=='join';
-   $('exportSceneList').innerHTML=joinOrder.map((id,i)=>{const len=sceneLength(id);return `<div class="export-scene-row"><label class="cast-copy-item"><input type="checkbox" data-export-scene="${esc(id)}" ${joinPicked.has(id)?'checked':''}><span><b>${joinPicked.has(id)?joinIds().indexOf(id)+1+'. ':''}${esc(sceneName(id))}</b><small>${len?'長さ '+fmt(len):'音声がありません'}</small></span></label><span class="export-scene-move">${button('↑',`data-export-move="${i}:-1" title="前へ" ${i?'':'disabled'}`)}${button('↓',`data-export-move="${i}:1" title="後ろへ" ${i<joinOrder.length-1?'':'disabled'}`)}</span></div>`}).join('');
-   const ids=joinIds(),gap=Math.max(0,Number($('exportSceneGap').value)||0);
-   const total=ids.reduce((sum,id)=>sum+sceneLength(id),0)+gap*Math.max(0,ids.length-1);
-   $('exportJoinSummary').textContent=ids.length?`${ids.length}シーンをこの順につなげます（合計 約${fmt(total)}）：${ids.map(sceneName).join(' → ')}`:'つなげるシーンを選んでください。';
+   $('exportGapAll').value=defaultGap;$('exportPreviewSeconds').value=previewSeconds;
+   $('exportSceneList').innerHTML=joinOrder.map((id,i)=>{const len=sceneLength(id),next=joinPicked.has(id)&&nextPicked(id);return `<div class="export-scene-row"><label class="cast-copy-item"><input type="checkbox" data-export-scene="${esc(id)}" ${joinPicked.has(id)?'checked':''}><span><b>${joinPicked.has(id)?joinIds().indexOf(id)+1+'. ':''}${esc(sceneName(id))}</b><small>${len?'長さ '+fmt(len):'音声がありません'}</small></span></label><span class="export-scene-move">${button('↑',`data-export-move="${i}:-1" title="前へ" ${i?'':'disabled'}`)}${button('↓',`data-export-move="${i}:1" title="後ろへ" ${i<joinOrder.length-1?'':'disabled'}`)}</span></div>${next?`<div class="export-gap-row"><span>⏸ 次の「${esc(sceneName(next))}」まで無音</span><input type="number" min="0" max="60" step="0.5" data-export-gap="${esc(id)}" value="${gapAfter(id)}" aria-label="${esc(sceneName(id))}のあとの無音（秒）"><span>秒</span>${button('▶ 切り替わりを試聴',`data-export-preview="${esc(id)}" title="「${esc(sceneName(id))}」の終わり→無音→「${esc(sceneName(next))}」の始まりを、書き出しと同じ音で再生します"`)}</div>`:''}`}).join('');
+   summarize();
+  };
+  // Audition one scene change, rendered by the same mixer as the export.
+  let previewAudio=null,previewButton=null;
+  const stopPreview=()=>{if(previewAudio){previewAudio.pause();URL.revokeObjectURL(previewAudio.src);previewAudio=null}if(previewButton?.isConnected)previewButton.textContent='▶ 切り替わりを試聴';previewButton=null};
+  const previewTransition=async(button,id)=>{
+   const wasPlaying=previewButton===button;stopPreview();if(wasPlaying)return;
+   const next=nextPicked(id);if(!next)return;
+   if(playing)pause();else stopNodes();
+   previewButton=button;button.textContent='準備中…';
+   try{
+    await saveNow();
+    const r=await fetch(`/api/projects/${state.id}/render/transition`,json('POST',{fromSceneId:id,toSceneId:next,gap:gapAfter(id),before:previewSeconds,after:previewSeconds}));
+    if(!r.ok){let m=await r.text();try{m=JSON.parse(m).detail||m}catch(_){}throw new Error(m)}
+    if(previewButton!==button)return;
+    previewAudio=new Audio(URL.createObjectURL(await r.blob()));
+    previewAudio.onended=stopPreview;await previewAudio.play();
+    button.textContent='■ 試聴を止める';
+    toast(`「${sceneName(id)}」の終わり → 無音${gapAfter(id)}秒 → 「${sceneName(next)}」の始まり を再生しています`);
+   }catch(e){stopPreview();toast('切り替わりを試聴できません: '+e.message,true)}
   };
   document.querySelectorAll('input[name="exportScope"]').forEach(el=>el.onchange=renderJoin);
-  $('exportSceneGap').oninput=renderJoin;
-  $('exportSceneList').onchange=e=>{const id=e.target.dataset.exportScene;if(!id)return;if(e.target.checked)joinPicked.add(id);else joinPicked.delete(id);renderJoin()};
-  $('exportSceneList').onclick=e=>{const b=e.target.closest('[data-export-move]');if(!b)return;const [i,d]=b.dataset.exportMove.split(':').map(Number);[joinOrder[i],joinOrder[i+d]]=[joinOrder[i+d],joinOrder[i]];renderJoin()};
-  const pickScenes=test=>{joinPicked.clear();joinOrder.filter(test).forEach(id=>joinPicked.add(id));renderJoin()};
+  $('exportSceneList').onchange=e=>{const id=e.target.dataset.exportScene;if(!id)return;stopPreview();if(e.target.checked)joinPicked.add(id);else joinPicked.delete(id);saveJoin();renderJoin()};
+  $('exportSceneList').oninput=e=>{const id=e.target.dataset.exportGap;if(!id)return;gaps[id]=clampGap(e.target.value);saveJoin();summarize()};
+  $('exportSceneList').onclick=e=>{
+   const preview=e.target.closest('[data-export-preview]');if(preview)return previewTransition(preview,preview.dataset.exportPreview);
+   const b=e.target.closest('[data-export-move]');if(!b)return;stopPreview();const [i,d]=b.dataset.exportMove.split(':').map(Number);[joinOrder[i],joinOrder[i+d]]=[joinOrder[i+d],joinOrder[i]];saveJoin();renderJoin();
+  };
+  $('exportGapApply').onclick=()=>{defaultGap=clampGap($('exportGapAll').value);for(const id of joinOrder)delete gaps[id];saveJoin();renderJoin();toast(`すべての切れ目の無音を${defaultGap}秒にしました`)};
+  $('exportPreviewSeconds').onchange=()=>{previewSeconds=Math.min(30,Math.max(1,Math.round(Number($('exportPreviewSeconds').value)||5)));saveJoin();renderJoin()};
+  const pickScenes=test=>{stopPreview();joinPicked.clear();joinOrder.filter(test).forEach(id=>joinPicked.add(id));saveJoin();renderJoin()};
   $('exportJoinAll').onclick=()=>pickScenes(()=>true);
   $('exportJoinAudio').onclick=()=>pickScenes(id=>sceneLength(id)>0);
   $('exportJoinNone').onclick=()=>pickScenes(()=>false);
+  $('modalBackdrop').addEventListener('click',function stopOnClose(e){if(!$('exportJoin')?.isConnected||e.target.closest('[data-close]')||e.target.id==='modalBackdrop'){stopPreview();$('modalBackdrop').removeEventListener('click',stopOnClose)}});
   renderJoin();
   $('openExportFolderBtn').onclick=async()=>{
    try{await req('/api/exports/open-folder',{method:'POST'})}
@@ -1084,7 +1125,8 @@ async function renderAudio(){
    if(coverData&&format!=='mp3')return toast('ジャケット画像を埋め込むにはMP3形式を選択してください',true);
    exporting=true;confirm.disabled=true;confirm.textContent='処理中…';
    try{
-    const range=join?{sceneIds:joinIds(),sceneGap:Math.min(60,Math.max(0,Number($('exportSceneGap').value)||0))}:{sceneId:selectedScene};
+    const range=join?{sceneIds:joinIds(),sceneGaps:joinIds().slice(0,-1).map(gapAfter)}:{sceneId:selectedScene};
+    stopPreview();
     const payload={...range,format,title,artist,coverData};
     const send=overwrite=>req(`/api/projects/${state.id}/render`,json('POST',{...payload,overwrite}));
     let result;
