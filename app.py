@@ -180,7 +180,8 @@ def get_project(pid:str):
     try:
         project=core.load_project(pid)
         core.refresh_staleness(project)
-        return project
+        notice=core.REPAIR_NOTICES.pop(pid,None)
+        return {**project,'repairNotice':notice} if notice else project
     except (ValueError,FileNotFoundError) as e:raise HTTPException(404,str(e))
 
 @app.put('/api/projects/{pid}')

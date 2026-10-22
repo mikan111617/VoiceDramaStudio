@@ -98,7 +98,7 @@ const activeClips=()=>state?.clips.filter(c=>c.sceneId===selectedScene)||[];
 const fmt=t=>`${Math.floor(Math.max(0,t)/60).toString().padStart(2,'0')}:${(Math.max(0,t)%60).toFixed(1).padStart(4,'0')}`;
 const req=async(url,opt={})=>{const r=await fetch(url,opt);if(!r.ok){let txt;try{const j=await r.json();txt=j.detail||JSON.stringify(j)}catch{txt=await r.text()}throw new Error(typeof txt==='string'?txt:JSON.stringify(txt))}const type=r.headers.get('content-type')||'';return type.includes('application/json')?r.json():r;};
 const json=(method,data)=>({method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-function toast(msg,bad=false){const el=document.createElement('div');el.className='toast';el.style.borderColor=bad?'#ae6d73':'#727762';el.textContent=msg;$('toasts').append(el);setTimeout(()=>el.remove(),4500)}
+function toast(msg,bad=false,ms=4500){const el=document.createElement('div');el.className='toast';el.style.borderColor=bad?'#ae6d73':'#727762';el.textContent=msg;$('toasts').append(el);setTimeout(()=>el.remove(),ms)}
 function modal(html){$('modalBody').innerHTML=html;$('modalBackdrop').classList.remove('hidden')}
 function closeModal(){$('modalBackdrop').classList.add('hidden')}
 const button=(label,attr='',kind='ghost')=>`<button class="btn ${kind}" ${attr}>${label}</button>`;
@@ -111,7 +111,9 @@ async function saveNow(){if(!state||!dirty)return saving||Promise.resolve();clea
   finally{saving=null}
   if(dirty)return saveNow();
 }
-async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await req('/api/projects/'+pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み';loadPronunciation();loadCharacters();resumeGeneration()}
+// Opening a project can drop takes whose audio is gone; say so once.
+async function fetchProject(pid){const s=await req('/api/projects/'+pid);const n=s.repairNotice;delete s.repairNotice;if(n)toast(`音声ファイルが見つからないテイクを${n.removedTakes}件外しました（台詞${n.lines}件）。修復前のデータは backups/${n.backup} に保存しています`,false,12000);return s}
+async function switchProject(pid){stop();if(state&&dirty)await saveNow();state=await fetchProject(pid);selectedScene=state.scenes[0]?.id||null;selectedLine=null;selectedClip=null;currentTime=0;audioCache.clear();wavePeaks.clear();trashSelection.clear();libraryTab='voice';libraryQueries={};librarySource='project';sharedAssets=[];view='script';clearEditHistory();renderAll();$('saveState').textContent='保存済み';loadPronunciation();loadCharacters();resumeGeneration()}
 async function createProject(title){const s=await req('/api/projects',json('POST',{title}));await switchProject(s.id);toast('プロジェクトを作成しました')}
 async function ensureProject(){const list=await req('/api/projects');if(!list.length){await createProject('新しいボイスドラマ')}else await switchProject(list[0].id)}
 function getVoices(){return [...new Set([...state.voices.map(v=>v.name),...state.lines.map(l=>l.speaker),...(characterRegistry?.characters||[]).map(c=>c.name)].filter(Boolean))]}
@@ -180,7 +182,7 @@ function syncScriptToSelectedClip(){
  const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
  panel.scrollTo({top:Math.max(0,top),behavior:reduced?'auto':'smooth'});
 }
-function selectClip(id){selectedClips=new Set([id]);clipSelectionAnchor=id;selectedClip=id;selectedLine=clipById(id)?.lineId||null;renderTimeline();renderInspector();syncScriptToSelectedClip()}
+function selectClip(id){selectedClips=new Set([id]);clipSelectionAnchor=id;selectedClip=id;selectedLine=clipLine(clipById(id));renderTimeline();renderInspector();syncScriptToSelectedClip()}
 function syncClipSelection(){
  const ids=new Set(activeClips().map(c=>c.id));
  selectedClips=new Set([...selectedClips].filter(id=>ids.has(id)));
@@ -192,12 +194,12 @@ function syncClipSelection(){
 function paintClipSelection(){
  document.querySelectorAll('.tl-clip').forEach(el=>{const selected=selectedClips.has(el.dataset.clip);el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',String(selected))});
  if($('clipSelectionCount'))$('clipSelectionCount').textContent=`${selectedClips.size}件選択`;
- for(const id of ['selectTrackClips','selectFollowingClips'])if($(id))$(id).disabled=!selectedClip;
+ for(const id of ['selectTrackClips','selectFollowingClips','splitClipsBtn'])if($(id))$(id).disabled=!selectedClip;
 }
 function selectClipGroup(clips){
  selectedClips=new Set(clips.map(c=>c.id));
  if(!selectedClips.has(selectedClip))selectedClip=clips[0]?.id||null;
- clipSelectionAnchor=selectedClip;selectedLine=clipById(selectedClip)?.lineId||null;
+ clipSelectionAnchor=selectedClip;selectedLine=clipLine(clipById(selectedClip));
  paintClipSelection();renderInspector();syncScriptToSelectedClip();
 }
 function selectTrackAndBelow(trackId){
@@ -274,9 +276,65 @@ async function removeSelectedTake(){
 }
 function lineDefault(sceneId){return {id:newid('line'),sceneId,speaker:getVoices()[0]||'ナレーション',text:'',caption:'',after:state.settings?.defaultGap??0.65,status:'missing',takes:[],selectedTakeId:null,engine:'irodori',model:'Aratako/Irodori-TTS-v4.1-Small',mode:'clone',language:'Japanese',ttsSource:'cast'}}
 function addLine(afterId){const l=lineDefault(selectedScene);const idx=afterId?state.lines.findIndex(x=>x.id===afterId):-1;if(idx>=0)state.lines.splice(idx+1,0,l);else{const indices=state.lines.map((x,i)=>x.sceneId===selectedScene?i:-1).filter(x=>x>=0);const i=indices.length?Math.max(...indices)+1:state.lines.length;state.lines.splice(i,0,l)}selectedLine=l.id;dirtyState();renderAll();setTimeout(()=>document.querySelector(`[data-id="${l.id}"] .line-text`)?.focus(),40)}
-function removeLine(id){const l=lineById(id);if(!l||!confirm(`「${l.text.slice(0,30)||'空欄'}」を削除しますか？（音声素材はライブラリに保持）`))return;state.lines=state.lines.filter(x=>x.id!==id);state.clips=state.clips.filter(x=>x.lineId!==id);selectedLine=null;selectedClip=null;reflow();dirtyState();renderAll()}
+function removeLine(id){const l=lineById(id);if(!l||!confirm(`「${l.text.slice(0,30)||'空欄'}」を削除しますか？（音声素材はライブラリに保持）`))return;state.lines=state.lines.filter(x=>x.id!==id);state.clips=state.clips.filter(x=>x.lineId!==id&&x.pieceOf!==id);selectedLine=null;selectedClip=null;reflow();dirtyState();renderAll()}
 function moveLine(id,change){const idx=state.lines.findIndex(x=>x.id===id);const target=idx+change;if(target<0||target>=state.lines.length||state.lines[target].sceneId!==selectedScene)return;[state.lines[idx],state.lines[target]]=[state.lines[target],state.lines[idx]];reflow();dirtyState();renderAll()}
-function reflow(){let cursor=0;for(const l of activeLines()){const c=state.clips.find(c=>c.lineId===l.id&&c.trackId==='dialogue');if(c){if(!c.pinned){const old=c.start||0;c.start=+Math.max(0,cursor).toFixed(4);for(const a of activeClips()){if(a.anchorLineId===l.id&&a.id!==c.id)a.start=Math.max(0,c.start+(a.anchorOffset||0))}}cursor=Math.max(cursor,c.start+(c.duration||0))}cursor+=Math.max(0,Number(l.after)||0)}}
+function reflow(){let cursor=0;for(const l of activeLines()){const c=state.clips.find(c=>c.lineId===l.id&&c.trackId==='dialogue');if(c){if(!c.pinned){const old=c.start||0;c.start=+Math.max(0,cursor).toFixed(4);for(const a of activeClips()){if(a.anchorLineId===l.id&&a.id!==c.id)a.start=Math.max(0,c.start+(a.anchorOffset||0))}}cursor=Math.max(cursor,c.start+(c.duration||0));for(const p of activeClips())if(p.pieceOf===l.id)cursor=Math.max(cursor,p.start+(p.duration||0))}cursor+=Math.max(0,Number(l.after)||0)}}
+// Splitting keeps the left part in the clip and plays on from the same audio in
+// a new clip. Pieces split off a line's voice follow that line (pieceOf).
+const SPLIT_EDGE=0.02;
+function clipLine(c){return c?.lineId||c?.pieceOf||null}
+function lineHead(lineId){return state.clips.find(x=>x.lineId===lineId&&x.trackId==='dialogue')}
+function splitClip(c,at){
+ const begin=Number(c.start||0),len=Number(c.duration||0),off=+(at-begin).toFixed(4);
+ if(c.loop||off<SPLIT_EDGE||off>len-SPLIT_EDGE)return null;
+ const right={...c,id:newid('clip'),lineId:null,start:+(begin+off).toFixed(4),duration:+(len-off).toFixed(4),trimStart:+(Number(c.trimStart||0)+off).toFixed(4),fadeIn:0};
+ if(c.lineId&&c.trackId==='dialogue')Object.assign(right,{pieceOf:c.lineId,anchorLineId:c.lineId});
+ const anchor=right.anchorLineId&&lineHead(right.anchorLineId);
+ if(anchor)right.anchorOffset=+(right.start-anchor.start).toFixed(4);
+ c.duration=off;c.fadeOut=0;
+ state.clips.splice(state.clips.indexOf(c)+1,0,right);
+ return right;
+}
+function splitSelectedAtPlayhead(){
+ if(!state)return;if(playing)pause();
+ const at=currentTime,chosen=activeClips().filter(c=>selectedClips.has(c.id));
+ if(!chosen.length)return toast('分割するクリップを選択してください',true);
+ const inside=chosen.filter(c=>at>Number(c.start)+SPLIT_EDGE&&at<Number(c.start)+Number(c.duration)-SPLIT_EDGE);
+ if(!inside.length)return toast('再生位置（縦の線）を、選択中のクリップの上に合わせてください',true);
+ const loops=inside.filter(c=>c.loop).length,made=inside.filter(c=>!c.loop).map(c=>splitClip(c,at)).filter(Boolean);
+ if(!made.length)return toast('ループ再生のクリップは分割できません。ループを外してから分割してください',true);
+ selectedClips=new Set(made.map(c=>c.id));selectedClip=made[0].id;clipSelectionAnchor=selectedClip;selectedLine=clipLine(made[0]);
+ dirtyState();renderTimeline();renderInspector();
+ toast(`${made.length}件のクリップを ${fmt(at)} で分割しました${loops?`（ループ再生の${loops}件はそのまま）`:''}`);
+}
+// When a line's first clip goes, its next piece takes over as the line's clip.
+function removeClips(ids,{keepGap=true}={}){
+ const gone=new Set(ids),heads=state.clips.filter(x=>gone.has(x.id)&&x.lineId&&x.trackId==='dialogue');
+ state.clips=state.clips.filter(x=>!gone.has(x.id));
+ for(const head of heads){
+  const next=state.clips.filter(x=>x.pieceOf===head.lineId&&x.trackId==='dialogue').sort((a,b)=>a.start-b.start)[0];if(!next)continue;
+  delete next.pieceOf;delete next.anchorLineId;delete next.anchorOffset;
+  next.lineId=head.lineId;next.pinned=keepGap&&Math.abs(next.start-head.start)>.0005?true:!!head.pinned;
+  for(const x of state.clips)if(x.anchorLineId===head.lineId)x.anchorOffset=+(x.start-next.start).toFixed(4);
+ }
+}
+function deleteClipClosingGap(c){
+ const line=clipLine(c),len=Number(c.duration||0);
+ for(const x of activeClips())if(x.id!==c.id&&x.pieceOf===line&&Number(x.start)>Number(c.start)){
+  x.start=+Math.max(0,Number(x.start)-len).toFixed(4);if(x.anchorLineId)x.anchorOffset=+(Number(x.anchorOffset||0)-len).toFixed(4);
+ }
+ removeClips([c.id],{keepGap:false});reflow();
+}
+function lineVoiceEdited(lineId){const head=lineHead(lineId),a=head&&asset(head.assetId);return state.clips.some(x=>x.pieceOf===lineId)||!!(head&&(Number(head.trimStart||0)>0||Number(head.trimEnd||0)>0||(a&&Number(head.duration)<Number(a.duration)-.01)))}
+// A different take, or "restore", plays the whole audio again in one clip.
+function resetLineVoice(lineId,a){
+ const head=lineHead(lineId);if(!head||!a)return;
+ const pieces=state.clips.filter(x=>x.pieceOf===lineId).sort((x,y)=>x.start-y.start);
+ if(pieces.length)head.fadeOut=pieces[pieces.length-1].fadeOut||0;
+ state.clips=state.clips.filter(x=>x.pieceOf!==lineId);
+ Object.assign(head,{assetId:a.id,duration:a.duration,trimStart:0,trimEnd:0});reflow();
+}
+function restoreLineVoice(lineId){const l=lineById(lineId),take=l?.takes?.find(t=>t.id===l.selectedTakeId),head=lineHead(lineId);resetLineVoice(lineId,asset(take?.assetId||head?.assetId))}
 function renderSidebar(){const counts={};state.lines.forEach(l=>counts[l.sceneId]=(counts[l.sceneId]||0)+1);$('sceneList').innerHTML=state.scenes.map((s,i)=>`<div class="scene-row"><button class="scene-item ${selectedScene===s.id?'active':''}" data-scene="${esc(s.id)}" title="${esc(s.name)}"><span class="scene-mark"></span><span class="scene-title">${esc(s.name)}</span><span class="scene-count">${counts[s.id]||0}</span></button><button class="scene-rename-btn" data-rename-scene="${esc(s.id)}" title="シーン名を変更" aria-label="${esc(s.name)}の名前を変更">✎</button><button class="scene-delete-btn" data-delete-scene="${esc(s.id)}" title="このシーンを削除" aria-label="${esc(s.name)}を削除">×</button></div>`).join('');$('projectButton').innerHTML=`<span class="project-title">${esc(state.title)}</span><span class="project-chevron" aria-hidden="true">⌄</span>`;for(const v of ['script','voices','assets','pronunciation'])$('nav'+v[0].toUpperCase()+v.slice(1)).classList.toggle('active',view===v)}
 function libraryDialogueMap(){
  const map=new Map(),add=(id,line)=>{if(!id||!line)return;const list=map.get(id)||[];if(!list.some(l=>l.id===line.id))list.push(line);map.set(id,list)};
@@ -405,7 +463,7 @@ async function charactersSaved(data,info){
  if(!state)return;
  // "Use in the source scenario" links this project's speakers on the server.
  if(info?.source?.kind==='drama'&&info.source.id===state.id&&info.summary?.applied){
-  try{state=await req('/api/projects/'+state.id);clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
+  try{state=await fetchProject(state.id);clearEditHistory();renderAll();$('saveState').textContent='保存済み'}
   catch(e){toast(e.message,true)}
   return;
  }
@@ -560,7 +618,7 @@ function renderTimeline(){
   for(const c of these){
    const a=asset(c.assetId);if(!a)continue;
    const w=Math.max(pxPerSec<4?2:pxPerSec<12?6:14,Number(c.duration||0)*pxPerSec),left=Math.max(0,Number(c.start||0)*pxPerSec);
-   const label=c.lineId?`${lineById(c.lineId)?.speaker||'台詞'} · ${(lineById(c.lineId)?.text||'').slice(0,12)}`:a.name;
+   const owner=lineById(clipLine(c)),label=owner?`${c.pieceOf?'✂ ':''}${owner.speaker||'台詞'} · ${(owner.text||'').slice(0,12)}`:a.name;
    html+=`<div class="tl-clip ${esc(track.kind)} ${selectedClips.has(c.id)?'selected':''}" data-clip="${esc(c.id)}" role="button" tabindex="0" aria-pressed="${selectedClips.has(c.id)}" title="${esc(a.name)}" style="left:${left}px;width:${w}px"><div class="clip-bars"></div><span class="clip-text">${esc(label)}</span>${w>=20?'<div class="clip-handle" data-resize="1"></div>':''}</div>`;
   }
   html+='</div></div>';
@@ -573,6 +631,36 @@ function renderTimeline(){
  $('zoom').value=timelineZoomToSlider(pxPerSec);
  paintClipSelection();
  updatePlayhead();
+ paintWaveforms();
+}
+// Real waveforms show where noise and stray words are before splitting.
+const WAVE_RATE=200,wavePeaks=new Map();
+function peaksOf(id,b){
+ if(wavePeaks.has(id))return wavePeaks.get(id);
+ const n=Math.max(1,Math.ceil(b.duration*WAVE_RATE)),out=new Float32Array(n),step=b.sampleRate/WAVE_RATE;
+ for(let ch=0;ch<b.numberOfChannels;ch++){const d=b.getChannelData(ch);for(let i=0;i<d.length;i++){const k=Math.min(n-1,(i/step)|0),v=Math.abs(d[i]);if(v>out[k])out[k]=v}}
+ wavePeaks.set(id,out);return out;
+}
+function drawWave(el,c,peaks,total){
+ let cv=el.querySelector('canvas.clip-wave');if(!cv){cv=document.createElement('canvas');cv.className='clip-wave';el.prepend(cv)}
+ const w=Math.max(1,Math.min(4096,Math.round(parseFloat(el.style.width)||el.clientWidth||1))),h=34;cv.width=w;cv.height=h;
+ const g=cv.getContext('2d');g.clearRect(0,0,w,h);g.fillStyle='rgba(255,255,255,.8)';
+ const from=Number(c.trimStart||0),len=Number(c.duration||0),end=Math.max(from,total-Number(c.trimEnd||0)),avail=end-from;
+ for(let x=0;x<w;x++){
+  let t0=x/w*len;if(c.loop&&avail>0)t0%=avail;
+  const a=from+t0,b=Math.min(end,a+len/w);if(a>=end)continue;
+  let peak=0;for(let i=Math.floor(a*WAVE_RATE),stop=Math.max(i+1,Math.ceil(b*WAVE_RATE));i<stop&&i<peaks.length;i++)if(peaks[i]>peak)peak=peaks[i];
+  const y=Math.max(1,Math.sqrt(peak)*h);g.fillRect(x,(h-y)/2,1,y);
+ }
+ el.classList.add('has-wave');
+}
+function paintWaveforms(){
+ if(!state||typeof document.querySelectorAll!=='function')return;
+ const project=state.id;
+ for(const el of document.querySelectorAll('.tl-clip[data-clip]')){
+  const c=clipById(el.dataset.clip);if(!c)continue;
+  (async()=>{try{if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();const b=await decodeAsset(c.assetId);if(state?.id===project&&el.isConnected)drawWave(el,c,peaksOf(c.assetId,b),b.duration)}catch(_){}})();
+ }
 }
 function updatePlayhead(){
  const ph=$('playhead');
@@ -612,7 +700,7 @@ function displayLineTts(l){
   return {source,engine,mode,model};
 }
 function renderInspector(){if(!state)return;const inspector=$('inspector'),l=lineById(selectedLine),c=clipById(selectedClip);
- if(c){const a=asset(c.assetId);inspector.innerHTML=`<div class="inspector-grid"><div class="field wide"><label>選択中クリップ（${selectedClips.size}件選択・ドラッグでまとめて移動）</label><div style="font-weight:700">${esc(a?.name||'不明')}</div></div><div class="field"><label>開始（秒）</label><input type="number" id="clipStart" min="0" step="0.1" value="${fnum(c.start,2)}"></div><div class="field"><label>長さ（秒）</label><input type="number" id="clipDuration" min="0.01" step="0.1" value="${fnum(c.duration,2)}"></div><div class="field"><label>音量（%）</label><input type="number" id="clipGain" min="0" max="800" step="5" value="${Math.round((c.gain??1)*100)}"></div><div class="field"><label>フェードイン（秒）</label><input type="number" id="clipFadeIn" min="0" step="0.1" value="${fnum(c.fadeIn,1)}"></div><div class="field"><label>フェードアウト（秒）</label><input type="number" id="clipFadeOut" min="0" step="0.1" value="${fnum(c.fadeOut,1)}"></div><div class="field"><label>トラック</label><select id="clipTrack">${state.tracks.map(t=>`<option value="${esc(t.id)}" ${t.id===c.trackId?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><div class="field"><label>前をカット（秒）</label><input type="number" id="clipTrimStart" min="0" step="0.1" value="${fnum(c.trimStart,1)}"></div><div class="field"><label>末尾カット（秒）</label><input type="number" id="clipTrimEnd" min="0" step="0.1" value="${fnum(c.trimEnd,1)}"></div><div class="field wide"><label><input type="checkbox" id="clipLoop" ${c.loop?'checked':''}> ループ再生（BGM・環境音）</label></div>${c.trackId!=='dialogue'?`<div class="field wide"><label>台詞への追従</label><select id="clipAnchor"><option value="">なし（固定時刻）</option>${activeLines().map(x=>`<option value="${esc(x.id)}" ${c.anchorLineId===x.id?'selected':''}>${esc(x.speaker)}：${esc(x.text.slice(0,24))}</option>`).join('')}</select></div>`:''}<div class="field wide"><label><input type="checkbox" id="clipPinned" ${c.pinned?'checked':''}> 自動整列から除外（位置を固定）</label></div></div><div class="inspect-actions">${button('▶ この位置から再生','id="playClipBtn"')}${button('このクリップを削除','id="deleteClipBtn"','danger')}${l?button('この台詞の生成設定を開く','id="inspectLineBtn"'):''}</div>`;return;}
+ if(c){const a=asset(c.assetId),owner=clipLine(c),ownerLine=lineById(owner);inspector.innerHTML=`<div class="inspector-grid"><div class="field wide"><label>選択中クリップ（${selectedClips.size}件選択・ドラッグでまとめて移動）</label><div style="font-weight:700">${esc(a?.name||'不明')}</div>${ownerLine?`<div class="inspector-note">${c.pieceOf?'✂ 分割した続き · ':''}${esc(ownerLine.speaker||'台詞')}：${esc((ownerLine.text||'').slice(0,40))}</div>`:''}</div><div class="field"><label>開始（秒）</label><input type="number" id="clipStart" min="0" step="0.1" value="${fnum(c.start,2)}"></div><div class="field"><label>長さ（秒）</label><input type="number" id="clipDuration" min="0.01" step="0.1" value="${fnum(c.duration,2)}"></div><div class="field"><label>音量（%）</label><input type="number" id="clipGain" min="0" max="800" step="5" value="${Math.round((c.gain??1)*100)}"></div><div class="field"><label>フェードイン（秒）</label><input type="number" id="clipFadeIn" min="0" step="0.1" value="${fnum(c.fadeIn,1)}"></div><div class="field"><label>フェードアウト（秒）</label><input type="number" id="clipFadeOut" min="0" step="0.1" value="${fnum(c.fadeOut,1)}"></div><div class="field"><label>トラック</label><select id="clipTrack">${state.tracks.map(t=>`<option value="${esc(t.id)}" ${t.id===c.trackId?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><div class="field"><label>前をカット（秒）</label><input type="number" id="clipTrimStart" min="0" step="0.1" value="${fnum(c.trimStart,1)}"></div><div class="field"><label>末尾カット（秒）</label><input type="number" id="clipTrimEnd" min="0" step="0.1" value="${fnum(c.trimEnd,1)}"></div><div class="field wide"><label><input type="checkbox" id="clipLoop" ${c.loop?'checked':''}> ループ再生（BGM・環境音）</label></div>${c.trackId!=='dialogue'?`<div class="field wide"><label>台詞への追従</label><select id="clipAnchor"><option value="">なし（固定時刻）</option>${activeLines().map(x=>`<option value="${esc(x.id)}" ${c.anchorLineId===x.id?'selected':''}>${esc(x.speaker)}：${esc(x.text.slice(0,24))}</option>`).join('')}</select></div>`:''}<div class="field wide"><label><input type="checkbox" id="clipPinned" ${c.pinned?'checked':''}> 自動整列から除外（位置を固定）</label></div></div><div class="inspect-actions">${button('▶ この位置から再生','id="playClipBtn"')}${button('✂ 再生位置でこのクリップを分割','id="splitClipBtn" title="縦の線（再生位置）でクリップを2つに分けます。キーボードのSでも分割できます"')}${owner?button('🗑 削除して後ろを詰める','id="deleteClipCloseGapBtn" title="このクリップを消し、同じ台詞の後ろの部分と次の台詞を前へ詰めます"','danger'):''}${button(owner?'🗑 削除（空いた時間はそのまま）':'🗑 このクリップを削除','id="deleteClipBtn"','danger')}${owner&&lineVoiceEdited(owner)?button('↺ この台詞の音声を元の長さに戻す','id="restoreLineVoiceBtn" title="分割・カットをやめて、選択中のテイクを最初から最後まで使います"'):''}${l?button('この台詞の生成設定を開く','id="inspectLineBtn"'):''}</div><p class="inspector-note split-help">ノイズや台本にない言葉を消すには：消したい部分の始まりに再生位置を合わせて「✂ 分割」、終わりでもう一度「✂ 分割」し、間にできたクリップを選んで「🗑 削除して後ろを詰める」を押します。${owner?'台詞を生成し直すかテイクを切り替えると、分割は解除されます。':''}</p>`;return;}
  if(l){const hasAudio=l.takes?.length>0, effective=displayLineTts(l),isOverride=effective.source==='line',statusLabel={ready:'✓ 音声あり',stale:'要再生成',missing:'未生成'}[l.status]||'未生成';inspector.innerHTML=`<section class="take-panel" aria-label="この台詞の音声"><div class="take-head"><span class="take-title">音声 · ${esc(l.speaker||'話者未設定')}</span><span class="line-status ${esc(l.status)}">${statusLabel}</span></div>${hasAudio?`<div class="field"><label>使うテイク</label><select id="lineTake"><option value="">未選択</option>${(l.takes||[]).map((t,i)=>`<option value="${esc(t.id)}" ${t.id===l.selectedTakeId?'selected':''}>テイク ${i+1} · ${esc(t.engine||'import')} · ${esc((t.createdAt||'').slice(0,16))}</option>`).join('')}</select></div>`:'<p class="inspector-note">まだ音声がありません。</p>'}<div class="inspect-actions take-actions">${button('✦ この台詞を生成',`id="generateLineBtn"`,'primary')}${hasAudio?button('▶ 試聴',`id="previewTakeBtn"`)+button('↓ このテイクを音声ファイルで保存',`id="downloadTakeBtn"`):''}</div></section>${linePronunciationHtml(l)}<div class="inspector-grid"><div class="field wide"><label>台詞</label><div style="font-size:12px">${esc(l.text.slice(0,90)||'（空の台詞）')}</div></div><div class="field wide"><label>声の設定元</label><select id="lineTtsSource"><option value="cast" ${!isOverride?'selected':''}>キャスト設定を使う（推奨）</option><option value="line" ${isOverride?'selected':''}>この台詞だけ個別設定</option></select></div>${!isOverride?`<div class="field wide"><label>実際に使用するモデル</label><div class="inspector-note">${esc(effective.model)}（${esc(voiceLabel(voiceFor(l.speaker)).split(' · ')[0])}・「02 キャスト・声」で変更できます）</div></div>`:`<div class="field"><label>TTSエンジン</label><select id="lineEngine"><option value="irodori" ${l.engine!=='qwen'?'selected':''}>Irodori-TTS</option><option value="qwen" ${l.engine==='qwen'?'selected':''}>Qwen3-TTS</option></select></div><div class="field"><label>声の方式</label><select id="lineMode"><option value="clone" ${l.mode!=='design'?'selected':''}>参照音声</option><option value="design" ${l.mode==='design'?'selected':''}>Voice Design</option></select></div><div class="field wide"><label>モデル</label>${modelSelect(l.engine,l.model)}</div>`}</div><div class="inspect-actions">${button('＋ 手持ちの音声を割り当て',`id="attachPickerBtn"`)}${button('✦ 演技指示をAIで提案',`id="suggestCaptionBtn"`)}${hasAudio&&l.selectedTakeId?button('🗑 選択テイクを削除',`id="deleteSelectedTakeBtn"`,'danger'):''}</div><p class="inspector-note" style="margin-top:10px">生成時は、キャスト設定の参照音声・声の説明を利用します。モデルと台詞の変更はテイク履歴に影響せず、再生成を促します。</p>`;return}
  inspector.innerHTML=`<div class="inspector-note">タイムラインのクリップか、左側の台詞を選択してください。<br>音声ライブラリからBGM・効果音を追加できます。</div><div class="inspect-actions">${button('＋ BGM / 効果音を取り込む','id="insUploadBtn"')}${button('＋ トラックを追加','id="addTrackBtn"')}</div>`;
 }
@@ -979,7 +1067,7 @@ async function refreshDuringJob(){
  if(!state||dirty||saving||playing)return;
  const focused=document.activeElement;
  if(focused&&/^(INPUT|TEXTAREA|SELECT)$/.test(focused.tagName)&&!focused.closest('.modal'))return;
- try{const fresh=await req(`/api/projects/${state.id}`);if(dirty||saving||fresh.id!==state.id)return;state=fresh;clearEditHistory();renderAll()}catch(_){}
+ try{const fresh=await fetchProject(state.id);if(dirty||saving||fresh.id!==state.id)return;state=fresh;clearEditHistory();renderAll()}catch(_){}
 }
 async function resumeGeneration(){
  try{const job=await req(`/api/projects/${state.id}/generate/active`);if(job?.id){showJob(job.id);toast('実行中の音声生成に再接続しました')}}catch(_){}
@@ -1003,7 +1091,7 @@ async function generate(ids){
 }
 function showJob(jid,design=null){if(playing)pause();else stopNodes();clearInterval(jobTimer);modal(`<h2 id="jobTitle">${design?'声をデザイン中：'+esc(design.speaker):'音声生成中'}</h2><p id="jobMessage">TTSモデルを読み込んでいます…</p><div class="progress"><div id="jobProgress" style="width:0%"></div></div><div id="jobStats" class="small muted" style="margin-top:10px">処理待ち</div>${design?'<div id="designPanel" class="design-panel"></div>':''}<div class="modal-actions">${button('■ 生成を停止',`id="cancelJobBtn"`)}${button('閉じる','data-close="1"')}</div>`);$('cancelJobBtn').onclick=async()=>{await req(`/api/jobs/${jid}/cancel`,{method:'POST'});toast('停止要求を送信しました')};
  if(design)renderDesignPanel(design,true);
- let seen=0;const check=async()=>{try{const j=await req('/api/jobs/'+jid);if(j.status==='running'&&!design&&j.completed!==seen){seen=j.completed;await refreshDuringJob()}if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await req(`/api/projects/${state.id}`);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`${j.message||'終了'}（${j.completed}件処理）${j.errors?.length?'　最初のエラー: '+String(j.errors[0].error||'').slice(0,300):''}`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
+ let seen=0;const check=async()=>{try{const j=await req('/api/jobs/'+jid);if(j.status==='running'&&!design&&j.completed!==seen){seen=j.completed;await refreshDuringJob()}if($('jobMessage')){$('jobMessage').textContent=j.message||j.status;$('jobStats').textContent=`${j.completed||0} / ${j.total||0} 件　${j.errors?.length||0} エラー`;$('jobProgress').style.width=((j.total?j.completed/j.total:0)*100)+'%'}if(j.status!=='running'){clearInterval(jobTimer);await saveNow();state=await fetchProject(state.id);clearEditHistory();renderAll();if(j.referenceAssetId && $('jobStats')){const actions=$('jobStats').closest('.modal')?.querySelector('.modal-actions');if(actions&&!$('previewDesignedReferenceBtn')){const b=document.createElement('button');b.id='previewDesignedReferenceBtn';b.className='btn primary';b.textContent='▶ 生成した参照音声を試聴';b.onclick=()=>playPreview(j.referenceAssetId);actions.prepend(b)}}if(design){if(j.referenceAssetId&&!design.history.some(c=>c.assetId===j.referenceAssetId)){design.history.push({assetId:j.referenceAssetId,text:design.sampleText});design.current=j.referenceAssetId}renderDesignPanel(design,false)}if(j.errors?.length)toast(`生成完了。${j.errors.length}件でエラー`,true);else if(j.status==='error')toast('生成エラー: '+j.message,true);else toast('生成処理が終了しました');if($('jobMessage'))$('jobMessage').textContent=j.status==='error'?'失敗: '+j.message:`${j.message||'終了'}（${j.completed}件処理）${j.errors?.length?'　最初のエラー: '+String(j.errors[0].error||'').slice(0,300):''}`;}}catch(e){clearInterval(jobTimer);toast(e.message,true)}};jobTimer=setInterval(check,1500);check()}
 async function renderAudio(){
  try{
   await saveNow();
@@ -1447,7 +1535,10 @@ function handleGlobalClick(e){const target=e.target;
  if(target.id==='inspectLineBtn'){if(selectedLine)selectLine(selectedLine);return}
  if(target.id==='addTrackBtn'){const name=prompt('トラック名','追加トラック');if(!name)return;const id=newid('track');state.tracks.push({id,name,kind:'sfx'});dirtyState();renderTimeline();renderInspector()}
  if(target.id==='playClipBtn'){currentTime=clipById(selectedClip)?.start||0;play()}
- if(target.id==='deleteClipBtn'){const c=clipById(selectedClip);if(!c)return;state.clips=state.clips.filter(x=>x.id!==c.id);selectedClip=null;dirtyState();renderTimeline();renderInspector()}
+ if(target.id==='deleteClipBtn'){const c=clipById(selectedClip);if(!c)return;removeClips([c.id]);selectedClip=null;dirtyState();renderTimeline();renderInspector()}
+ if(target.id==='deleteClipCloseGapBtn'){const c=clipById(selectedClip);if(!c)return;deleteClipClosingGap(c);selectedClip=null;dirtyState();renderTimeline();renderInspector();toast('クリップを削除して、後ろを詰めました')}
+ if(target.id==='splitClipsBtn'||target.id==='splitClipBtn')splitSelectedAtPlayhead();
+ if(target.id==='restoreLineVoiceBtn'){const line=clipLine(clipById(selectedClip));if(!line)return;restoreLineVoice(line);selectedClip=lineHead(line)?.id||null;selectedClips=new Set(selectedClip?[selectedClip]:[]);dirtyState();renderTimeline();renderInspector();toast('この台詞の音声を元の長さに戻しました')}
 }
 function handleChange(e){if(historyRestoring)return;handleBatchModalChange(e);const target=e.target;const id=target.id;
  if(id==='castCopyTarget'){updateCastCopyModal();return}
@@ -1460,7 +1551,7 @@ function handleChange(e){if(historyRestoring)return;handleBatchModalChange(e);co
  const c=clipById(selectedClip),l=lineById(selectedLine);
  const cv={clipStart:['start',Number],clipDuration:['duration',Number],clipGain:['gain',v=>Number(v)/100],clipFadeIn:['fadeIn',Number],clipFadeOut:['fadeOut',Number],clipTrack:['trackId',String],clipTrimStart:['trimStart',Number],clipTrimEnd:['trimEnd',Number],clipLoop:['loop',null],clipPinned:['pinned',null]};
  if(c&&id==='clipAnchor'){c.anchorLineId=target.value||null;const ref=state.clips.find(x=>x.lineId===target.value&&x.trackId==='dialogue');c.anchorOffset=ref?c.start-ref.start:0;dirtyState();renderTimeline();renderInspector();return}
- if(c&&cv[id]){let [prop,fn]=cv[id];c[prop]=fn?fn(target.value):target.checked;if(['start','duration','fadeIn','fadeOut','trimStart','trimEnd','gain'].includes(prop))c[prop]=Math.max(0,c[prop]);if(prop==='trackId'&&c.trackId!=='dialogue')c.pinned=true;dirtyState();renderTimeline();renderInspector();return}
+ if(c&&cv[id]){let [prop,fn]=cv[id];c[prop]=fn?fn(target.value):target.checked;if(['start','duration','fadeIn','fadeOut','trimStart','trimEnd','gain'].includes(prop))c[prop]=Math.max(0,c[prop]);if(prop==='trackId'&&c.trackId!=='dialogue')c.pinned=true;if(prop==='start'&&c.anchorLineId){const anchor=lineHead(c.anchorLineId);if(anchor&&anchor!==c)c.anchorOffset=+(c.start-anchor.start).toFixed(4)}dirtyState();renderTimeline();renderInspector();return}
  if(!l)return;
  if(target.dataset.pronChoice!==undefined){
    const pd=PD(),dictionary=pronunciation?.dictionary||{},before=pd.apply(l.text,dictionary,l.pronunciationChoices);
@@ -1486,7 +1577,7 @@ function handleChange(e){if(historyRestoring)return;handleBatchModalChange(e);co
  else if(id==='lineMode'){l.mode=target.value;if(l.engine==='qwen')l.model=l.mode==='design'?models.qwen[2][0]:models.qwen[0][0];l.status=l.selectedTakeId?'stale':'missing';dirtyState();renderInspector()}
  else if(id==='lineModel'){if(target.value==='custom'){$('modelCustom').style.display='block';$('modelCustom').focus()}else{l.model=target.value;l.status=l.selectedTakeId?'stale':'missing';dirtyState();renderInspector()}}
  else if(id==='modelCustom'){l.model=target.value;l.status=l.selectedTakeId?'stale':'missing';dirtyState()}
- else if(id==='lineTake'){l.selectedTakeId=target.value||null;let t=l.takes.find(t=>t.id===l.selectedTakeId);if(t){let a=asset(t.assetId),c=state.clips.find(x=>x.lineId===l.id&&x.trackId==='dialogue');if(a&&c){c.assetId=a.id;c.duration=a.duration;reflow()}}dirtyState();renderAll()}
+ else if(id==='lineTake'){l.selectedTakeId=target.value||null;let t=l.takes.find(t=>t.id===l.selectedTakeId);if(t)resetLineVoice(l.id,asset(t.assetId));dirtyState();renderAll()}
 }
 async function suggestCaption(){if(!selectedLine)return;const model=prompt('Ollamaのモデル名','gemma3:4b');if(!model)return;try{await saveNow();toast('Ollamaで演技指示を解析しています');const r=await req(`/api/projects/${state.id}/caption/suggest`,json('POST',{lineId:selectedLine,model}));const l=lineById(selectedLine);l.caption=r.caption;l.status=l.selectedTakeId?'stale':'missing';dirtyState();renderEditor();renderInspector();toast('演技指示の候補を入力しました（必要なら修正してください）')}catch(e){toast(e.message,true)}}
 function setView(v){view=v;renderSidebar();renderEditor()}
@@ -1625,7 +1716,8 @@ function wire(){
       e.preventDefault();if(undo)undoEdit();else redoEdit();restoreEditingFocus(focus);return;
     }
   }
-  const writing=['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}});
+  const writing=['INPUT','TEXTAREA','SELECT','BUTTON','A'].includes(document.activeElement?.tagName);if(e.ctrlKey&&e.key.toLowerCase()==='s'){e.preventDefault();saveNow().then(()=>toast('保存しました')).catch(err=>toast(err.message,true))}if(e.code==='Space'&&!writing&&!document.querySelector('.modal-backdrop:not(.hidden)')){e.preventDefault();play()}
+  if(e.key.toLowerCase()==='s'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!e.repeat&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)&&!document.activeElement?.isContentEditable&&!document.querySelector('.modal-backdrop:not(.hidden)')&&selectedClips.size){e.preventDefault();splitSelectedAtPlayhead()}});
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''} });
 }
 installPanelResizers();

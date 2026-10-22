@@ -317,6 +317,54 @@ def delete_cast(project_id, name, expected_revision):
         return save_project(project_id, state, expected_revision=expected_revision)
 
 
+REPAIR_NOTICES = {}
+
+
+def _repair_missing_takes(project_id, state):
+    """Drop takes whose audio asset is gone so the project opens and saves again.
+
+    Between 2026-10-19 and the fix, saving did not check take assets, so a
+    project may hold such takes. The JSON is backed up first and no audio file
+    is touched; a line's clip moves to the take the line now uses.
+    """
+    asset_ids = {a.get("id") for a in state.get("assets", [])}
+    repaired = []
+    removed = 0
+    for line in state.get("lines", []):
+        takes = line.get("takes") or []
+        kept = [t for t in takes if t.get("assetId") in asset_ids]
+        if len(kept) == len(takes):
+            continue
+        removed += len(takes) - len(kept)
+        line["takes"] = kept
+        if line.get("selectedTakeId") not in {t.get("id") for t in kept}:
+            clip = next((c for c in state.get("clips", [])
+                         if c.get("lineId") == line.get("id") and c.get("trackId") == "dialogue"), None)
+            chosen = next((t for t in kept if clip and t.get("assetId") == clip.get("assetId")), None)
+            chosen = chosen or (kept[-1] if kept else None)
+            line["selectedTakeId"] = chosen["id"] if chosen else None
+            if clip and chosen and clip.get("assetId") != chosen["assetId"]:
+                asset = next(a for a in state["assets"] if a["id"] == chosen["assetId"])
+                clip.update({"assetId": asset["id"], "duration": asset["duration"], "trimStart": 0.0})
+        repaired.append(line)
+    if not repaired:
+        return state
+    refresh_staleness({**state, "lines": repaired})
+    backups = workdir(project_id) / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    backup_name = ("before_take_repair_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+                   + f"_{uuid.uuid4().hex[:8]}.json")
+    shutil.copy2(state_path(project_id), backups / backup_name)
+    try:
+        state = save_project(project_id, state)
+    except ValueError:
+        # Other legacy data blocks saving: open the repaired copy, change nothing on disk.
+        (backups / backup_name).unlink()
+        return state
+    REPAIR_NOTICES[project_id] = {"removedTakes": removed, "lines": len(repaired), "backup": backup_name}
+    return state
+
+
 def load_project(project_id):
     with LOCK:
         p=state_path(project_id)
@@ -324,7 +372,7 @@ def load_project(project_id):
             raise FileNotFoundError("Project not found")
         state=json.loads(p.read_text(encoding="utf-8"))
         _migrate_audio_folders(project_id, state)
-        return state
+        return _repair_missing_takes(project_id, state)
 
 
 def save_project(project_id, state, expected_revision=None, *, allow_new_assets=False):
@@ -336,6 +384,7 @@ def save_project(project_id, state, expected_revision=None, *, allow_new_assets=
         if previous and expected_revision is not None and int(previous["revision"]) != int(expected_revision):
             raise RuntimeError("編集内容の競合を検出しました。再読み込みしてください。")
         state=copy.deepcopy(state)
+        state.pop("repairNotice",None)  # Shown once by GET; never stored.
         validate_state(state, previous, allow_new_assets=allow_new_assets)
         state["revision"]=(int(previous.get("revision",0))+1) if previous else 1
         state["updatedAt"]=now()
@@ -467,8 +516,11 @@ def validate_state(s, prev, *, allow_new_assets=False):
             or not (v=="project" or (isinstance(v,str) and re.fullmatch(r"chr_[0-9a-f]{16}",v)))
             for k,v in links.items())):
         raise ValueError("キャラクターの割り当てが正しくありません")
+    for l in s["lines"]:
         for take in l.get("takes",[]):
-            if take.get("assetId") not in asset_ids: raise ValueError("Take asset missing")
+            if take.get("assetId") not in asset_ids:
+                raise ValueError(f"台詞「{str(l.get('text',''))[:20]}」のテイクが指す音声素材がありません。"
+                                 "画面を再読み込みしてからやり直してください")
     track_ids={x["id"] for x in s["tracks"]}
     for c in s["clips"]:
         if c.get("sceneId") not in scene_ids or c.get("trackId") not in track_ids:
@@ -757,6 +809,12 @@ def attach_take(s, line, asset, generator=None, *, reflow=True, dictionary=None,
     line["selectedTakeId"]=take["id"]
     line["status"]="ready"
     cl=next((c for c in s["clips"] if c.get("lineId")==line["id"] and c["trackId"]=="dialogue"),None)
+    # Cuts made on the old audio do not apply to the new take.
+    pieces=[c for c in s["clips"] if c.get("pieceOf")==line["id"]]
+    if pieces:
+        s["clips"][:]=[c for c in s["clips"] if c.get("pieceOf")!=line["id"]]
+        if cl is not None:
+            cl["fadeOut"]=max(pieces,key=lambda c:float(c.get("start",0))).get("fadeOut",0.0)
     if cl is None:
         cl={"id":uid("clip"),"sceneId":line["sceneId"],"trackId":"dialogue","lineId":line["id"],
             "start":0.0, "gain":1.0,"loop":False,"fadeIn":0.0,"fadeOut":0.0,"trimStart":0.0,"pinned":False}
@@ -780,7 +838,10 @@ def reflow_dialogue(s,scene_id):
                 for related in s["clips"]:
                     if related.get("anchorLineId")==line["id"] and related is not clip:
                         related["start"]=round(max(0,new_start+float(related.get("anchorOffset",0))),4)
-            cursor=max(cursor,float(clip["start"])+float(clip.get("duration",0)))
+            # Pieces split off this line's voice follow it and count toward its length.
+            cursor=max([cursor,float(clip["start"])+float(clip.get("duration",0))]
+                       +[float(c.get("start",0))+float(c.get("duration",0)) for c in s["clips"]
+                         if c.get("pieceOf")==line["id"]])
         cursor+=max(0,float(line.get("after",0.65)))
 
 
