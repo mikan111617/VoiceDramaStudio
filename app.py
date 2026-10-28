@@ -1133,6 +1133,10 @@ app.include_router(game_router)
 from pixel_integration import register_pixel_workbench
 register_pixel_workbench(app)
 
+# Aseprite CLI + native Lua sprite editing. Local workspace only.
+from aseprite_bridge import router as aseprite_router
+app.include_router(aseprite_router)
+
 if __name__=='__main__':
     import uvicorn, webbrowser
     threading.Timer(1.3,lambda:webbrowser.open('http://127.0.0.1:'+os.getenv('VDS_PORT','8765'))).start()
