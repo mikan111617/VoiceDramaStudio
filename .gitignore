@@ -36,3 +36,7 @@ pixel_workbench/exports/
 
 # Backups created by the Pixel Workbench integration installer
 backup_before_pixel_integration_*/
+
+# Aseprite local backups and generated assets
+backup_before_aseprite_integration_*/
+aseprite_studio/
