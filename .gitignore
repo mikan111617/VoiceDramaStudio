@@ -7,3 +7,32 @@ __pycache__/
 .venv-*/
 outputs/
 exports/
+
+# Local secrets and API credentials (never commit)
+.env
+.env.*
+!.env.example
+!.env.sample
+*.key
+*.pem
+*.p12
+*.pfx
+*.token
+credentials.json
+credentials.*.json
+secrets.json
+secrets.*.json
+api_keys.json
+apikeys.json
+api_key.txt
+api-key.txt
+tokens.json
+*.local.json
+
+# Pixel Workbench local assets, generation output, and exports
+pixel_workbench/data/
+pixel_workbench/outputs/
+pixel_workbench/exports/
+
+# Backups created by the Pixel Workbench integration installer
+backup_before_pixel_integration_*/
