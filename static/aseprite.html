@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aseprite連携 | VoiceDrama Studio</title>
+<link rel="stylesheet" href="/static/harbor.css">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f7f8;color:#22343e;font-family:system-ui,"Noto Sans JP",sans-serif}
+.ase-shell{max-width:1190px;margin:28px auto;padding:0 20px}.ase-grid{display:grid;grid-template-columns:360px 1fr;gap:20px}
+.ase-card{background:#fff;border:1px solid #dbe4e8;border-radius:13px;padding:20px;box-shadow:0 5px 20px #cdd6da2a}
+.ase-card h2{font-size:18px;margin:0 0 12px}.ase-card p{line-height:1.7;color:#52616d}
+.ase-field{display:block;margin:12px 0;color:#52616d;font-size:13px}
+.ase-field input,.ase-field textarea{display:block;width:100%;padding:10px;border:1px solid #bacbd4;border-radius:7px;font:inherit;margin-top:5px}
+.ase-field textarea{min-height:105px}.ase-row{display:flex;gap:8px}.ase-row>*{flex:1;min-width:0}
+button,.ase-link{cursor:pointer;background:#23697c;color:white;border:0;border-radius:7px;padding:10px 14px;font-weight:600;font-size:13px;text-decoration:none;display:inline-block}
+button.secondary,.ase-link.secondary{background:#e8f1f4;color:#245061}
+.ase-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}.ase-toolbar h1{font-size:24px;margin:0}
+.ase-state{padding:12px;background:#eff8f4;border-radius:8px;font-size:13px;word-break:break-all}
+.ase-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:14px}
+.ase-item{border:1px solid #e4e8eb;border-radius:10px;padding:12px}
+.ase-item img{display:block;width:100%;height:155px;object-fit:contain;image-rendering:pixelated;background:repeating-conic-gradient(#e9e9e9 0% 25%,#fff 0% 50%) 50%/16px 16px}
+.ase-item b{display:block;margin:8px 0;font-size:14px;overflow-wrap:anywhere}
+.ase-item small{display:block;color:#52616d}.ase-downloads{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.ase-downloads a{font-size:12px;color:#23697c}.ase-error{background:#fff0ef;color:#90372f}
+.ase-muted{color:#64717e;font-size:12px}
+@media(max-width:820px){.ase-grid{grid-template-columns:1fr}}
+</style></head>
+<body>
+<header class="bar topbar"><nav class="modes" aria-label="制作モード">
+<a href="/">🎧 ボイスドラマ</a><a href="/game">🎮 ゲーム音声</a>
+<a href="/pixel/">🎨 画像・映像</a><a href="/aseprite/" class="active" aria-current="page">🧩 Aseprite</a>
+</nav><span class="ase-muted">ローカル制作・Steam版Aseprite対応</span></header>
+<main class="ase-shell">
+<div class="ase-toolbar"><h1>Aseprite 自動制作</h1><button type="button" class="secondary" id="refresh">一覧を更新</button></div>
+<div class="ase-grid"><div class="ase-card">
+<h2>1. Asepriteの接続</h2>
+<p>Steam版の <code>Aseprite.exe</code> を指定します。Steamの起動やGitHub版のビルドは不要です。</p>
+<div id="status" class="ase-state">確認中…</div>
+<label class="ase-field">Aseprite.exe のフルパス<input id="exe" placeholder="C:\Program Files (x86)\Steam\steamapps\common\Aseprite\Aseprite.exe"></label>
+<button type="button" id="connect">保存・接続確認</button>
+<hr><h2>2. AIにドット絵を描かせる</h2>
+<p>Ollama（任意）に自然文からレイヤー・フレームごとの描画指示を作らせ、Aseprite形式で保存します。</p>
+<label class="ase-field">作りたいドット絵<textarea id="prompt" placeholder="例：赤いマントを着た騎士が剣を構える。輪郭は暗い色で、背景は透明。"></textarea></label>
+<div class="ase-row">
+<label class="ase-field">幅<input type="number" id="width" value="48" min="16" max="256"></label>
+<label class="ase-field">高さ<input type="number" id="height" value="48" min="16" max="256"></label>
+<label class="ase-field">フレーム<input type="number" id="frames" value="1" min="1" max="12"></label>
+</div>
+<label class="ase-field">Ollamaモデル<input id="model" value="gemma3:4b"></label>
+<button type="button" id="generate">AIで生成</button>
+<button type="button" class="secondary" id="sample">接続テスト用サンプル生成</button>
+<hr><h2>3. 画像を取り込む</h2>
+<p>PixelLabやGPT Imageで生成したドット絵も、PNG/GIF/WebPからAsepriteへ変換できます。</p>
+<input id="upload" type="file" accept=".png,.gif,.webp" aria-label="画像を選択">
+<button type="button" class="secondary" id="import">画像を変換</button>
+<p class="ase-muted">MCP対応クライアントからは <code>python aseprite_mcp_server.py</code> を登録してください。</p>
+</div>
+<section class="ase-card">
+<h2>生成したスプライト</h2>
+<p id="message" class="ase-state">接続状態を確認してください。</p>
+<div id="gallery" class="ase-gallery"></div>
+</section></div></main>
+<script src="/static/aseprite.js" defer></script>
+</body></html>
