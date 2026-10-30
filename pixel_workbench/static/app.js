@@ -1,5 +1,6 @@
 'use strict';
 const $ = q => document.querySelector(q);
+let uiFrameSource=null;
 let mode='text', currentJob=null, pollTimer=null, uploadedPreview=null, allJobs=[], allAssets=[], allSequences=[], currentEstimate=null, savedPrompt=null, ollamaModels=[], pastedResultFile=null, pastedResultUrl=null, importBusy=false, currentSequenceId='';
 const modeNames={text:'新規生成',convert:'参照画像から変換',animate:'アニメーション',vfx:'エフェクト専用'};
 const modelChoices={pixellab:[['standard','Standard（Pixen / 通常変換）'],['pro','Pro（高品質モデル）']],openai:[['gpt-image-2','GPT Image 2'],['gpt-image-2.5-flare','GPT Image 2.5 Flare'],['gpt-image-2.5-sunburst','GPT Image 2.5 Sunburst']],chatgpt:[['browser','ChatGPT Plus（コピー＆貼り付け）']]};
@@ -13,8 +14,50 @@ function providerName(p){return p==='openai'?'OpenAI API':p==='chatgpt'?'ChatGPT
 function getProvider(){return $('#provider').value}
 function getModel(){return $('#model').value}
 function currentCategory(){return $('#assetCategory')?.value||'other'}
-function opts(){return {provider:getProvider(),model:getModel(),mode,size:Number($('#size').value),frames:Number($('#frames').value),quality:$('#quality').value,gpt_size:$('#gptSize').value,reservation_usd:Number($('#reservation').value)}}
+function opts(){
+ const options={provider:getProvider(),model:getModel(),mode,size:Number($('#size').value),frames:Number($('#frames').value),quality:$('#quality').value,gpt_size:$('#gptSize').value,reservation_usd:Number($('#reservation').value),category:currentCategory()};
+ if(mode==='text'&&getProvider()==='pixellab'){
+  options.width=Number($('#imageWidth').value);
+  options.height=Number($('#imageHeight').value);
+ }
+ return options;
+}
 function autoCategoryForMode(m){return m==='vfx'?'effect':m==='animate'?'character':m==='convert'?'character':'other'}
+const purposeTemplates={
+ map:{label:'マップユニット',mode:'text',width:16,height:16,category:'character',prompt:'16×16ピクセルのGBA風SRPGマップユニット。正面向きの全身キャラ。大きな色の塊と明快な輪郭、少ない色数、単純な顔、背景なし。原寸16×16で識別できるデザイン。'},
+ portrait:{label:'顔グラフィック',mode:'text',width:80,height:80,category:'character',prompt:'80×80ピクセルのGBA時代のSRPG用顔グラフィック。胸から上、表情が読みやすい、明瞭な輪郭と制限色数。テキストなし。'},
+ battle:{label:'戦闘キャラ',mode:'text',width:96,height:96,category:'character',prompt:'96×96ピクセルのGBA風SRPG戦闘用の全身キャラドット絵。シルエットが明瞭、ゲーム画面で見やすい立ち姿。背景なし。'},
+ item:{label:'アイテム',mode:'text',width:32,height:32,category:'item',prompt:'32×32ピクセルのゲーム用アイテムアイコン。1つだけを中央に配置、レトロなピクセルアート、輪郭は鮮明、透過背景。'},
+ window:{label:'横長UI・会話枠',mode:'text',width:240,height:64,category:'ui',prompt:'240×64ピクセルのレトロSRPG/ノベルゲーム向け横長メッセージウィンドウ。読みやすい暗い内側、装飾された細い縁、文字なし・キャラクターなし。枠の外側は透明。'},
+ nine:{label:'9-slice用の枠原画',mode:'text',width:64,height:64,category:'ui',prompt:'64×64ピクセルのピクセルアートUIフレームの原画。四隅の模様は固定、上下左右の辺は繰り返しても自然につながり、中央は単色に近い。文字なし。9-sliceで分割しやすい単純な枠。'},
+ animate:{label:'アニメ生成',mode:'animate',category:'character',prompt:'元画像のキャラクターがその場で自然に足踏みする。最初と最後がつながる動き。'},
+ vfx:{label:'魔法・エフェクト',mode:'vfx',category:'effect',prompt:'青白い稲妻が地面に落ち、火花が散って消える。キャラクターなし、透明背景のドット絵エフェクト。'}
+};
+function applyPurpose(name){
+ const p=purposeTemplates[name];if(!p)return;
+ if(getProvider()!=='pixellab'){$('#provider').value='pixellab';setProvider()}
+ setMode(p.mode);
+ if(p.width){$('#imageWidth').value=p.width;$('#imageHeight').value=p.height}
+ $('#assetCategory').value=p.category;
+ if(p.category==='ui')$('#model').value='pro';
+ else if(p.mode==='text')$('#model').value='standard';
+ $('#description').value=p.prompt;
+ $('#purposeSummary').textContent=p.label+'向けの初期設定を反映しました。文章・寸法は自由に編集できます。'+(name==='nine'?' ※ 9-sliceへの切り出しは未実装です。':'');
+ document.querySelectorAll('[data-purpose]').forEach(b=>{const selected=b.dataset.purpose===name;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected))});
+ refreshUI();
+}
+async function updateAnimationHelp(){
+ if(mode!=='animate')return;
+ const max=Number($('#size').value),count=Number($('#frames').value),file=$('#referenceImage').files[0];
+ let w=max,h=max,source='正方形として計算';
+ if(file){
+  try{const bitmap=await createImageBitmap(file);const scale=Math.min(1,max/Math.max(bitmap.width,bitmap.height));w=Math.max(1,Math.round(bitmap.width*scale));h=Math.max(1,Math.round(bitmap.height*scale));bitmap.close();source='参照画像の縦横比から概算';}catch(e){source='画像の寸法を確認できません'}
+ }
+ const cap=Math.min(16,Math.floor(524288/(w*h))),possible=[4,8,16].filter(n=>n<=cap);
+ const message='元画像1枚 + 追加'+count+'枚 = 合計'+(count+1)+'枚。'+source+'：'+w+'×'+h+'pxの場合、選べる追加枚数は'+(possible.length?possible.join(' / ')+'枚':'なし')+'。';
+ const label=$('#animationHelp');label.textContent=message+(count>cap?' ⚠ この組み合わせは上限を超えます。サイズか枚数を下げてください。':'');
+ label.classList.toggle('limit-warning',count>cap);
+}
 function setProvider(){
  const service=getProvider(), previous=getModel();$('#model').replaceChildren();
  for(const [id,name] of modelChoices[service]){const option=document.createElement('option');option.value=id;option.textContent=name;$('#model').append(option)}
@@ -22,13 +65,16 @@ function setProvider(){
  if(service!=='pixellab' && (mode==='animate'||mode==='vfx'))setMode('text');
  refreshUI();
 }
-function setMode(m){mode=m;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('current',b.dataset.mode===m));if($('#assetCategory')&&(!$('#assetName').value||['other','effect','character'].includes($('#assetCategory').value)))$('#assetCategory').value=autoCategoryForMode(m);refreshUI()}
+function setMode(m){mode=m;document.querySelectorAll('.tab').forEach(b=>{const selected=b.dataset.mode===m;b.classList.toggle('current',selected);b.setAttribute('aria-selected',String(selected))});if($('#assetCategory')&&(!$('#assetName').value||['other','effect','character'].includes($('#assetCategory').value)))$('#assetCategory').value=autoCategoryForMode(m);refreshUI()}
 function refreshUI(){
  const service=getProvider(), m=getModel(), browser=service==='chatgpt', gpt=service==='openai', pro=m==='pro';
  document.querySelector('[data-mode="animate"]').disabled=gpt||browser;
  document.querySelector('[data-mode="vfx"]').disabled=gpt||browser;
  $('#vfxPanel').classList.toggle('hidden',mode!=='vfx');
- if(service==='pixellab')for(const option of $('#model').options){option.textContent=mode==='vfx'?(option.value==='standard'?'Lite（VFX・低消費）':'Pro（VFX・高品質）'):(option.value==='standard'?'Standard（Pixen / 通常変換）':'Pro（高品質モデル）');}
+ if(service==='pixellab')for(const option of $('#model').options){
+ const ui=mode==='text'&&currentCategory()==='ui';
+ option.textContent=mode==='vfx'?(option.value==='standard'?'Lite（VFX・低消費）':'Pro（VFX・高品質）'):ui?(option.value==='standard'?'Standard（汎用画像生成）':'Pro（UI専用生成API）'):(option.value==='standard'?'Standard（Pixen / 通常変換）':'Pro（高品質モデル）');
+}
  $('#imageField').classList.toggle('hidden',mode==='text');
  $('#framesField').classList.toggle('hidden',mode!=='animate');
  $('#presets').classList.toggle('hidden',mode!=='text');
@@ -38,7 +84,8 @@ function refreshUI(){
  $('#reservationField').classList.toggle('hidden',browser);
  $('#gptSizeField').classList.toggle('hidden',!gpt);
  $('#qualityField').classList.toggle('hidden',!gpt);
- $('#sizeField').classList.toggle('hidden',gpt||browser||mode==='vfx'||(mode==='convert'&&pro));
+ $('#sizeField').classList.toggle('hidden',gpt||browser||mode==='vfx'||mode==='text'||(mode==='convert'&&pro));
+ $('#dimensionsField').classList.toggle('hidden',service!=='pixellab'||mode!=='text');
  $('#description').closest('.field').classList.toggle('hidden',false);
  $('#transparent').closest('.toggle').classList.toggle('hidden',browser||mode==='vfx'||(mode==='convert'&&!gpt));
  $('#size').querySelector('[value="512"]').disabled=mode==='animate';
@@ -46,14 +93,17 @@ function refreshUI(){
  $('#promptLabel').textContent=mode==='vfx'?'どんなエフェクトを動かしますか？':mode==='animate'?'動作の説明':mode==='convert'?'追加の変換指示（省略可）':'生成したい画像の説明';
  $('#description').placeholder=mode==='vfx'?'例：上空から青白い稲妻が3本落ち、地面で火花が散って消える。8フレーム程度、背景透明。':mode==='animate'?'例：立っているキャラクターが本を開く。自然なループ動作。':mode==='convert'?'例：元の顔つきや頭身を保ち、緻密な16bitドット絵にしてください（任意）':'例：温かい雰囲気の本を持つ女性、全身立ち絵、繊細なドット絵';
  $('#imageLabel').textContent=mode==='vfx'?'キャラクター画像（任意・512px以下）':mode==='animate'?'動かすドット絵': '変換元の画像';
+ $('#modeGuide').textContent=mode==='text'?'新規生成｜文章から静止画を1枚作成。PixelLabなら幅と高さを指定でき、横長UI枠も作れます。':mode==='convert'?'画像から変換｜元画像が必要です。Standardはサイズと忠実度を指定、Proはモデル側が出力寸法を決めます。':mode==='animate'?'アニメ生成｜最初の画像を1枚用意し、その続きの4・8・16枚をAIが生成します。元画像を含めると5・9・17枚です。':'エフェクト生成｜落雷・炎・斬撃などを生成。コマ数とサイズはVFXサービス側で決定されます。';
+ $('#providerGuide').textContent=browser?'ChatGPT Plusは画面内で直接生成しません。指示をコピーし、画像を貼り付けてください。':gpt?'OpenAI画像APIは静止画・変換のみ。GPT用サイズは専用項目で選びます。':mode==='vfx'?'VFXはPixelLab専用。生成コマ数は選択できず、実際の結果を確認してください。':mode==='text'&&currentCategory()==='ui'?(m==='pro'?'UI専用のPixelLab Pro APIを使用します。枠・ボタン・HPバーなどの素材を作成。料金は送信前に確認し、予約額は請求上限ではありません。':'汎用のPixen生成でUIを作ります。UI専用モデルを使うならProに変更してください。'):'PixelLab APIを利用。新規生成なら幅・高さ16〜512pxを別々に指定できます。';
+ updateAnimationHelp();
  $('#sizeHint').textContent=mode==='convert'?'元の縦横比を保ち、指定値を長辺の目安として使用':mode==='animate'?'入力の長辺を最大256pxに調整':'PixelLab新規生成では正方形';
  $('#fidelityHint').textContent=browser?'ChatGPTに渡すプロンプトに忠実度を反映します':gpt?'GPTへの編集指示に忠実度を反映（元画像通りを保証するものではありません）':pro?'Proは細かな忠実度パラメータ非対応（文章で調整）':'StandardではFaithful modeを調整。追加の文章指示はAPIに送信されません';
- $('#generatedLabel').textContent=mode==='vfx'?'VFXアニメーション（GIF）':browser?'ChatGPTで生成した画像（貼り付け取り込み）':gpt?'GPT生成画像':'PixelLab生成画像';
+ $('#generatedLabel').textContent=mode==='vfx'?'VFXアニメーション（GIF）':browser?'ChatGPTで生成した画像（貼り付け取り込み）':gpt?'GPT生成画像':mode==='text'&&currentCategory()==='ui'?'PixelLab UI枠素材':'PixelLab生成画像';
  $('#generate').classList.toggle('hidden',browser);
  $('#demo').closest('.toggle').classList.toggle('hidden',browser);
  if(browser){$('#browserPreparedPrompt').value=browserPrompt();$('#connectionStatus').textContent='● ブラウザ利用・APIキー不要';$('#connectionStatus').classList.add('connected')}
  else if(service==='openai'){$('#connectionStatus').textContent=$('#openaiStatus').textContent.includes('接続済み')?'● OpenAI接続':'● OpenAI未接続'}
- const isTooLarge=service==='pixellab' && m==='standard' && mode==='text' && Number($('#size').value)>256;
+ const isTooLarge=service==='pixellab' && m==='standard' && mode==='text' && Math.max(Number($('#imageWidth').value),Number($('#imageHeight').value))>256;
  if(isTooLarge && $('#transparent').checked){$('#transparent').checked=false;toast('Pixen標準の512pxでは透過背景をオフにしました')}
  updateEstimate();
 }
@@ -72,10 +122,10 @@ async function fetchBalance(silent=false){try{const b=await api('/pixel/api/bala
 function jobFiles(job){return (job.files||[]).filter(f=>f!=='reference.png')}
 function setCompareOptions(job){const sel=$('#compareSelect'),before=sel.value;sel.replaceChildren();const src=document.createElement('option');src.value='reference';src.textContent='今回の元画像';sel.append(src);const empty=document.createElement('option');empty.value='none';empty.textContent='比較しない';sel.append(empty);for(const j of allJobs.filter(x=>x.status==='completed'&&x.id!==job.id&&jobFiles(x).some(f=>f.endsWith('.png')))){const opt=document.createElement('option');opt.value=j.id;opt.textContent=`${providerName(j.provider)} ${j.model||'standard'} / ${j.created_at.slice(0,16).replace('T',' ')} / ${modeNames[j.mode]}`;sel.append(opt)}sel.value=[...sel.options].some(x=>x.value===before)?before:(job.files||[]).includes('reference.png')?'reference':'none';}
 function updateCompare(job){const choice=$('#compareSelect').value;let url=null,label='元画像';if(choice==='reference'&&(job.files||[]).includes('reference.png')){url=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/reference.png`;}else if(choice!=='reference'&&choice!=='none'){const other=allJobs.find(j=>j.id===choice&&j.status==='completed');const f=other?jobFiles(other).find(x=>x.endsWith('.png')):null;if(f){url=`/pixel/api/jobs/${encodeURIComponent(other.id)}/files/${encodeURIComponent(f)}`;label=`比較：${providerName(other.provider)} ${other.model||'standard'}`}}$('#sourceWrap').classList.toggle('hidden',!url);if(url){$('#sourcePreview').src=url;$('#leftCompareLabel').textContent=label;}}
-function displayResult(job){if(!job)return;currentJob=job.id;const firstImage=jobFiles(job).find(f=>f.endsWith('.png'));for(const id of ['useResultAsReference','copyResultImage'])$('#'+id).disabled=job.status!=='completed'||!firstImage;$('#reuseJobSettings').disabled=job.status!=='completed';const canvas=$('#previewCanvas'),badge=$('#jobBadge'),links=$('#downloads');$('#feedback').classList.toggle('hidden',job.status!=='completed');$('#compareAI').classList.toggle('hidden',job.status!=='completed'||!(job.files||[]).includes('reference.png'));$('#rateGood').classList.toggle('selected',job.rating==='good');$('#rateBad').classList.toggle('selected',job.rating==='bad');badge.textContent={queued:'待機中',processing:'生成中',completed:'完了',failed:'失敗',unknown:'結果/費用要確認'}[job.status]||job.status;links.replaceChildren();setCompareOptions(job);updateCompare(job);const list=jobFiles(job),candidate=list.find(f=>f==='effect.gif')||list.find(f=>f==='preview.gif')||list.find(f=>f.endsWith('.png'));if(job.status==='completed'&&candidate){const url=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(candidate)}`;canvas.innerHTML=`<img src="${url}" alt="生成結果">`;for(const name of list){const a=document.createElement('a');a.href=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(name)}`;a.download=name;a.textContent='↓ '+name;links.append(a)}}else if(['processing','queued'].includes(job.status)){canvas.innerHTML='<div class="empty-result"><div class="pixel-symbol">◌</div><h3>生成中です</h3><p>別作業しながら待てます。完了後に自動更新します。</p></div>'}else{canvas.innerHTML=`<div class="empty-result"><div class="pixel-symbol">▦</div><h3>${job.status==='unknown'?'結果・請求確認が必要です':'生成できませんでした'}</h3><p>${safe(job.error||'生成結果を確認できません。')}</p></div>`}let cost='未確定';if(job.provider==='chatgpt')cost='ブラウザ側で生成・本ツールからのAPI料金なし';else if(job.demo)cost='デモ（課金なし）';else if(job.usage_status==='confirmed')cost=`判明USD ${usd(job.usd_charged)} / PixelLab生成枠 ${job.generations_used??'不明'}`;else cost=`請求額不明（予約 ${usd(job.reservation_usd)}）`;$('#resultMeta').textContent=`${providerName(job.provider)} / ${job.model||'standard'} / ${modeNames[job.mode]} / ${job.provider==='openai'?job.gpt_size:job.provider==='chatgpt'?'外部生成':job.size+'px'} / ${job.created_at?.slice(0,19).replace('T',' ')} UTC / カテゴリー ${categoryLabels[job.category]||job.category||'—'} / ${cost}`;}
+function displayResult(job){if(!job)return;currentJob=job.id;const firstImage=jobFiles(job).find(f=>f.endsWith('.png'));for(const id of ['useResultAsReference','copyResultImage'])$('#'+id).disabled=job.status!=='completed'||!firstImage;$('#reuseJobSettings').disabled=job.status!=='completed';const canvas=$('#previewCanvas'),badge=$('#jobBadge'),links=$('#downloads');$('#feedback').classList.toggle('hidden',job.status!=='completed');$('#compareAI').classList.toggle('hidden',job.status!=='completed'||!(job.files||[]).includes('reference.png'));$('#rateGood').classList.toggle('selected',job.rating==='good');$('#rateBad').classList.toggle('selected',job.rating==='bad');badge.textContent={queued:'待機中',processing:'生成中',completed:'完了',failed:'失敗',unknown:'結果/費用要確認'}[job.status]||job.status;links.replaceChildren();setCompareOptions(job);updateCompare(job);const list=jobFiles(job),candidate=list.find(f=>f==='effect.gif')||list.find(f=>f==='preview.gif')||list.find(f=>f.endsWith('.png'));if(job.status==='completed'&&candidate){const url=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(candidate)}`;canvas.innerHTML=`<img src="${url}" alt="生成結果">`;for(const name of list){const a=document.createElement('a');a.href=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(name)}`;a.download=name;a.textContent='↓ '+name;links.append(a)}}else if(['processing','queued'].includes(job.status)){canvas.innerHTML='<div class="empty-result"><div class="pixel-symbol">◌</div><h3>生成中です</h3><p>別作業しながら待てます。完了後に自動更新します。</p></div>'}else{canvas.innerHTML=`<div class="empty-result"><div class="pixel-symbol">▦</div><h3>${job.status==='unknown'?'結果・請求確認が必要です':'生成できませんでした'}</h3><p>${safe(job.error||'生成結果を確認できません。')}</p></div>`}let cost='未確定';if(job.provider==='chatgpt')cost='ブラウザ側で生成・本ツールからのAPI料金なし';else if(job.demo)cost='デモ（課金なし）';else if(job.usage_status==='confirmed')cost=`判明USD ${usd(job.usd_charged)} / PixelLab生成枠 ${job.generations_used??'不明'}`;else cost=`請求額不明（予約 ${usd(job.reservation_usd)}）`;$('#resultMeta').textContent=`${providerName(job.provider)} / ${job.model||'standard'} / ${modeNames[job.mode]} / ${job.provider==='openai'?job.gpt_size:job.provider==='chatgpt'?'外部生成':job.width&&job.height?job.width+'×'+job.height+'px':job.size+'px'} / ${job.created_at?.slice(0,19).replace('T',' ')} UTC / カテゴリー ${categoryLabels[job.category]||job.category||'—'} / ${cost}`;}
 function renderHistory(jobs){$('#historyCount').textContent=jobs.length+' ITEMS';const box=$('#historyList');box.replaceChildren();if(!jobs.length){box.innerHTML='<p class="history-empty">まだ生成履歴がありません。</p>';return}for(const j of jobs){const item=document.createElement('button');item.type='button';item.className='history-item';const thumbnail=jobFiles(j).find(f=>f.endsWith('.png'));const pic=thumbnail?`<img class="history-thumb" src="/pixel/api/jobs/${encodeURIComponent(j.id)}/files/${encodeURIComponent(thumbnail)}" alt="">`:'<span class="history-thumb history-placeholder">▦</span>';const desc=j.asset_name||j.prompt||'参照画像から変換';const state={completed:'完了',processing:'生成中',queued:'待機中',failed:'失敗',unknown:'要確認'}[j.status]||j.status;item.innerHTML=`${pic}<div class="history-main"><b>${safe(desc)}</b><small>${safe(providerName(j.provider))} · ${safe(j.model||'standard')} · ${safe(modeNames[j.mode])} · ${safe(categoryLabels[j.category]||j.category||'—')} · ${safe(j.created_at.slice(0,10))} · ${state}</small></div><div class="history-pricing"><strong>${j.provider==='chatgpt'?'取込':j.demo?'DEMO':j.estimate_usd==null?'不明':usd(j.estimate_usd)}</strong><span>${j.provider==='chatgpt'?'外部利用':j.demo?'課金なし':j.usage_status==='confirmed'?'利用量確認':'見積/請求確認'}</span></div>`;item.addEventListener('click',()=>{displayResult(j);$('#create').scrollIntoView({behavior:'smooth'})});box.append(item)}}
 function fileInputUpdate(){const el=$('#referenceImage');if(uploadedPreview)URL.revokeObjectURL(uploadedPreview);if(el.files?.length){const f=el.files[0];$('#uploadName').textContent=f.name;uploadedPreview=URL.createObjectURL(f);$('#referencePreview').src=uploadedPreview;$('#referencePreview').classList.remove('hidden');$('#sourceWrap').classList.remove('hidden');$('#sourcePreview').src=uploadedPreview;}else{$('#uploadName').textContent='クリックして画像を選択';$('#referencePreview').classList.add('hidden')}}
-async function generate(){const demo=$('#demo').checked, settings=opts(), prompt=$('#description').value.trim(),file=$('#referenceImage').files[0];if(mode==='text'&&!prompt)return toast('生成したい画像を説明してください',true);if((mode==='animate'||mode==='vfx')&&!prompt)return toast('動作を説明してください',true);if(mode!=='text'&&mode!=='vfx'&&!file)return toast('元画像を選んでください',true);if(!currentEstimate)return toast('料金の目安を取得できていません',true);if(!demo){const price=currentEstimate.estimate_usd==null?`事前請求額は不明 / 仮予約 ${usd(currentEstimate.budget_reservation_usd)}（請求上限ではありません）`:`参考料金 ${usd(currentEstimate.estimate_usd)}（実額は変動あり）`;const service=settings.provider==='openai'?'OpenAI API（ChatGPT Plusとは別料金）':'PixelLab';if(!confirm(`${service}にリクエストを送信します。\n${price}${mode==='vfx'?'\n'+$('#vfxQuote').textContent:''}\n\n元画像を選んだ場合は外部APIへ送信されます。続行しますか？`))return}const data=new FormData();for(const [key,value] of Object.entries({...settings,prompt,transparent:$('#transparent').checked,demo,fidelity:$('#fidelity').value,category:currentCategory(),asset_name:$('#assetName').value.trim()})){data.set(key,String(value))}if(file)data.set('image',file);const button=$('#generate');button.disabled=true;try{const result=await api('/pixel/api/jobs',{method:'POST',body:data});toast(demo?'デモを開始しました':'APIで生成を開始しました');await refreshAll();const job=allJobs.find(j=>j.id===result.id);$('#compareSelect').value='reference';if(job)displayResult(job);watch(result.id)}catch(e){toast(e.message,true)}finally{button.disabled=false}}
+async function generate(){const demo=$('#demo').checked, settings=opts(), prompt=$('#description').value.trim(),file=$('#referenceImage').files[0];if(settings.width!==undefined&&(!Number.isInteger(settings.width)||!Number.isInteger(settings.height)||settings.width<16||settings.height<16||settings.width>512||settings.height>512))return toast('幅・高さは16〜512の整数で入力してください',true);if(mode==='text'&&!prompt)return toast('生成したい画像を説明してください',true);if((mode==='animate'||mode==='vfx')&&!prompt)return toast('動作を説明してください',true);if(mode!=='text'&&mode!=='vfx'&&!file)return toast('元画像を選んでください',true);if(!currentEstimate)return toast('料金の目安を取得できていません',true);if(!demo){const price=currentEstimate.estimate_usd==null?`事前請求額は不明 / 仮予約 ${usd(currentEstimate.budget_reservation_usd)}（請求上限ではありません）`:`参考料金 ${usd(currentEstimate.estimate_usd)}（実額は変動あり）`;const service=settings.provider==='openai'?'OpenAI API（ChatGPT Plusとは別料金）':'PixelLab';if(!confirm(`${service}にリクエストを送信します。\n${price}${mode==='vfx'?'\n'+$('#vfxQuote').textContent:''}\n\n元画像を選んだ場合は外部APIへ送信されます。続行しますか？`))return}const data=new FormData();for(const [key,value] of Object.entries({...settings,prompt,transparent:$('#transparent').checked,demo,fidelity:$('#fidelity').value,category:currentCategory(),asset_name:$('#assetName').value.trim()})){data.set(key,String(value))}if(file)data.set('image',file);const button=$('#generate');button.disabled=true;try{const result=await api('/pixel/api/jobs',{method:'POST',body:data});toast(demo?'デモを開始しました':'APIで生成を開始しました');await refreshAll();const job=allJobs.find(j=>j.id===result.id);$('#compareSelect').value='reference';if(job)displayResult(job);watch(result.id)}catch(e){toast(e.message,true)}finally{button.disabled=false}}
 function watch(jobId){clearInterval(pollTimer);pollTimer=setInterval(async()=>{try{const job=await api('/pixel/api/jobs/'+encodeURIComponent(jobId));if(job.id===currentJob)displayResult(job);if(['completed','failed','unknown'].includes(job.status)){clearInterval(pollTimer);await refreshAll();if(job.provider==='pixellab'&&!job.demo)await fetchBalance(true);toast(job.status==='completed'?'生成が完了しました':'結果と料金を確認してください',job.status!=='completed')}}catch(e){clearInterval(pollTimer);toast(e.message,true)}},2000)}
 async function compareWithOllama(){const model=$('#ollamaModel').value;if(!model)return toast('まずOllamaのVisionモデルを選択してください',true);const job=allJobs.find(x=>x.id===currentJob);if(!job||!job.files?.includes('reference.png'))return toast('元画像がある履歴を選んでください',true);const btn=$('#compareWithOllama');btn.disabled=true;try{const d=await postJSON('/pixel/api/ollama/compare',{model,job_id:job.id});$('#ollamaOutput').value=d.text;$('#ollamaOutputLabel').textContent='元画像との比較・改善点';$('#ollamaOutputWrap').classList.remove('hidden');$('#applyOllama').classList.add('hidden');$('#ollamaPanel').scrollIntoView({behavior:'smooth'});toast('比較結果を取得しました。')}catch(e){toast(e.message,true)}finally{btn.disabled=false}}
 async function refreshOllama(){const el=$('#ollamaStatus'),sel=$('#ollamaModel'),old=sel.value;el.textContent='ローカルOllamaを探しています…';try{const d=await api('/pixel/api/ollama/models');sel.replaceChildren();ollamaModels=d.models||[];if(!d.connected||!ollamaModels.length){const o=document.createElement('option');o.value='';o.textContent=d.connected?'インストール済みモデルなし':'未接続';sel.append(o);el.textContent=d.connected?'Ollamaは起動していますがモデルがありません。':'Ollama未接続。';return;}for(const m of ollamaModels){const o=document.createElement('option');o.value=m;o.textContent=m;sel.append(o)}if(ollamaModels.includes(old))sel.value=old;else{const vision=ollamaModels.find(x=>/llava|gemma|qwen.*vl|vision|moondream|minicpm/i.test(x));if(vision)sel.value=vision}el.textContent=`接続済み：${ollamaModels.length}モデル。画像解析はVisionモデルを選んでください。`;}catch(e){el.textContent='Ollamaを確認できません：'+e.message}}
@@ -89,7 +139,7 @@ async function clipboardReadButton(){try{if(!navigator.clipboard?.read)throw new
 async function importChatGPT(){const file=pastedResultFile||$('#importResult').files[0];if(!file)return toast('画像を貼り付けるか、ファイルを選択してください',true);if(importBusy)return;importBusy=true;const data=new FormData();data.set('result_image',file);data.set('prompt',$('#description').value.trim());data.set('mode',mode);data.set('category', currentCategory());data.set('asset_name', $('#assetName').value.trim());const reference=$('#referenceImage').files[0];if(reference&&mode==='convert')data.set('reference',reference);const button=$('#importChatGPT');if(button)button.disabled=true;try{const result=await api('/pixel/api/import-chatgpt',{method:'POST',body:data});await refreshAll();const job=allJobs.find(j=>j.id===result.id);if(job){displayResult(job);$('#compareSelect').value=reference?'reference':'none';updateCompare(job)}$('#importStatus').textContent='取り込み完了。';pastedResultFile=null;$('#importResult').value='';if(pastedResultUrl){URL.revokeObjectURL(pastedResultUrl);pastedResultUrl=null}$('#chatgptImportPreview').classList.add('hidden');toast('画像を取り込みました。')}catch(e){$('#importStatus').textContent='取り込み失敗：'+e.message;toast(e.message,true)}finally{if(button)button.disabled=false;importBusy=false}}
 async function jobImageFile(job, preferReference=false){const filename=preferReference&&job.files?.includes('reference.png')?'reference.png':jobFiles(job).find(f=>f.endsWith('.png'));if(!filename)throw Error('利用できる画像がありません');const url=`/pixel/api/jobs/${encodeURIComponent(job.id)}/files/${encodeURIComponent(filename)}`;const r=await fetch(url);if(!r.ok)throw Error('画像を取得できませんでした');const blob=await r.blob();return new File([blob],filename,{type:'image/png'})}
 async function useResultAsReference(){const job=allJobs.find(j=>j.id===currentJob);if(!job)return;try{const file=await jobImageFile(job);setReferenceFile(file);$('#create').scrollIntoView({behavior:'smooth'});toast('生成画像を参照画像にセットしました。')}catch(e){toast(e.message,true)}}
-async function reuseJobSettings(){const job=allJobs.find(j=>j.id===currentJob);if(!job)return;try{$('#provider').value=job.provider||'pixellab';setProvider();if([...$('#model').options].some(x=>x.value===job.model))$('#model').value=job.model;setMode(job.mode||'text');if(job.size&&[...$('#size').options].some(x=>+x.value===job.size))$('#size').value=job.size;if(job.frames)$('#frames').value=job.frames;if(job.fidelity&&[...$('#fidelity').options].some(x=>x.value===job.fidelity))$('#fidelity').value=job.fidelity;if(job.quality)$('#quality').value=job.quality;if(job.gpt_size)$('#gptSize').value=job.gpt_size;if(typeof job.transparent==='boolean')$('#transparent').checked=job.transparent;$('#description').value=job.prompt||'';$('#assetCategory').value=job.category||autoCategoryForMode(job.mode||'text');$('#assetName').value=job.asset_name||'';if(job.files?.includes('reference.png')){const file=await jobImageFile(job,true);setReferenceFile(file)}refreshUI();$('#create').scrollIntoView({behavior:'smooth'});toast('前回の設定と参照画像を再利用しました。')}catch(e){toast(e.message,true)}}
+async function reuseJobSettings(){const job=allJobs.find(j=>j.id===currentJob);if(!job)return;try{$('#provider').value=job.provider||'pixellab';setProvider();if([...$('#model').options].some(x=>x.value===job.model))$('#model').value=job.model;setMode(job.mode||'text');if(job.size&&[...$('#size').options].some(x=>+x.value===job.size))$('#size').value=job.size;if(job.frames)$('#frames').value=job.frames;if(job.width)$('#imageWidth').value=job.width;if(job.height)$('#imageHeight').value=job.height;if(job.fidelity&&[...$('#fidelity').options].some(x=>x.value===job.fidelity))$('#fidelity').value=job.fidelity;if(job.quality)$('#quality').value=job.quality;if(job.gpt_size)$('#gptSize').value=job.gpt_size;if(typeof job.transparent==='boolean')$('#transparent').checked=job.transparent;$('#description').value=job.prompt||'';$('#assetCategory').value=job.category||autoCategoryForMode(job.mode||'text');$('#assetName').value=job.asset_name||'';if(job.files?.includes('reference.png')){const file=await jobImageFile(job,true);setReferenceFile(file)}refreshUI();$('#create').scrollIntoView({behavior:'smooth'});toast('前回の設定と参照画像を再利用しました。')}catch(e){toast(e.message,true)}}
 async function copyResultImage(){const job=allJobs.find(j=>j.id===currentJob);if(!job)return;try{const file=await jobImageFile(job);if(!navigator.clipboard?.write || typeof ClipboardItem==='undefined')throw Error('画像コピーに対応していない環境です。');const bitmap=await createImageBitmap(file);const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;canvas.getContext('2d').drawImage(bitmap,0,0);bitmap.close();const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw Error('コピー用の画像を作成できませんでした');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);toast('画像をクリップボードにコピーしました。')}catch(e){toast(e.message,true)}}
 function handleImagePaste(ev){const items=[...(ev.clipboardData?.items||[])];const item=items.find(x=>x.kind==='file'&&x.type.startsWith('image/'));if(!item)return;const file=item.getAsFile();if(!file)return;if(getProvider()==='chatgpt'){ev.preventDefault();clipboardFile(file)}else if(mode==='convert'||mode==='animate'||mode==='vfx'){ev.preventDefault();setReferenceFile(file)}}
 function bindFileDrop(el,handler){if(!el)return;el.addEventListener('dragover',ev=>{if(![...ev.dataTransfer.types].includes('Files'))return;ev.preventDefault();el.classList.add('drag-active')});el.addEventListener('dragleave',()=>el.classList.remove('drag-active'));el.addEventListener('drop',ev=>{el.classList.remove('drag-active');if(!ev.dataTransfer.files.length)return;ev.preventDefault();handler(ev.dataTransfer.files[0])})}
@@ -113,11 +163,14 @@ async function refreshAll(){const s=await status();await Promise.all([loadAssets
 function attachEvents(){
  document.querySelectorAll('.tab').forEach(el=>el.addEventListener('click',()=>{if(!el.disabled)setMode(el.dataset.mode)}));
  $('#provider').addEventListener('change',setProvider);$('#model').addEventListener('change',refreshUI);
- for(const id of ['size','frames','fidelity','quality','gptSize','reservation','demo','transparent','assetCategory'])$('#'+id).addEventListener('change',refreshUI);
+ for(const id of ['size','frames','fidelity','quality','gptSize','reservation','demo','transparent','assetCategory','imageWidth','imageHeight'])$('#'+id).addEventListener('change',refreshUI);
+ for(const id of ['imageWidth','imageHeight'])$('#'+id).addEventListener('input',refreshUI);
+ document.querySelectorAll('[data-purpose]').forEach(el=>el.addEventListener('click',()=>applyPurpose(el.dataset.purpose)));
+ document.querySelectorAll('[data-dims]').forEach(el=>el.addEventListener('click',()=>{const [w,h]=el.dataset.dims.split('x').map(Number);$('#imageWidth').value=w;$('#imageHeight').value=h;refreshUI()}));
  $('#description').addEventListener('input',()=>{if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt()});
- $('#referenceImage').addEventListener('change',()=>{fileInputUpdate();updateEstimate()});$('#compareSelect').addEventListener('change',()=>{const job=allJobs.find(j=>j.id===currentJob);if(job)updateCompare(job)});
+ $('#referenceImage').addEventListener('change',()=>{fileInputUpdate();updateEstimate();updateAnimationHelp()});$('#compareSelect').addEventListener('change',()=>{const job=allJobs.find(j=>j.id===currentJob);if(job)updateCompare(job)});
  document.querySelectorAll('[data-text]').forEach(b=>b.addEventListener('click',()=>{$('#description').value=b.dataset.text;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt()}));
- $('#generate').addEventListener('click',generate);$('#refreshBalance').addEventListener('click',()=>fetchBalance());
+ $('#generate').addEventListener('click',generate);attachUIFrameEvents();$('#refreshBalance').addEventListener('click',()=>fetchBalance());
  for(const [provider,input,save,clear] of [['pixellab','apiToken','saveToken','clearToken'],['openai','openaiToken','saveOpenAI','clearOpenAI']]){$('#'+save).addEventListener('click',async()=>{const token=$('#'+input).value.trim();if(!token)return toast('APIキーを入力してください',true);try{await postJSON('/pixel/api/session',{token,provider});$('#'+input).value='';await status();if(provider==='pixellab')await fetchBalance(true);toast((provider==='openai'?'OpenAI':'PixelLab')+'キーをメモリに設定しました')}catch(e){toast(e.message,true)}});$('#'+clear).addEventListener('click',async()=>{try{await api('/pixel/api/session?provider='+provider,{method:'DELETE'});await status();if(provider==='pixellab'){$('#providerCredits').textContent='—';$('#providerGenerations').textContent='—'}toast('接続情報を解除しました')}catch(e){toast(e.message,true)}})}
  $('#saveBudget').addEventListener('click',async()=>{try{await postJSON('/pixel/api/settings',{budget_usd:Number($('#budget').value)});await status();toast('月間予算を保存しました')}catch(e){toast(e.message,true)}});
  $('#newWindow').addEventListener('click',()=>window.open('/pixel/','_blank','noopener'));$('#refreshOllama').addEventListener('click',refreshOllama);$('#improvePrompt').addEventListener('click',()=>ollamaAssist('refine'));$('#describeImage').addEventListener('click',()=>ollamaAssist('describe'));$('#compareWithOllama').addEventListener('click',compareWithOllama);$('#applyOllama').addEventListener('click',()=>{savedPrompt=$('#description').value;$('#description').value=$('#ollamaOutput').value.slice(0,2000);if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();$('#undoPrompt').classList.remove('hidden');toast('プロンプトに反映しました。')});$('#undoPrompt').addEventListener('click',()=>{if(savedPrompt!==null){$('#description').value=savedPrompt;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();savedPrompt=null;$('#undoPrompt').classList.add('hidden');toast('変更前の指示に戻しました')}});$('#launchChatGPT').addEventListener('click',launchChatGPT);if($('#importChatGPT'))$('#importChatGPT').addEventListener('click',importChatGPT);$('#pasteChatGPT').addEventListener('click',clipboardReadButton);$('#copyBrowserPrompt').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(browserPrompt());toast('プロンプトをコピーしました')}catch(e){toast('コピー失敗：'+e.message,true)}});$('#importResult').addEventListener('change',()=>{if($('#importResult').files[0])clipboardFile($('#importResult').files[0])});document.addEventListener('paste',handleImagePaste);bindFileDrop($('#chatgptDropzone'),file=>{if(getProvider()!=='chatgpt'){$('#provider').value='chatgpt';setProvider()}clipboardFile(file)});bindFileDrop(document.querySelector('#imageField .dropzone'),setReferenceFile);$('#useResultAsReference').addEventListener('click',useResultAsReference);$('#reuseJobSettings').addEventListener('click',reuseJobSettings);$('#copyResultImage').addEventListener('click',copyResultImage);$('#toggleAccount').addEventListener('click',()=>{const collapsed=$('#account').classList.toggle('collapsed');$('#toggleAccount').textContent=collapsed?'接続・料金を表示 ▾':'接続・料金を閉じる ▴';$('#toggleAccount').setAttribute('aria-expanded',String(!collapsed))});for(const [id,rating] of [['rateGood','good'],['rateBad','bad']])$('#'+id).addEventListener('click',async()=>{if(!currentJob)return;try{await postJSON(`/pixel/api/jobs/${encodeURIComponent(currentJob)}/rating`,{rating});const s=await status();const j=s.jobs.find(x=>x.id===currentJob);if(j)displayResult(j);toast('評価をローカルに保存しました')}catch(e){toast(e.message,true)}});
@@ -326,3 +379,128 @@ function installBattleControls(){
  window.addEventListener('beforeunload',stopBattleSounds);
 }
 installBattleControls();
+
+
+// Local 9-slice UI frame builder. No external API call until the user explicitly
+// chooses a separate generation action in the workbench.
+function makeUIFrameTemplate(theme){
+ const colors={
+  navy:['#101d34','#273f60','#d3aa61','#816c56'],
+  brown:['#2b201b','#51392a','#efd09a','#a88661'],
+  green:['#142b29','#28574a','#c7dfd6','#73998d']
+ }[theme]||['#101d34','#273f60','#d3aa61','#816c56'];
+ const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;
+ const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;
+ ctx.fillStyle=colors[0];ctx.fillRect(0,0,64,64);
+ ctx.fillStyle=colors[1];ctx.fillRect(3,3,58,58);
+ ctx.fillStyle=colors[0];ctx.fillRect(6,6,52,52);
+ ctx.fillStyle=colors[2];
+ ctx.fillRect(0,0,64,2);ctx.fillRect(0,62,64,2);ctx.fillRect(0,0,2,64);ctx.fillRect(62,0,2,64);
+ ctx.fillStyle=colors[3];
+ ctx.fillRect(3,3,58,1);ctx.fillRect(3,60,58,1);ctx.fillRect(3,3,1,58);ctx.fillRect(60,3,1,58);
+ for(const [x,y] of [[1,1],[55,1],[1,55],[55,55]]){
+  ctx.fillStyle=colors[2];ctx.fillRect(x,y,8,8);
+  ctx.fillStyle=colors[0];ctx.fillRect(x+2,y+2,4,4);
+ }
+ return canvas;
+}
+function tileUIArea(ctx,source,sx,sy,sw,sh,dx,dy,dw,dh){
+ if(sw<=0||sh<=0||dw<=0||dh<=0)return;
+ for(let y=0;y<dh;y+=sh)for(let x=0;x<dw;x+=sw){
+  const cw=Math.min(sw,dw-x),ch=Math.min(sh,dh-y);
+  ctx.drawImage(source,sx,sy,cw,ch,dx+x,dy+y,cw,ch);
+ }
+}
+function renderUIFrame(){
+ const state=$('#uiFrameStatus'),canvas=$('#uiFrameCanvas');
+ if(!canvas)return;
+ const theme=$('#uiTheme').value;
+ const source=theme==='custom'?uiFrameSource:makeUIFrameTemplate(theme);
+ const width=Number($('#uiTargetWidth').value),height=Number($('#uiTargetHeight').value),corner=Number($('#uiCornerSize').value);
+ const valid=source&&[width,height,corner].every(Number.isInteger)&&width>=32&&width<=2048&&height>=24&&height<=1024&&corner>=1&&corner<=256&&corner*2<Math.min(source.width,source.height,width,height);
+ $('#uiDownload').disabled=!valid;$('#uiRegister').disabled=!valid;
+ if(!valid){
+  state.textContent=source?'寸法を確認してください。角は原画と出力の幅・高さの半分未満にしてください。':'画像が未読み込みです。サンプルを選ぶか原画を読み込んでください。';
+  state.classList.add('limit-warning');return;
+ }
+ state.classList.remove('limit-warning');
+ canvas.width=width;canvas.height=height;
+ const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;
+ const sw=source.width,sh=source.height,c=corner,midW=width-2*c,midH=height-2*c;
+ // Center, four edges, four corners. Tile instead of blurring or stretching.
+ tileUIArea(ctx,source,c,c,sw-2*c,sh-2*c,c,c,midW,midH);
+ tileUIArea(ctx,source,c,0,sw-2*c,c,c,0,midW,c);
+ tileUIArea(ctx,source,c,sh-c,sw-2*c,c,c,height-c,midW,c);
+ tileUIArea(ctx,source,0,c,c,sh-2*c,0,c,c,midH);
+ tileUIArea(ctx,source,sw-c,c,c,sh-2*c,width-c,c,c,midH);
+ ctx.drawImage(source,0,0,c,c,0,0,c,c);
+ ctx.drawImage(source,sw-c,0,c,c,width-c,0,c,c);
+ ctx.drawImage(source,0,sh-c,c,c,0,height-c,c,c);
+ ctx.drawImage(source,sw-c,sh-c,c,c,width-c,height-c,c,c);
+ $('#uiFrameSize').textContent=width+' × '+height+' px';
+ state.textContent='原画 '+sw+'×'+sh+'px / 四隅 '+c+'px / 出力 '+width+'×'+height+'px。繰り返し部分の継ぎ目を確認してください。';
+}
+async function setUIFrameSource(file){
+ if(!file||!['image/png','image/webp'].includes(file.type)||file.size>12*1024*1024){
+  toast('12MB以下のPNGまたはWebPを選んでください',true);return;
+ }
+ try{
+  const bitmap=await createImageBitmap(file);
+  if(bitmap.width>2048||bitmap.height>2048||bitmap.width<3||bitmap.height<3){bitmap.close();throw Error('原画は3〜2048pxの範囲で指定してください');}
+  if(uiFrameSource&&typeof uiFrameSource.close==='function')uiFrameSource.close();
+  uiFrameSource=bitmap;$('#uiTheme').value='custom';renderUIFrame();toast('枠の原画を読み込みました');
+ }catch(e){toast('原画の読み込み：'+e.message,true)}
+}
+function uiPNGBlob(){
+ return new Promise((resolve,reject)=>$('#uiFrameCanvas').toBlob(blob=>blob?resolve(blob):reject(Error('PNGを作成できませんでした')),'image/png'));
+}
+function uiFrameFilename(){
+ const raw=($('#uiFrameName').value||'ui_frame').trim().replace(/[\\/:*?"<>|]/g,'_').slice(0,90);
+ return (raw||'ui_frame')+'.png';
+}
+function attachUIFrameEvents(){
+ if(!$('#uiFrameCanvas'))return;
+ $('#uiTheme').addEventListener('change',renderUIFrame);
+ $('#uiSourceFile').addEventListener('change',()=>{if($('#uiSourceFile').files[0])setUIFrameSource($('#uiSourceFile').files[0])});
+ $('#uiFramePreset').addEventListener('change',()=>{
+  if($('#uiFramePreset').value!=='custom'){
+   const [w,h]=$('#uiFramePreset').value.split('x').map(Number);
+   $('#uiTargetWidth').value=w;$('#uiTargetHeight').value=h;
+  }
+  renderUIFrame();
+ });
+ for(const id of ['uiTargetWidth','uiTargetHeight','uiCornerSize']){
+  $('#'+id).addEventListener('input',()=>{
+   if(id!=='uiCornerSize')$('#uiFramePreset').value='custom';
+   renderUIFrame();
+  });
+ }
+ $('#uiUseCurrent').addEventListener('click',async()=>{
+  const job=allJobs.find(j=>j.id===currentJob);
+  if(!job||job.status!=='completed')return toast('先に生成済みの画像をプレビューから選んでください',true);
+  try{await setUIFrameSource(await jobImageFile(job));$('#ui-frame').scrollIntoView({behavior:'smooth'})}
+  catch(e){toast(e.message,true)}
+ });
+ $('#uiDownload').addEventListener('click',async()=>{
+  try{
+   const blob=await uiPNGBlob(),url=URL.createObjectURL(blob),link=document.createElement('a');
+   link.href=url;link.download=uiFrameFilename();document.body.append(link);link.click();link.remove();
+   setTimeout(()=>URL.revokeObjectURL(url),1000);
+   toast('UI枠のPNGを保存しました');
+  }catch(e){toast(e.message,true)}
+ });
+ $('#uiRegister').addEventListener('click',async()=>{
+  const button=$('#uiRegister');button.disabled=true;
+  try{
+   const blob=await uiPNGBlob(),form=new FormData();
+   form.set('file',new File([blob],uiFrameFilename(),{type:'image/png'}));
+   form.set('name',($('#uiFrameName').value||'UI枠').trim());
+   form.set('category','ui');form.set('columns','1');form.set('rows','1');
+   await api('/pixel/api/assets/import',{method:'POST',body:form});
+   await loadAssets($('#assetFilter')?.value||'');
+   toast('UI枠をアセットに登録しました');
+  }catch(e){toast('UI枠の登録：'+e.message,true)}
+  finally{button.disabled=false}
+ });
+ renderUIFrame();
+}
