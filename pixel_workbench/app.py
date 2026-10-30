@@ -166,6 +166,7 @@ def estimate_usd(mode: str, size: int, frames: int = 8, provider: str='pixellab'
     if mode == 'convert':
         return {32:.006,64:.006,96:.0064,128:.00666,192:.009,256:.01164,512:None}.get(size)
     if mode == 'animate':
+        if frames not in (4,8,16): return None  # No reliable fixed USD quote for intermediate counts.
         if size <= 64 and frames <= 4: return .0221
         if size <= 256 and frames <= 8: return .0302
         return .0424
@@ -441,7 +442,7 @@ def gpt_prompt(user_prompt: str, mode: str, fidelity: str) -> str:
 
 def demo_images(mode: str, size: int, frames: int, width: int | None=None, height: int | None=None) -> list[bytes]:
     import math
-    count = frames + 1 if mode == 'animate' else 1
+    count = frames if mode == 'animate' else 1
     result = []
     canvas_size = min(max(size, 32), 256)
     for frame in range(count):
@@ -962,7 +963,7 @@ def set_settings(data: SettingsRequest):
 
 
 def validate_options(mode: str, size: int, frames: int, provider: str, model: str, quality: str, gpt_size: str, width: int | None = None, height: int | None = None) -> None:
-    if mode not in ('text','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,8,16):
+    if mode not in ('text','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,6,8,10,12,14,16):
         raise ValueError('生成条件を確認してください。')
     if provider not in ('pixellab','openai'):
         raise ValueError('未対応のプロバイダーです。')

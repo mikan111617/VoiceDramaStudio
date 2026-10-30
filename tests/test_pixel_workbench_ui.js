@@ -20,7 +20,9 @@ for (const id of [
   'imageWidth', 'imageHeight', 'dimensionsField', 'animationHelp',
   'ui-frame', 'uiTheme', 'uiSourceFile', 'uiFramePreset',
   'uiTargetWidth', 'uiTargetHeight', 'uiCornerSize', 'uiFrameName',
-  'uiFrameCanvas', 'uiFrameStatus', 'uiDownload', 'uiRegister', 'uiUseCurrent'
+  'uiFrameCanvas', 'uiFrameStatus', 'uiDownload', 'uiRegister', 'uiUseCurrent',
+  'uiAIPreset', 'uiAIPrompt', 'uiAIColors', 'uiAIWidth', 'uiAIHeight', 'uiAITransparent', 'uiAIDemo',
+  'uiAIGenerate', 'uiAIStatus', 'uiAIState', 'uiAIResult', 'uiAIEmpty', 'uiAIDownload', 'uiAIGoHistory'
 ]) {
   assert.ok(html.includes('id="' + id + '"'), 'Missing UI control: ' + id);
 }
@@ -30,6 +32,14 @@ for (const use of ['data-purpose="window"', 'data-purpose="nine"', 'data-purpose
 assert.match(js, /function applyPurpose\(/);
 assert.match(js, /function updateAnimationHelp\(/);
 assert.match(js, /524288/);
+assert.match(js, /function attachUIAIGenerationEvents\(/);
+assert.match(js, /function syncUIAIPreview\(/);
+assert.match(js, /return result\.id/);
+assert.match(js, /uiAIJobId/);
+assert.match(js, /total|総コマ数|総フレーム数/);
+assert.match(html, /id="uiAIDemo"/);
+assert.match(html, /value="14">14コマ/);
+assert.match(py, /4,6,8,10,12,14,16/);
 assert.match(js, /function renderUIFrame\(/);
 assert.match(js, /function tileUIArea\(/);
 assert.match(js, /imageSmoothingEnabled=false/);
