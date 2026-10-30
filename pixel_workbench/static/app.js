@@ -14,7 +14,7 @@ function getProvider(){return $('#provider').value}
 function getModel(){return $('#model').value}
 function currentCategory(){return $('#assetCategory')?.value||'other'}
 function opts(){
- const options={provider:getProvider(),model:getModel(),mode,size:Number($('#size').value),frames:Number($('#frames').value),quality:$('#quality').value,gpt_size:$('#gptSize').value,reservation_usd:Number($('#reservation').value)};
+ const options={provider:getProvider(),model:getModel(),mode,size:Number($('#size').value),frames:Number($('#frames').value),quality:$('#quality').value,gpt_size:$('#gptSize').value,reservation_usd:Number($('#reservation').value),category:currentCategory()};
  if(mode==='text'&&getProvider()==='pixellab'){
   options.width=Number($('#imageWidth').value);
   options.height=Number($('#imageHeight').value);
@@ -38,6 +38,8 @@ function applyPurpose(name){
  setMode(p.mode);
  if(p.width){$('#imageWidth').value=p.width;$('#imageHeight').value=p.height}
  $('#assetCategory').value=p.category;
+ if(p.category==='ui')$('#model').value='pro';
+ else if(p.mode==='text')$('#model').value='standard';
  $('#description').value=p.prompt;
  $('#purposeSummary').textContent=p.label+'向けの初期設定を反映しました。文章・寸法は自由に編集できます。'+(name==='nine'?' ※ 9-sliceへの切り出しは未実装です。':'');
  document.querySelectorAll('[data-purpose]').forEach(b=>{const selected=b.dataset.purpose===name;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected))});
@@ -68,7 +70,10 @@ function refreshUI(){
  document.querySelector('[data-mode="animate"]').disabled=gpt||browser;
  document.querySelector('[data-mode="vfx"]').disabled=gpt||browser;
  $('#vfxPanel').classList.toggle('hidden',mode!=='vfx');
- if(service==='pixellab')for(const option of $('#model').options){option.textContent=mode==='vfx'?(option.value==='standard'?'Lite（VFX・低消費）':'Pro（VFX・高品質）'):(option.value==='standard'?'Standard（Pixen / 通常変換）':'Pro（高品質モデル）');}
+ if(service==='pixellab')for(const option of $('#model').options){
+ const ui=mode==='text'&&currentCategory()==='ui';
+ option.textContent=mode==='vfx'?(option.value==='standard'?'Lite（VFX・低消費）':'Pro（VFX・高品質）'):ui?(option.value==='standard'?'Standard（汎用画像生成）':'Pro（UI専用生成API）'):(option.value==='standard'?'Standard（Pixen / 通常変換）':'Pro（高品質モデル）');
+}
  $('#imageField').classList.toggle('hidden',mode==='text');
  $('#framesField').classList.toggle('hidden',mode!=='animate');
  $('#presets').classList.toggle('hidden',mode!=='text');
@@ -88,11 +93,11 @@ function refreshUI(){
  $('#description').placeholder=mode==='vfx'?'例：上空から青白い稲妻が3本落ち、地面で火花が散って消える。8フレーム程度、背景透明。':mode==='animate'?'例：立っているキャラクターが本を開く。自然なループ動作。':mode==='convert'?'例：元の顔つきや頭身を保ち、緻密な16bitドット絵にしてください（任意）':'例：温かい雰囲気の本を持つ女性、全身立ち絵、繊細なドット絵';
  $('#imageLabel').textContent=mode==='vfx'?'キャラクター画像（任意・512px以下）':mode==='animate'?'動かすドット絵': '変換元の画像';
  $('#modeGuide').textContent=mode==='text'?'新規生成｜文章から静止画を1枚作成。PixelLabなら幅と高さを指定でき、横長UI枠も作れます。':mode==='convert'?'画像から変換｜元画像が必要です。Standardはサイズと忠実度を指定、Proはモデル側が出力寸法を決めます。':mode==='animate'?'アニメ生成｜最初の画像を1枚用意し、その続きの4・8・16枚をAIが生成します。元画像を含めると5・9・17枚です。':'エフェクト生成｜落雷・炎・斬撃などを生成。コマ数とサイズはVFXサービス側で決定されます。';
- $('#providerGuide').textContent=browser?'ChatGPT Plusは画面内で直接生成しません。指示をコピーし、画像を貼り付けてください。':gpt?'OpenAI画像APIは静止画・変換のみ。GPT用サイズは専用項目で選びます。':mode==='vfx'?'VFXはPixelLab専用。生成コマ数は選択できず、実際の結果を確認してください。':'PixelLab APIを利用。標準の新規生成なら幅・高さ16〜512pxを別々に指定できます。';
+ $('#providerGuide').textContent=browser?'ChatGPT Plusは画面内で直接生成しません。指示をコピーし、画像を貼り付けてください。':gpt?'OpenAI画像APIは静止画・変換のみ。GPT用サイズは専用項目で選びます。':mode==='vfx'?'VFXはPixelLab専用。生成コマ数は選択できず、実際の結果を確認してください。':mode==='text'&&currentCategory()==='ui'?(m==='pro'?'UI専用のPixelLab Pro APIを使用します。枠・ボタン・HPバーなどの素材を作成。料金は送信前に確認し、予約額は請求上限ではありません。':'汎用のPixen生成でUIを作ります。UI専用モデルを使うならProに変更してください。'):'PixelLab APIを利用。新規生成なら幅・高さ16〜512pxを別々に指定できます。';
  updateAnimationHelp();
  $('#sizeHint').textContent=mode==='convert'?'元の縦横比を保ち、指定値を長辺の目安として使用':mode==='animate'?'入力の長辺を最大256pxに調整':'PixelLab新規生成では正方形';
  $('#fidelityHint').textContent=browser?'ChatGPTに渡すプロンプトに忠実度を反映します':gpt?'GPTへの編集指示に忠実度を反映（元画像通りを保証するものではありません）':pro?'Proは細かな忠実度パラメータ非対応（文章で調整）':'StandardではFaithful modeを調整。追加の文章指示はAPIに送信されません';
- $('#generatedLabel').textContent=mode==='vfx'?'VFXアニメーション（GIF）':browser?'ChatGPTで生成した画像（貼り付け取り込み）':gpt?'GPT生成画像':'PixelLab生成画像';
+ $('#generatedLabel').textContent=mode==='vfx'?'VFXアニメーション（GIF）':browser?'ChatGPTで生成した画像（貼り付け取り込み）':gpt?'GPT生成画像':mode==='text'&&currentCategory()==='ui'?'PixelLab UI枠素材':'PixelLab生成画像';
  $('#generate').classList.toggle('hidden',browser);
  $('#demo').closest('.toggle').classList.toggle('hidden',browser);
  if(browser){$('#browserPreparedPrompt').value=browserPrompt();$('#connectionStatus').textContent='● ブラウザ利用・APIキー不要';$('#connectionStatus').classList.add('connected')}
