@@ -1,5 +1,6 @@
 'use strict';
 const $ = q => document.querySelector(q);
+let uiFrameSource=null;
 let mode='text', currentJob=null, pollTimer=null, uploadedPreview=null, allJobs=[], allAssets=[], allSequences=[], currentEstimate=null, savedPrompt=null, ollamaModels=[], pastedResultFile=null, pastedResultUrl=null, importBusy=false, currentSequenceId='';
 const modeNames={text:'新規生成',convert:'参照画像から変換',animate:'アニメーション',vfx:'エフェクト専用'};
 const modelChoices={pixellab:[['standard','Standard（Pixen / 通常変換）'],['pro','Pro（高品質モデル）']],openai:[['gpt-image-2','GPT Image 2'],['gpt-image-2.5-flare','GPT Image 2.5 Flare'],['gpt-image-2.5-sunburst','GPT Image 2.5 Sunburst']],chatgpt:[['browser','ChatGPT Plus（コピー＆貼り付け）']]};
@@ -169,7 +170,7 @@ function attachEvents(){
  $('#description').addEventListener('input',()=>{if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt()});
  $('#referenceImage').addEventListener('change',()=>{fileInputUpdate();updateEstimate();updateAnimationHelp()});$('#compareSelect').addEventListener('change',()=>{const job=allJobs.find(j=>j.id===currentJob);if(job)updateCompare(job)});
  document.querySelectorAll('[data-text]').forEach(b=>b.addEventListener('click',()=>{$('#description').value=b.dataset.text;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt()}));
- $('#generate').addEventListener('click',generate);$('#refreshBalance').addEventListener('click',()=>fetchBalance());
+ $('#generate').addEventListener('click',generate);attachUIFrameEvents();$('#refreshBalance').addEventListener('click',()=>fetchBalance());
  for(const [provider,input,save,clear] of [['pixellab','apiToken','saveToken','clearToken'],['openai','openaiToken','saveOpenAI','clearOpenAI']]){$('#'+save).addEventListener('click',async()=>{const token=$('#'+input).value.trim();if(!token)return toast('APIキーを入力してください',true);try{await postJSON('/pixel/api/session',{token,provider});$('#'+input).value='';await status();if(provider==='pixellab')await fetchBalance(true);toast((provider==='openai'?'OpenAI':'PixelLab')+'キーをメモリに設定しました')}catch(e){toast(e.message,true)}});$('#'+clear).addEventListener('click',async()=>{try{await api('/pixel/api/session?provider='+provider,{method:'DELETE'});await status();if(provider==='pixellab'){$('#providerCredits').textContent='—';$('#providerGenerations').textContent='—'}toast('接続情報を解除しました')}catch(e){toast(e.message,true)}})}
  $('#saveBudget').addEventListener('click',async()=>{try{await postJSON('/pixel/api/settings',{budget_usd:Number($('#budget').value)});await status();toast('月間予算を保存しました')}catch(e){toast(e.message,true)}});
  $('#newWindow').addEventListener('click',()=>window.open('/pixel/','_blank','noopener'));$('#refreshOllama').addEventListener('click',refreshOllama);$('#improvePrompt').addEventListener('click',()=>ollamaAssist('refine'));$('#describeImage').addEventListener('click',()=>ollamaAssist('describe'));$('#compareWithOllama').addEventListener('click',compareWithOllama);$('#applyOllama').addEventListener('click',()=>{savedPrompt=$('#description').value;$('#description').value=$('#ollamaOutput').value.slice(0,2000);if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();$('#undoPrompt').classList.remove('hidden');toast('プロンプトに反映しました。')});$('#undoPrompt').addEventListener('click',()=>{if(savedPrompt!==null){$('#description').value=savedPrompt;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();savedPrompt=null;$('#undoPrompt').classList.add('hidden');toast('変更前の指示に戻しました')}});$('#launchChatGPT').addEventListener('click',launchChatGPT);if($('#importChatGPT'))$('#importChatGPT').addEventListener('click',importChatGPT);$('#pasteChatGPT').addEventListener('click',clipboardReadButton);$('#copyBrowserPrompt').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(browserPrompt());toast('プロンプトをコピーしました')}catch(e){toast('コピー失敗：'+e.message,true)}});$('#importResult').addEventListener('change',()=>{if($('#importResult').files[0])clipboardFile($('#importResult').files[0])});document.addEventListener('paste',handleImagePaste);bindFileDrop($('#chatgptDropzone'),file=>{if(getProvider()!=='chatgpt'){$('#provider').value='chatgpt';setProvider()}clipboardFile(file)});bindFileDrop(document.querySelector('#imageField .dropzone'),setReferenceFile);$('#useResultAsReference').addEventListener('click',useResultAsReference);$('#reuseJobSettings').addEventListener('click',reuseJobSettings);$('#copyResultImage').addEventListener('click',copyResultImage);$('#toggleAccount').addEventListener('click',()=>{const collapsed=$('#account').classList.toggle('collapsed');$('#toggleAccount').textContent=collapsed?'接続・料金を表示 ▾':'接続・料金を閉じる ▴';$('#toggleAccount').setAttribute('aria-expanded',String(!collapsed))});for(const [id,rating] of [['rateGood','good'],['rateBad','bad']])$('#'+id).addEventListener('click',async()=>{if(!currentJob)return;try{await postJSON(`/pixel/api/jobs/${encodeURIComponent(currentJob)}/rating`,{rating});const s=await status();const j=s.jobs.find(x=>x.id===currentJob);if(j)displayResult(j);toast('評価をローカルに保存しました')}catch(e){toast(e.message,true)}});
@@ -378,3 +379,128 @@ function installBattleControls(){
  window.addEventListener('beforeunload',stopBattleSounds);
 }
 installBattleControls();
+
+
+// Local 9-slice UI frame builder. No external API call until the user explicitly
+// chooses a separate generation action in the workbench.
+function makeUIFrameTemplate(theme){
+ const colors={
+  navy:['#101d34','#273f60','#d3aa61','#816c56'],
+  brown:['#2b201b','#51392a','#efd09a','#a88661'],
+  green:['#142b29','#28574a','#c7dfd6','#73998d']
+ }[theme]||['#101d34','#273f60','#d3aa61','#816c56'];
+ const canvas=document.createElement('canvas');canvas.width=64;canvas.height=64;
+ const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;
+ ctx.fillStyle=colors[0];ctx.fillRect(0,0,64,64);
+ ctx.fillStyle=colors[1];ctx.fillRect(3,3,58,58);
+ ctx.fillStyle=colors[0];ctx.fillRect(6,6,52,52);
+ ctx.fillStyle=colors[2];
+ ctx.fillRect(0,0,64,2);ctx.fillRect(0,62,64,2);ctx.fillRect(0,0,2,64);ctx.fillRect(62,0,2,64);
+ ctx.fillStyle=colors[3];
+ ctx.fillRect(3,3,58,1);ctx.fillRect(3,60,58,1);ctx.fillRect(3,3,1,58);ctx.fillRect(60,3,1,58);
+ for(const [x,y] of [[1,1],[55,1],[1,55],[55,55]]){
+  ctx.fillStyle=colors[2];ctx.fillRect(x,y,8,8);
+  ctx.fillStyle=colors[0];ctx.fillRect(x+2,y+2,4,4);
+ }
+ return canvas;
+}
+function tileUIArea(ctx,source,sx,sy,sw,sh,dx,dy,dw,dh){
+ if(sw<=0||sh<=0||dw<=0||dh<=0)return;
+ for(let y=0;y<dh;y+=sh)for(let x=0;x<dw;x+=sw){
+  const cw=Math.min(sw,dw-x),ch=Math.min(sh,dh-y);
+  ctx.drawImage(source,sx,sy,cw,ch,dx+x,dy+y,cw,ch);
+ }
+}
+function renderUIFrame(){
+ const state=$('#uiFrameStatus'),canvas=$('#uiFrameCanvas');
+ if(!canvas)return;
+ const theme=$('#uiTheme').value;
+ const source=theme==='custom'?uiFrameSource:makeUIFrameTemplate(theme);
+ const width=Number($('#uiTargetWidth').value),height=Number($('#uiTargetHeight').value),corner=Number($('#uiCornerSize').value);
+ const valid=source&&[width,height,corner].every(Number.isInteger)&&width>=32&&width<=2048&&height>=24&&height<=1024&&corner>=1&&corner<=256&&corner*2<Math.min(source.width,source.height,width,height);
+ $('#uiDownload').disabled=!valid;$('#uiRegister').disabled=!valid;
+ if(!valid){
+  state.textContent=source?'寸法を確認してください。角は原画と出力の幅・高さの半分未満にしてください。':'画像が未読み込みです。サンプルを選ぶか原画を読み込んでください。';
+  state.classList.add('limit-warning');return;
+ }
+ state.classList.remove('limit-warning');
+ canvas.width=width;canvas.height=height;
+ const ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;
+ const sw=source.width,sh=source.height,c=corner,midW=width-2*c,midH=height-2*c;
+ // Center, four edges, four corners. Tile instead of blurring or stretching.
+ tileUIArea(ctx,source,c,c,sw-2*c,sh-2*c,c,c,midW,midH);
+ tileUIArea(ctx,source,c,0,sw-2*c,c,c,0,midW,c);
+ tileUIArea(ctx,source,c,sh-c,sw-2*c,c,c,height-c,midW,c);
+ tileUIArea(ctx,source,0,c,c,sh-2*c,0,c,c,midH);
+ tileUIArea(ctx,source,sw-c,c,c,sh-2*c,width-c,c,c,midH);
+ ctx.drawImage(source,0,0,c,c,0,0,c,c);
+ ctx.drawImage(source,sw-c,0,c,c,width-c,0,c,c);
+ ctx.drawImage(source,0,sh-c,c,c,0,height-c,c,c);
+ ctx.drawImage(source,sw-c,sh-c,c,c,width-c,height-c,c,c);
+ $('#uiFrameSize').textContent=width+' × '+height+' px';
+ state.textContent='原画 '+sw+'×'+sh+'px / 四隅 '+c+'px / 出力 '+width+'×'+height+'px。繰り返し部分の継ぎ目を確認してください。';
+}
+async function setUIFrameSource(file){
+ if(!file||!['image/png','image/webp'].includes(file.type)||file.size>12*1024*1024){
+  toast('12MB以下のPNGまたはWebPを選んでください',true);return;
+ }
+ try{
+  const bitmap=await createImageBitmap(file);
+  if(bitmap.width>2048||bitmap.height>2048||bitmap.width<3||bitmap.height<3){bitmap.close();throw Error('原画は3〜2048pxの範囲で指定してください');}
+  if(uiFrameSource&&typeof uiFrameSource.close==='function')uiFrameSource.close();
+  uiFrameSource=bitmap;$('#uiTheme').value='custom';renderUIFrame();toast('枠の原画を読み込みました');
+ }catch(e){toast('原画の読み込み：'+e.message,true)}
+}
+function uiPNGBlob(){
+ return new Promise((resolve,reject)=>$('#uiFrameCanvas').toBlob(blob=>blob?resolve(blob):reject(Error('PNGを作成できませんでした')),'image/png'));
+}
+function uiFrameFilename(){
+ const raw=($('#uiFrameName').value||'ui_frame').trim().replace(/[\\/:*?"<>|]/g,'_').slice(0,90);
+ return (raw||'ui_frame')+'.png';
+}
+function attachUIFrameEvents(){
+ if(!$('#uiFrameCanvas'))return;
+ $('#uiTheme').addEventListener('change',renderUIFrame);
+ $('#uiSourceFile').addEventListener('change',()=>{if($('#uiSourceFile').files[0])setUIFrameSource($('#uiSourceFile').files[0])});
+ $('#uiFramePreset').addEventListener('change',()=>{
+  if($('#uiFramePreset').value!=='custom'){
+   const [w,h]=$('#uiFramePreset').value.split('x').map(Number);
+   $('#uiTargetWidth').value=w;$('#uiTargetHeight').value=h;
+  }
+  renderUIFrame();
+ });
+ for(const id of ['uiTargetWidth','uiTargetHeight','uiCornerSize']){
+  $('#'+id).addEventListener('input',()=>{
+   if(id!=='uiCornerSize')$('#uiFramePreset').value='custom';
+   renderUIFrame();
+  });
+ }
+ $('#uiUseCurrent').addEventListener('click',async()=>{
+  const job=allJobs.find(j=>j.id===currentJob);
+  if(!job||job.status!=='completed')return toast('先に生成済みの画像をプレビューから選んでください',true);
+  try{await setUIFrameSource(await jobImageFile(job));$('#ui-frame').scrollIntoView({behavior:'smooth'})}
+  catch(e){toast(e.message,true)}
+ });
+ $('#uiDownload').addEventListener('click',async()=>{
+  try{
+   const blob=await uiPNGBlob(),url=URL.createObjectURL(blob),link=document.createElement('a');
+   link.href=url;link.download=uiFrameFilename();document.body.append(link);link.click();link.remove();
+   setTimeout(()=>URL.revokeObjectURL(url),1000);
+   toast('UI枠のPNGを保存しました');
+  }catch(e){toast(e.message,true)}
+ });
+ $('#uiRegister').addEventListener('click',async()=>{
+  const button=$('#uiRegister');button.disabled=true;
+  try{
+   const blob=await uiPNGBlob(),form=new FormData();
+   form.set('file',new File([blob],uiFrameFilename(),{type:'image/png'}));
+   form.set('name',($('#uiFrameName').value||'UI枠').trim());
+   form.set('category','ui');form.set('columns','1');form.set('rows','1');
+   await api('/pixel/api/assets/import',{method:'POST',body:form});
+   await loadAssets($('#assetFilter')?.value||'');
+   toast('UI枠をアセットに登録しました');
+  }catch(e){toast('UI枠の登録：'+e.message,true)}
+  finally{button.disabled=false}
+ });
+ renderUIFrame();
+}
