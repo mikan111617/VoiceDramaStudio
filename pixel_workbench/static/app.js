@@ -53,8 +53,8 @@ async function updateAnimationHelp(){
  if(file){
   try{const bitmap=await createImageBitmap(file);const scale=Math.min(1,max/Math.max(bitmap.width,bitmap.height));w=Math.max(1,Math.round(bitmap.width*scale));h=Math.max(1,Math.round(bitmap.height*scale));bitmap.close();source='参照画像の縦横比から概算';}catch(e){source='画像の寸法を確認できません'}
  }
- const cap=Math.min(16,Math.floor(524288/(w*h))),possible=[4,8,16].filter(n=>n<=cap);
- const message='元画像1枚 + 追加'+count+'枚 = 合計'+(count+1)+'枚。'+source+'：'+w+'×'+h+'pxの場合、選べる追加枚数は'+(possible.length?possible.join(' / ')+'枚':'なし')+'。';
+ const cap=Math.min(16,Math.floor(524288/(w*h))),possible=[4,6,8,10,12,14,16].filter(n=>n<=cap);
+ const message='元画像を含む総'+count+'コマ。'+source+'：'+w+'×'+h+'pxの場合、選べる総コマ数は'+(possible.length?possible.join(' / ')+'コマ':'なし')+'。';
  const label=$('#animationHelp');label.textContent=message+(count>cap?' ⚠ この組み合わせは上限を超えます。サイズか枚数を下げてください。':'');
  label.classList.toggle('limit-warning',count>cap);
 }
@@ -93,7 +93,7 @@ function refreshUI(){
  $('#promptLabel').textContent=mode==='vfx'?'どんなエフェクトを動かしますか？':mode==='animate'?'動作の説明':mode==='convert'?'追加の変換指示（省略可）':'生成したい画像の説明';
  $('#description').placeholder=mode==='vfx'?'例：上空から青白い稲妻が3本落ち、地面で火花が散って消える。8フレーム程度、背景透明。':mode==='animate'?'例：立っているキャラクターが本を開く。自然なループ動作。':mode==='convert'?'例：元の顔つきや頭身を保ち、緻密な16bitドット絵にしてください（任意）':'例：温かい雰囲気の本を持つ女性、全身立ち絵、繊細なドット絵';
  $('#imageLabel').textContent=mode==='vfx'?'キャラクター画像（任意・512px以下）':mode==='animate'?'動かすドット絵': '変換元の画像';
- $('#modeGuide').textContent=mode==='text'?'新規生成｜文章から静止画を1枚作成。PixelLabなら幅と高さを指定でき、横長UI枠も作れます。':mode==='convert'?'画像から変換｜元画像が必要です。Standardはサイズと忠実度を指定、Proはモデル側が出力寸法を決めます。':mode==='animate'?'アニメ生成｜最初の画像を1枚用意し、その続きの4・8・16枚をAIが生成します。元画像を含めると5・9・17枚です。':'エフェクト生成｜落雷・炎・斬撃などを生成。コマ数とサイズはVFXサービス側で決定されます。';
+ $('#modeGuide').textContent=mode==='text'?'新規生成｜文章から静止画を1枚作成。PixelLabなら幅と高さを指定でき、横長UI枠も作れます。':mode==='convert'?'画像から変換｜元画像が必要です。Standardはサイズと忠実度を指定、Proはモデル側が出力寸法を決めます。':mode==='animate'?'アニメ生成｜最初の画像を1枚用意し、総コマ数4〜16枚（偶数）を指定します。最初の1枚は元画像を維持します。':'エフェクト生成｜落雷・炎・斬撃などを生成。コマ数とサイズはVFXサービス側で決定されます。';
  $('#providerGuide').textContent=browser?'ChatGPT Plusは画面内で直接生成しません。指示をコピーし、画像を貼り付けてください。':gpt?'OpenAI画像APIは静止画・変換のみ。GPT用サイズは専用項目で選びます。':mode==='vfx'?'VFXはPixelLab専用。生成コマ数は選択できず、実際の結果を確認してください。':mode==='text'&&currentCategory()==='ui'?(m==='pro'?'UI専用のPixelLab Pro APIを使用します。枠・ボタン・HPバーなどの素材を作成。料金は送信前に確認し、予約額は請求上限ではありません。':'汎用のPixen生成でUIを作ります。UI専用モデルを使うならProに変更してください。'):'PixelLab APIを利用。新規生成なら幅・高さ16〜512pxを別々に指定できます。';
  updateAnimationHelp();
  $('#sizeHint').textContent=mode==='convert'?'元の縦横比を保ち、指定値を長辺の目安として使用':mode==='animate'?'入力の長辺を最大256pxに調整':'PixelLab新規生成では正方形';
