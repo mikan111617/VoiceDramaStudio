@@ -616,7 +616,7 @@ def demo_vfx(size: int, frames: int=12) -> list[bytes]:
     return out
 
 
-def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: bool, frames: int, reference: bytes | None, demo: bool, provider: str='pixellab', model: str='standard', fidelity: str='balanced', quality: str='low', gpt_size: str='1024x1024', width: int | None=None, height: int | None=None) -> None:
+def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: bool, frames: int, reference: bytes | None, demo: bool, provider: str='pixellab', model: str='standard', fidelity: str='balanced', quality: str='low', gpt_size: str='1024x1024', width: int | None=None, height: int | None=None, category: str='other') -> None:
     update_job(job_id, status='processing', started_at=now())
     before, after, dispatched = None, None, False
     try:
@@ -642,7 +642,11 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
                 result=pixel_request('POST','/vfx',vfx_data,timeout=180)
                 update_job(job_id, quoted_generations=result.get('quoted_generations'))
             elif mode == 'text':
-                if model == 'pro':
+                if model == 'pro' and category == 'ui':
+                    # UI-specific Pro endpoint: panels, buttons and dialogue frames.
+                    data = {'description': prompt, 'image_size': {'width': width or size, 'height': height or size}, 'no_background': transparent}
+                    result = pixel_request('POST', '/generate-ui-v2', data, timeout=180)
+                elif model == 'pro':
                     data = {'description': prompt, 'image_size': {'width': width or size, 'height': height or size}, 'no_background': transparent}
                     result = pixel_request('POST', '/generate-image-v2', data, timeout=180)
                 else:
@@ -754,6 +758,7 @@ class EstimateRequest(BaseModel):
     reservation_usd: float = 0.50
     width: int | None = None
     height: int | None = None
+    category: str = "other"
 
 class SequenceCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -984,7 +989,7 @@ def validate_options(mode: str, size: int, frames: int, provider: str, model: st
 def estimate(data: EstimateRequest):
     try: validate_options(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size,data.width,data.height)
     except ValueError as e: raise HTTPException(422,str(e))
-    price=None if data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES) else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
+    price=None if (data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES)) or (data.provider=='pixellab' and data.mode=='text' and data.model=='pro' and data.category=='ui') else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
     if not .01 <= data.reservation_usd <= 500:
         raise HTTPException(422,'予約額は0.01〜500ドルで指定してください。')
     reserve=round(price*1.5,6) if price is not None else round(data.reservation_usd,2)
@@ -1024,7 +1029,7 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         except ValueError as e: raise HTTPException(422,str(e))
     if not demo and not (_token if provider=='pixellab' else _openai_token):
         raise HTTPException(401,'選択したサービスのAPIキーを登録するか、デモモードを選んでください。')
-    price=None if width is not None and (width != height or width not in PIXEL_SIZES) else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
+    price=None if (width is not None and (width != height or width not in PIXEL_SIZES)) or (provider=='pixellab' and mode=='text' and model=='pro' and category=='ui') else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
     reserve=round(price*1.5,6) if price is not None else round(reservation_usd,2)
     with _lock:
         stats=local_stats()
@@ -1041,7 +1046,7 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
              'transparent':transparent,'demo':demo,'estimate_usd':price if not demo else 0,'reservation_usd':reserve if not demo else 0,
              'usd_charged':None,'generations_used':None,'usage_status':'unknown','files':[], 'category':category, 'asset_name':asset_name[:120]}
         _state['jobs'].append(job); save_state()
-    _executor.submit(execute_job,job_id,mode,prompt.strip(),size,transparent,frames,blob,demo,provider,model,fidelity,quality,gpt_size,width,height)
+    _executor.submit(execute_job,job_id,mode,prompt.strip(),size,transparent,frames,blob,demo,provider,model,fidelity,quality,gpt_size,width,height,category)
     return {'id':job_id,'status':'queued'}
 
 @app.get('/api/jobs/{job_id}')
