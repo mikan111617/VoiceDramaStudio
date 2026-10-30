@@ -3,7 +3,7 @@ const $ = q => document.querySelector(q);
 let mode='text', currentJob=null, pollTimer=null, uploadedPreview=null, allJobs=[], allAssets=[], allSequences=[], currentEstimate=null, savedPrompt=null, ollamaModels=[], pastedResultFile=null, pastedResultUrl=null, importBusy=false, currentSequenceId='';
 const modeNames={text:'新規生成',convert:'参照画像から変換',animate:'アニメーション',vfx:'エフェクト専用'};
 const modelChoices={pixellab:[['standard','Standard（Pixen / 通常変換）'],['pro','Pro（高品質モデル）']],openai:[['gpt-image-2','GPT Image 2'],['gpt-image-2.5-flare','GPT Image 2.5 Flare'],['gpt-image-2.5-sunburst','GPT Image 2.5 Sunburst']],chatgpt:[['browser','ChatGPT Plus（コピー＆貼り付け）']]};
-const categoryLabels={character:'キャラクター',item:'アイテム',effect:'エフェクト',background:'背景',sound:'効果音・音声',other:'その他'};
+const categoryLabels={character:'キャラクター',item:'アイテム',effect:'エフェクト',background:'背景',sound:'効果音・音声',ui:'UI・ウィンドウ枠',other:'その他'};
 function toast(message,error=false){const b=$('#toast');b.textContent=message;b.className=error?'show error':'show';clearTimeout(toast.timer);toast.timer=setTimeout(()=>b.className='',6500)}
 async function api(url, options={}){const r=await fetch(url,options);let d;try{d=await r.json()}catch{throw Error('サーバーからの応答形式が不正です')}if(!r.ok){throw Error(typeof d.detail==='string'?d.detail:JSON.stringify(d.detail||d))}return d}
 function postJSON(url,d,method='POST'){return api(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})}
@@ -290,7 +290,7 @@ function renderAssets(){
  for(const a of items){const item=document.createElement('div');item.className='history-item asset-item';
   const url=battleAssetUrl(a);const pic=a.kind==='audio'?'<span class="history-thumb history-placeholder">♪</span>':url?`<img class="history-thumb" src="${url}" alt="">`:'<span class="history-thumb history-placeholder">▦</span>';
   item.innerHTML=`${pic}<div class="history-main"><b>${safe(a.name)}</b><small>${safe(categoryLabels[a.category]||a.category)} · ${safe(a.kind)} · ${(a.files||[]).length}ファイル</small></div>`;
-  item.addEventListener('click',()=>{const option=[...$('#clipAsset').options].find(o=>o.value===a.id);if(option){$('#clipAsset').value=a.id;$('#clipTrack').value=a.kind==='audio'?'sound':a.category==='other'?'item':a.category;$('#sequence').scrollIntoView({behavior:'smooth'});}});box.append(item);
+  item.addEventListener('click',()=>{const option=[...$('#clipAsset').options].find(o=>o.value===a.id);if(option){$('#clipAsset').value=a.id;$('#clipTrack').value=a.kind==='audio'?'sound':(a.category==='other'||a.category==='ui')?'item':a.category;$('#sequence').scrollIntoView({behavior:'smooth'});}});box.append(item);
  }
 }
 async function importAsset(){
