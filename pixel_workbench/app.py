@@ -325,9 +325,9 @@ OPENAI_MODELS = ('gpt-image-2', 'gpt-image-2.5-flare', 'gpt-image-2.5-sunburst')
 GPT_SIZES = ('1024x1024', '1024x1536', '1536x1024')
 PIXEL_SIZES = (32,64,96,128,192,256,512)
 
-ASSET_CATEGORIES = ('character','item','effect','background','sound','other')
+ASSET_CATEGORIES = ('character','item','effect','background','sound','ui','other')
 ASSET_LABELS = {
-    'character':'キャラクター','item':'アイテム','effect':'エフェクト','background':'背景','sound':'効果音・音声','other':'その他'
+    'character':'キャラクター','item':'アイテム','effect':'エフェクト','background':'背景','sound':'効果音・音声','ui':'UI・ウィンドウ枠','other':'その他'
 }
 
 def normalize_category(value: str | None, mode: str='text') -> str:
