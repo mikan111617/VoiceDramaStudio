@@ -76,7 +76,30 @@
    </div>
   </section>
   <section id="ui-frame" class="history-wrap">
-   <div class="section-heading"><div><span class="section-kicker">UI FRAME BUILDER</span><h2>伸縮できるUI枠を組み立てる</h2><p class="section-subtitle">9-slice方式。四隅を固定し、辺と中央を繰り返して横長・縦長の透過PNGにします。ここではAPI料金が発生しません。</p></div></div>
+   <div class="section-heading"><div><span class="section-kicker">UI ASSET STUDIO</span><h2>UI・メッセージウィンドウ制作</h2><p class="section-subtitle">文章から一から生成するか、手持ちの枠を9-sliceで伸縮するか、目的に合わせて選べます。</p></div></div>
+   <div class="ui-path-label"><b>方法A：AIでゼロから作る</b><span>画像の準備不要・PixelLab Pro UI専用生成</span></div>
+   <div class="work-grid ui-ai-grid">
+    <div class="controls card">
+     <div class="field"><label for="uiAIPreset">作るUIの種類</label><select id="uiAIPreset">
+      <option value="dialog">横長の会話ウィンドウ</option><option value="novel">ノベルゲームの会話枠</option><option value="name">キャラクターの名前表示枠</option><option value="status">ステータス枠</option><option value="button">メニューボタン</option><option value="hp">HPゲージ・バー</option><option value="custom">自由に説明する</option>
+     </select></div>
+     <div class="field"><label for="uiAIPrompt">どんなデザインにしたいですか？</label><textarea id="uiAIPrompt" rows="4" placeholder="例：紺色と金色のアールデコ風の会話ウィンドウ。文字なし、背景透明。">濃紺と金色のアールデコ風メッセージウィンドウ。装飾された細い外枠と文字の読みやすい暗い内側。文字、人物、アイコンなし。背景透明。ゲーム画面下部に重ねる横長UI素材。</textarea><small>日本語で自由に書けます。生成するのは静止画像素材です。実際の文字表示やボタン動作はゲーム側で実装します。</small></div>
+     <div class="field"><label for="uiAIColors">色の指定（任意）</label><input id="uiAIColors" type="text" maxlength="200" value="濃紺・金・黒" placeholder="例：茶色と金色"><small>指定した色を生成指示に追加します。</small></div>
+     <div class="selection-grid"><div class="field"><label for="uiAIWidth">画像の幅（px）</label><input id="uiAIWidth" type="number" min="16" max="512" step="1" value="240"></div><div class="field"><label for="uiAIHeight">画像の高さ（px）</label><input id="uiAIHeight" type="number" min="16" max="512" step="1" value="64"></div></div>
+     <div class="ui-ai-examples"><button type="button" data-ui-size="240x64">240×64</button><button type="button" data-ui-size="320x80">320×80</button><button type="button" data-ui-size="160x40">160×40</button><button type="button" data-ui-size="256x128">256×128</button></div>
+     <div class="toggles"><label class="toggle"><input id="uiAITransparent" type="checkbox" checked><span>背景を透明にする</span></label><label class="toggle important"><input id="uiAIDemo" type="checkbox" checked><span>デモモード（料金ゼロ・API送信なし）</span></label></div>
+     <div class="guide-callout subdued">PixelLab ProのUI専用APIを使用します。16〜512pxの範囲で指定できますが、縦横比などによりAPI側の制限があります。料金や残高は生成前に確認し、デモを解除した場合は送信確認が表示されます。</div>
+     <div class="assistant-buttons"><button type="button" class="primary-btn" id="uiAIGenerate">✦ 説明からUI画像を生成</button></div>
+     <p id="uiAIStatus" class="assistant-status" role="status">最初はデモモードです。実画像を生成するときはチェックを外してください。</p>
+    </div>
+    <div class="results card">
+     <div class="result-head"><div><span class="section-kicker">AI IMAGE PREVIEW</span><h3>一から生成したUI</h3></div><span id="uiAIState" class="result-state">未生成</span></div>
+     <div class="ui-ai-preview"><div id="uiAIEmpty" class="empty-result"><div class="pixel-symbol">▣</div><h3>生成したUIを表示します</h3><p>文章・サイズを指定して生成してください。</p></div><img id="uiAIResult" class="hidden" alt="AI生成されたUI素材のプレビュー"></div>
+     <div class="assistant-buttons"><a id="uiAIDownload" class="quiet-btn hidden" download="ui_generated.png">↓ 生成したPNGを保存</a><button type="button" class="quiet-btn" id="uiAIGoHistory">生成履歴を見る</button></div>
+     <p class="footnote compact">生成した素材は通常の生成履歴とアセット管理にも保存されます。9-sliceへの切り出しは必要な場合だけ下の方法Bを使ってください。</p>
+    </div>
+   </div>
+   <div class="ui-path-label"><b>方法B：既存画像から伸縮する枠を作る</b><span>ローカル9-slice・API料金なし</span></div>
    <div class="work-grid">
     <div class="controls card">
      <div class="field"><label for="uiTheme">① 枠の原画を選ぶ</label><select id="uiTheme"><option value="navy">濃紺＋金（サンプル）</option><option value="brown">茶＋金（サンプル）</option><option value="green">緑＋銀（サンプル）</option><option value="custom">読み込んだ画像</option></select><small>サンプルはローカルで描画。生成済みPNGまたは手持ちのPNGを使う場合は以下から読み込みます。</small></div>
