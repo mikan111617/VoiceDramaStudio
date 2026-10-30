@@ -439,7 +439,7 @@ def gpt_prompt(user_prompt: str, mode: str, fidelity: str) -> str:
         base = 'Reinterpret the attached image as a game-ready pixel art sprite, maintaining its essential identity. '
     return pixel + '\n' + base + ('\nAdditional instructions: ' + user_prompt if user_prompt else '')
 
-def demo_images(mode: str, size: int, frames: int) -> list[bytes]:
+def demo_images(mode: str, size: int, frames: int, width: int | None=None, height: int | None=None) -> list[bytes]:
     import math
     count = frames + 1 if mode == 'animate' else 1
     result = []
@@ -460,6 +460,13 @@ def demo_images(mode: str, size: int, frames: int) -> list[bytes]:
         rect(-3, 2, 3, 5, '#5c87b9')
         rect(-3, 5, -1, 7, '#423c51')
         rect(1, 5, 3, 7, '#423c51')
+        if mode == 'text' and width is not None and height is not None:
+            # Demo only: retain exact requested dimensions without calling the service.
+            resized = img.copy()
+            resized.thumbnail((width, height), Image.Resampling.NEAREST)
+            canvas = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+            canvas.paste(resized, ((width - resized.width)//2, (height - resized.height)//2), resized)
+            img = canvas
         buff = io.BytesIO()
         img.save(buff, 'PNG')
         result.append(buff.getvalue())
@@ -609,13 +616,13 @@ def demo_vfx(size: int, frames: int=12) -> list[bytes]:
     return out
 
 
-def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: bool, frames: int, reference: bytes | None, demo: bool, provider: str='pixellab', model: str='standard', fidelity: str='balanced', quality: str='low', gpt_size: str='1024x1024') -> None:
+def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: bool, frames: int, reference: bytes | None, demo: bool, provider: str='pixellab', model: str='standard', fidelity: str='balanced', quality: str='low', gpt_size: str='1024x1024', width: int | None=None, height: int | None=None) -> None:
     update_job(job_id, status='processing', started_at=now())
     before, after, dispatched = None, None, False
     try:
         if demo:
             time.sleep(.15)
-            blobs = demo_vfx(size) if mode == 'vfx' else demo_images(mode, size, frames)
+            blobs = demo_vfx(size) if mode == 'vfx' else demo_images(mode, size, frames, width, height)
             result: dict = {}
         elif provider == 'openai':
             dispatched = True
@@ -636,10 +643,10 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
                 update_job(job_id, quoted_generations=result.get('quoted_generations'))
             elif mode == 'text':
                 if model == 'pro':
-                    data = {'description': prompt, 'image_size': {'width': size, 'height': size}, 'no_background': transparent}
+                    data = {'description': prompt, 'image_size': {'width': width or size, 'height': height or size}, 'no_background': transparent}
                     result = pixel_request('POST', '/generate-image-v2', data, timeout=180)
                 else:
-                    result = pixel_request('POST', '/create-image-pixen', {'description': prompt, 'image_size': {'width': size, 'height': size}, 'no_background': transparent}, timeout=180)
+                    result = pixel_request('POST', '/create-image-pixen', {'description': prompt, 'image_size': {'width': width or size, 'height': height or size}, 'no_background': transparent}, timeout=180)
             elif mode == 'convert':
                 assert reference is not None
                 if model == 'pro':
@@ -745,6 +752,8 @@ class EstimateRequest(BaseModel):
     quality: str = 'low'
     gpt_size: str = '1024x1024'
     reservation_usd: float = 0.50
+    width: int | None = None
+    height: int | None = None
 
 class SequenceCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
@@ -947,11 +956,16 @@ def set_settings(data: SettingsRequest):
     return {'budget_usd': _state['budget_usd']}
 
 
-def validate_options(mode: str, size: int, frames: int, provider: str, model: str, quality: str, gpt_size: str) -> None:
+def validate_options(mode: str, size: int, frames: int, provider: str, model: str, quality: str, gpt_size: str, width: int | None = None, height: int | None = None) -> None:
     if mode not in ('text','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,8,16):
         raise ValueError('生成条件を確認してください。')
     if provider not in ('pixellab','openai'):
         raise ValueError('未対応のプロバイダーです。')
+    if width is not None or height is not None:
+        if mode != 'text' or provider != 'pixellab' or width is None or height is None:
+            raise ValueError('縦横サイズはPixelLab新規生成専用です。')
+        if not (16 <= width <= 512 and 16 <= height <= 512):
+            raise ValueError('幅・高さはそれぞれ16〜512pxで指定してください。')
     if provider == 'pixellab':
         if model not in ('standard','pro'):
             raise ValueError('PixelLabモデルの指定が不正です。')
@@ -968,9 +982,9 @@ def validate_options(mode: str, size: int, frames: int, provider: str, model: st
 
 @app.post('/api/estimate')
 def estimate(data: EstimateRequest):
-    try: validate_options(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
+    try: validate_options(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size,data.width,data.height)
     except ValueError as e: raise HTTPException(422,str(e))
-    price=estimate_usd(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
+    price=None if data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES) else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
     if not .01 <= data.reservation_usd <= 500:
         raise HTTPException(422,'予約額は0.01〜500ドルで指定してください。')
     reserve=round(price*1.5,6) if price is not None else round(data.reservation_usd,2)
@@ -980,16 +994,16 @@ def estimate(data: EstimateRequest):
 
 
 @app.post('/api/jobs')
-async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(128), transparent: bool=Form(True), frames: int=Form(8),
+async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(128), transparent: bool=Form(True), frames: int=Form(8), width: int | None=Form(None), height: int | None=Form(None),
                      demo: bool=Form(False), image: UploadFile | None=File(None), provider: str=Form('pixellab'), model: str=Form('standard'),
                      fidelity: str=Form('balanced'), quality: str=Form('low'), gpt_size: str=Form('1024x1024'), reservation_usd: float=Form(.50), category: str=Form('other'), asset_name: str=Form('')):
-    try: validate_options(mode,size,frames,provider,model,quality,gpt_size)
+    try: validate_options(mode,size,frames,provider,model,quality,gpt_size,width,height)
     except ValueError as e: raise HTTPException(422,str(e))
     if fidelity not in ('balanced','faithful','creative'):
         raise HTTPException(422,'忠実度の指定が不正です。')
     if not .01 <= reservation_usd <= 500:
         raise HTTPException(422,'予約額は0.01〜500ドルにしてください。')
-    if mode == 'text' and size>256 and transparent and provider=='pixellab' and model=='standard':
+    if mode == 'text' and max(width or size,height or size)>256 and transparent and provider=='pixellab' and model=='standard':
         raise HTTPException(422,'Pixenの512px生成では透過背景を指定できません。')
     if mode in ('text','animate','vfx') and not prompt.strip():
         raise HTTPException(422,'文章を入力してください。')
@@ -1010,7 +1024,7 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         except ValueError as e: raise HTTPException(422,str(e))
     if not demo and not (_token if provider=='pixellab' else _openai_token):
         raise HTTPException(401,'選択したサービスのAPIキーを登録するか、デモモードを選んでください。')
-    price=estimate_usd(mode,size,frames,provider,model,quality,gpt_size)
+    price=None if width is not None and (width != height or width not in PIXEL_SIZES) else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
     reserve=round(price*1.5,6) if price is not None else round(reservation_usd,2)
     with _lock:
         stats=local_stats()
@@ -1022,12 +1036,12 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         job_id=str(uuid.uuid4())
         category = normalize_category(category, mode)
         job={'id':job_id,'created_at':now(),'month':month(),'status':'queued','provider':provider,'model':model,'fidelity':fidelity,
-             'quality':quality,'gpt_size':gpt_size,'mode':mode,'prompt':prompt[:2000], 'size':size, 'frames':frames if mode=='animate' else None,
+             'quality':quality,'gpt_size':gpt_size,'mode':mode,'prompt':prompt[:2000], 'size':size, 'width':width if mode=='text' else None, 'height':height if mode=='text' else None, 'frames':frames if mode=='animate' else None,
              'quoted_generations':vfx_quote_generations('pro' if model=='pro' else 'lite',blob) if mode=='vfx' else None,
              'transparent':transparent,'demo':demo,'estimate_usd':price if not demo else 0,'reservation_usd':reserve if not demo else 0,
              'usd_charged':None,'generations_used':None,'usage_status':'unknown','files':[], 'category':category, 'asset_name':asset_name[:120]}
         _state['jobs'].append(job); save_state()
-    _executor.submit(execute_job,job_id,mode,prompt.strip(),size,transparent,frames,blob,demo,provider,model,fidelity,quality,gpt_size)
+    _executor.submit(execute_job,job_id,mode,prompt.strip(),size,transparent,frames,blob,demo,provider,model,fidelity,quality,gpt_size,width,height)
     return {'id':job_id,'status':'queued'}
 
 @app.get('/api/jobs/{job_id}')
