@@ -219,3 +219,15 @@
 .clip-motion-panel small{font-size:11px;line-height:1.7;color:#a7c0c8}
 @media(max-width:800px){.combo-builder .selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:480px){.combo-builder .selection-grid{grid-template-columns:1fr}}
+
+/* Direct manipulation of magic/hit and character positions on the battle canvas. */
+.battle-canvas-wrap{position:relative;display:inline-block;max-width:100%;line-height:0;isolation:isolate}
+.battle-canvas-wrap #battlePreview{display:block;touch-action:auto}
+.battle-canvas-wrap #battlePreview.placement-active{cursor:crosshair;touch-action:none;outline:2px dashed #a4e9d4;outline-offset:3px}
+.battle-placement-marker{position:absolute;z-index:4;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;pointer-events:none;width:0;height:0;filter:drop-shadow(0 0 6px #0d172d)}
+.battle-placement-crosshair{display:grid;place-items:center;width:23px;height:23px;line-height:1;font-size:24px;font-weight:700;color:#fff0c3;text-shadow:0 1px 4px #071725;-webkit-text-stroke:.4px #133a52}
+#battlePlacementSprite{position:absolute;width:auto;height:auto;max-width:100px;max-height:100px;image-rendering:pixelated;opacity:.72;z-index:-1;filter:drop-shadow(0 1px 4px #07121b)}
+.battle-placement-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:9px 0 15px;font-size:11px;line-height:1.6;color:#b5d2d8}
+.battle-placement-toolbar #cancelBattlePlacement{font-size:11px}
+[data-place-target].placement-active{background:#22584b;color:#f3f6e6;border-color:#8fe2c7}
+.battle-clip-position-actions{margin:12px 0;flex-wrap:wrap}
