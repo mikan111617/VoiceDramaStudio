@@ -252,7 +252,7 @@ async function deleteSequence(){if(!currentSequenceId)return toast('削除する
 async function openSequence(id){if(!id){currentSequenceId='';$('#sequenceMeta').textContent='未選択';$('#timelineView').innerHTML='<p class="history-empty">シーケンスを作成すると、ここにレーン別タイムラインが表示されます。</p>';$('#clipList').innerHTML='<p class="history-empty">クリップはまだありません。</p>';return}try{const seq=await api('/pixel/api/sequences/'+encodeURIComponent(id));currentSequenceId=seq.id;$('#sequenceSelect').value=seq.id;$('#sequenceName').value=seq.name||'';$('#sequenceFps').value=seq.fps||12;$('#sequenceWidth').value=seq.width||240;$('#sequenceHeight').value=seq.height||160;$('#sequenceMeta').textContent=`${seq.width}×${seq.height} / ${seq.fps}fps / ${seq.clips?.length||0} clips`;renderTimeline(seq);renderClipList(seq)}catch(e){toast(e.message,true)}}
 function renderTimeline(seq){const box=$('#timelineView');const clips=seq.clips||[];if(!clips.length){box.innerHTML='<p class="history-empty">クリップはまだありません。</p>';return}const tracks=['background','item','character','effect','sound'];const maxFrame=Math.max(...clips.map(c=>c.start+c.duration),1);const scale=Math.max(12, Math.min(28, Math.floor(720/maxFrame)));let html='';for(const track of tracks){const row=clips.filter(c=>c.track===track);let bars='';for(const c of row){bars+=`<div class="timeline-clip timeline-${safe(track)}" style="left:${c.start*scale}px;width:${Math.max(24,c.duration*scale)}px" title="${safe(c.asset_name)} / ${c.start} - ${c.start+c.duration}">${safe(c.label||c.asset_name)}</div>`;}html+=`<div class="timeline-row"><div class="timeline-label">${safe(categoryLabels[track]||track)}</div><div class="timeline-lane" style="width:${maxFrame*scale+20}px">${bars}</div></div>`}box.innerHTML=`<div class="timeline-ruler">全長 ${maxFrame} フレーム</div>${html}`}
 function renderClipList(seq){const box=$('#clipList');const clips=seq.clips||[];box.replaceChildren();if(!clips.length){box.innerHTML='<p class="history-empty">クリップはまだありません。</p>';return}for(const c of clips){const item=document.createElement('div');item.className='history-item';item.innerHTML=`<span class="history-thumb history-placeholder">${safe((categoryLabels[c.track]||c.track).charAt(0))}</span><div class="history-main"><b>${safe(c.label||c.asset_name)}</b><small>${safe(c.track)} · frame ${c.start} → ${c.start+c.duration} · x:${c.x} y:${c.y} · vol:${c.volume}</small></div><div class="history-pricing"><button type="button" class="quiet-btn" data-remove="${c.id}">削除</button></div>`;item.querySelector('[data-remove]').addEventListener('click',()=>removeClip(c.id));box.append(item)}}
-async function addClip(){if(!currentSequenceId)return toast('先にシーケンスを作成または選択してください',true);const assetId=$('#clipAsset').value;if(!assetId)return toast('アセットを選択してください',true);try{await postJSON('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/clips',{asset_id:assetId,track:$('#clipTrack').value,start:Number($('#clipStart').value),duration:Number($('#clipDuration').value),volume:Number($('#clipVolume').value),x:Number($('#clipX').value),y:Number($('#clipY').value),label:$('#clipLabel').value.trim()});await loadSequences();await openSequence(currentSequenceId);toast('タイムラインに追加しました')}catch(e){toast(e.message,true)}}
+async function addClip(){if(!currentSequenceId)return toast('先にシーケンスを作成または選択してください',true);const assetId=$('#clipAsset').value;if(!assetId)return toast('アセットを選択してください',true);try{await postJSON('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/clips',{asset_id:assetId,track:$('#clipTrack').value,start:Number($('#clipStart').value),duration:Number($('#clipDuration').value),volume:Number($('#clipVolume').value),x:Number($('#clipX').value),y:Number($('#clipY').value),...clipMotionPayload(),label:$('#clipLabel').value.trim()});await loadSequences();await openSequence(currentSequenceId);toast('タイムラインに追加しました')}catch(e){toast(e.message,true)}}
 async function removeClip(id){if(!currentSequenceId)return;try{await api(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/clips/${encodeURIComponent(id)}`,{method:'DELETE'});await loadSequences();await openSequence(currentSequenceId);toast('クリップを削除しました')}catch(e){toast(e.message,true)}}
 async function exportSequence(){if(!currentSequenceId)return toast('シーケンスを選択してください',true);try{const d=await api('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/export');$('#ollamaOutput').value=JSON.stringify(d,null,2);$('#ollamaOutputLabel').textContent='シーケンスJSON';$('#ollamaOutputWrap').classList.remove('hidden');$('#applyOllama').classList.add('hidden');$('#sequence').scrollIntoView({behavior:'smooth'});toast('JSONを表示しました')}catch(e){toast(e.message,true)}}
 async function refreshAll(){const s=await status();await Promise.all([loadAssets($('#assetFilter')?.value||''), loadSequences()]);return s}
@@ -327,6 +327,8 @@ let battleDrawTicket = 0;
 let battleFrameRequested = -1;
 let soundInstances = new Map();
 let dragStart = null;
+let battlePlacementTarget = null;
+let battlePlacementDragging = false;
 
 function battleLastFrame(){ return Math.max(0, ...(battleSequence?.clips || []).map(c => Number(c.start) + Number(c.duration) - 1)); }
 function battleLength(){ return battleLastFrame()+1; }
@@ -389,6 +391,7 @@ function seekBattle(frame, stop=true){
  }).catch(err=>{if(ticket===battleDrawTicket)$('#exportStatus').textContent='プレビュー: '+err.message;});
 }
 function resetBattleView(seq){
+ cancelBattlePlacement();
  haltBattle();battleSequence=seq;selectedClipId=null;$('#updateClipBtn').classList.add('hidden');$('#cancelClipEditBtn').classList.add('hidden');$('#addClipBtn').classList.remove('hidden');
  battleFrameRequested=-1;
  $('#seqScrub').max=String(battleLastFrame());
@@ -411,15 +414,19 @@ function selectBattleClip(id, scrub=true){
  $('#clipAsset').value=clip.asset_id;
  $('#clipTrack').value=clip.track;$('#clipStart').value=clip.start;$('#clipDuration').value=clip.duration;
  $('#clipVolume').value=clip.volume;$('#clipX').value=clip.x;$('#clipY').value=clip.y;$('#clipLabel').value=clip.label||'';
+ $('#clipMoveEnabled').checked=clip.end_x!=null||clip.end_y!=null;
+ $('#clipEndX').value=clip.end_x??clip.x??0;$('#clipEndY').value=clip.end_y??clip.y??0;
+ $('#clipEasing').value=clip.easing||'linear';$('#clipFlipX').checked=!!clip.flip_x;
+ updateClipMovementVisibility();
  $('#updateClipBtn').classList.remove('hidden');$('#cancelClipEditBtn').classList.remove('hidden');$('#addClipBtn').classList.add('hidden');
  for(const node of document.querySelectorAll('[data-clip-id]'))node.classList.toggle('clip-selected',node.dataset.clipId===id);
  if(scrub)seekBattle(clip.start);
 }
-function clearBattleSelection(){selectedClipId=null;$('#updateClipBtn').classList.add('hidden');$('#cancelClipEditBtn').classList.add('hidden');$('#addClipBtn').classList.remove('hidden');document.querySelectorAll('[data-clip-id]').forEach(n=>n.classList.remove('clip-selected'));}
+function clearBattleSelection(){selectedClipId=null;$('#updateClipBtn').classList.add('hidden');$('#cancelClipEditBtn').classList.add('hidden');$('#addClipBtn').classList.remove('hidden');document.querySelectorAll('[data-clip-id]').forEach(n=>n.classList.remove('clip-selected'));$('#clipMoveEnabled').checked=false;$('#clipFlipX').checked=false;updateClipMovementVisibility();}
 async function saveSelectedClip(){
  if(!selectedClipId||!currentSequenceId)return;
- const data={track:$('#clipTrack').value,start:Number($('#clipStart').value),duration:Number($('#clipDuration').value),volume:Number($('#clipVolume').value),x:Number($('#clipX').value),y:Number($('#clipY').value),label:$('#clipLabel').value.trim()};
- try{await postJSON(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/clips/${encodeURIComponent(selectedClipId)}`,data,'PUT');const id=selectedClipId;await loadSequences();selectBattleClip(id,false);toast('クリップを更新しました。')}catch(e){toast(e.message,true)}
+ const data={track:$('#clipTrack').value,start:Number($('#clipStart').value),duration:Number($('#clipDuration').value),volume:Number($('#clipVolume').value),x:Number($('#clipX').value),y:Number($('#clipY').value),...clipMotionPayload(),label:$('#clipLabel').value.trim()};
+ try{await postJSON(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/clips/${encodeURIComponent(selectedClipId)}`,data,'PUT');const id=selectedClipId,frame=battleFrame;await loadSequences();await openSequence(currentSequenceId);selectBattleClip(id,false);seekBattle(frame);toast('クリップを更新しました。')}catch(e){toast(e.message,true)}
 }
 function renderTimeline(seq){
  const box=$('#timelineView'),clips=seq.clips||[],tracks=['background','item','character','effect','sound'];
@@ -459,12 +466,12 @@ function renderClipList(seq){
  const box=$('#clipList'),clips=seq.clips||[];box.replaceChildren();
  if(!clips.length){box.innerHTML='<p class="history-empty">クリップはまだありません。先に素材をレーンへ追加してください。</p>';return;}
  for(const c of clips){const item=document.createElement('div');item.className='history-item';item.dataset.clipId=c.id;
-   item.innerHTML=`<span class="history-thumb history-placeholder">${safe(categoryLabels[c.track]?.charAt(0)||'?')}</span><div class="history-main"><b>${safe(c.label||c.asset_name)}</b><small>${safe(categoryLabels[c.track]||c.track)} · ${c.start}〜${c.start+c.duration}f · X:${c.x} Y:${c.y} · 音量:${c.volume}</small></div><div class="history-pricing"><button type="button" class="quiet-btn" data-remove="${c.id}">削除</button></div>`;
+   item.innerHTML=`<span class="history-thumb history-placeholder">${safe(categoryLabels[c.track]?.charAt(0)||'?')}</span><div class="history-main"><b>${safe(c.label||c.asset_name)}</b><small>${safe(categoryLabels[c.track]||c.track)} · ${c.start}〜${c.start+c.duration}f · X:${c.x}${c.end_x==null?'':'→'+c.end_x} Y:${c.y}${c.end_y==null?'':'→'+c.end_y} · 音量:${c.volume}</small></div><div class="history-pricing"><button type="button" class="quiet-btn" data-remove="${c.id}">削除</button></div>`;
    item.addEventListener('click',()=>selectBattleClip(c.id));item.querySelector('[data-remove]').addEventListener('click',ev=>{ev.stopPropagation();removeClip(c.id);});box.append(item);
  }
 }
 async function loadAssets(){
- try{const d=await api('/pixel/api/assets');allAssets=d.assets||[];renderAssets();renderClipAssetOptions();return d;}catch(e){toast(e.message,true)}
+ try{const d=await api('/pixel/api/assets');allAssets=d.assets||[];renderAssets();renderClipAssetOptions();renderAttackComboOptions();return d;}catch(e){toast(e.message,true)}
 }
 function renderAssets(){
  const filter=$('#assetFilter')?.value||'';const items=allAssets.filter(a=>!filter||a.category===filter),box=$('#assetList');
@@ -504,7 +511,21 @@ function installBattleControls(){
  $('#cancelClipEditBtn').addEventListener('click',clearBattleSelection);
  for(const kind of ['json','zip','gif','mp4'])$('#export'+({json:'Json',zip:'Zip',gif:'Gif',mp4:'Mp4'}[kind])+'Btn').addEventListener('click',()=>downloadBattle(kind));
  $('#assetFilter').addEventListener('change',renderAssets);
- $('#clipAsset').addEventListener('change',()=>{const a=allAssets.find(a=>a.id===$('#clipAsset').value);if(a)$('#clipTrack').value=a.kind==='audio'?'sound':['background','item','character','effect'].includes(a.category)?a.category:'item';});
+ $('#clipAsset').addEventListener('change',()=>{const a=allAssets.find(a=>a.id===$('#clipAsset').value);if(a)$('#clipTrack').value=a.kind==='audio'?'sound':['background','item','character','effect'].includes(a.category)?a.category:'item';updateClipMovementVisibility();});
+ $('#clipTrack').addEventListener('change',updateClipMovementVisibility);
+ $('#clipMoveEnabled').addEventListener('change',()=>{if($('#clipMoveEnabled').checked){$('#clipEndX').value=$('#clipX').value;$('#clipEndY').value=$('#clipY').value;}updateClipMovementVisibility();});
+ $('#clipX').addEventListener('change',()=>{if(!$('#clipMoveEnabled').checked)$('#clipEndX').value=$('#clipX').value});
+ $('#clipY').addEventListener('change',()=>{if(!$('#clipMoveEnabled').checked)$('#clipEndY').value=$('#clipY').value});
+ $('#createAttackCombo').addEventListener('click',createAttackCombo);
+ document.querySelectorAll('[data-place-target]').forEach(button=>button.addEventListener('click',()=>beginBattlePlacement(button.dataset.placeTarget)));
+ $('#cancelBattlePlacement').addEventListener('click',cancelBattlePlacement);
+ $('#battlePreview').addEventListener('pointerdown',battlePlacementPointerDown);
+ $('#battlePreview').addEventListener('pointermove',battlePlacementPointerMove);
+ $('#battlePreview').addEventListener('pointerup',battlePlacementPointerUp);
+ $('#battlePreview').addEventListener('pointercancel',cancelBattlePlacement);
+ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&battlePlacementTarget)cancelBattlePlacement();});
+ for(const id of ['comboStart','comboApproachFrames','comboAttackFrames','comboReturnFrames','comboHitOffset'])$('#'+id).addEventListener('input',refreshAttackComboSummary);
+ updateClipMovementVisibility();refreshAttackComboSummary();
  window.addEventListener('beforeunload',stopBattleSounds);
 }
 installBattleControls();
@@ -716,4 +737,210 @@ function applyResultZoom(){
   img.style.imageRendering='pixelated';
  };
  if(img.complete)adjust();else img.addEventListener('load',adjust,{once:true});
+}
+
+
+// Editing a clip's coordinates is independent from cycling its sprite frames.
+// End coordinates are optional, preserving all existing stationary clips.
+function clipMotionPayload(){
+ const allowed=$('#clipTrack').value!=='sound', moving=allowed&&$('#clipMoveEnabled').checked;
+ return {
+  end_x:moving?Number($('#clipEndX').value):null,
+  end_y:moving?Number($('#clipEndY').value):null,
+  easing:moving?$('#clipEasing').value:'linear',
+  flip_x:allowed&&$('#clipTrack').value!=='background'&&$('#clipFlipX').checked
+ };
+}
+function updateClipMovementVisibility(){
+ const track=$('#clipTrack').value,supported=track!=='sound';
+ $('#clipMotionPanel').classList.toggle('hidden',!supported);
+ $('#clipMovementFields').classList.toggle('hidden',!supported||!$('#clipMoveEnabled').checked);
+}
+function renderAttackComboOptions(){
+ const names=[
+  ['comboRunAsset','character'],['comboAttackAsset','character'],
+  ['comboEffectAsset','effect'],['comboSoundAsset','sound'],['comboReactionAsset','character']
+ ];
+ for(const [id,kind] of names){
+  const sel=$('#'+id);if(!sel)continue;
+  const previous=sel.value,required=id==='comboRunAsset'||id==='comboAttackAsset';
+  sel.replaceChildren();
+  const defaultOption=document.createElement('option');
+  defaultOption.value='';defaultOption.textContent=required?'素材を選択':'なし';sel.append(defaultOption);
+  const filtered=allAssets.filter(a=>kind==='sound'
+   ?a.kind==='audio'
+   :a.kind!=='audio'&&a.category===kind);
+  for(const asset of filtered){
+   const option=document.createElement('option');option.value=asset.id;
+   option.textContent=asset.name+' / '+(categoryLabels[asset.category]||asset.category);
+   sel.append(option);
+  }
+  if([...sel.options].some(o=>o.value===previous))sel.value=previous;
+ }
+}
+function refreshAttackComboSummary(){
+ const start=Number($('#comboStart').value),approach=Number($('#comboApproachFrames').value),
+ attack=Number($('#comboAttackFrames').value),retreat=Number($('#comboReturnFrames').value),
+ offset=Number($('#comboHitOffset').value),fps=Number($('#sequenceFps').value)||12;
+ const valid=[start,approach,attack,retreat,offset].every(Number.isInteger) &&
+ start>=0&&approach>=2&&attack>=1&&retreat>=2&&offset>=0&&offset<attack &&
+ start+approach+attack+retreat<=600;
+ const total=approach+attack+retreat;
+ $('#comboSummary').textContent=valid
+  ? '接近 '+approach+'f → 攻撃 '+attack+'f → 帰還 '+retreat+'f（合計'+total+'f、約'+(total/fps).toFixed(2)+'秒）。命中はシーケンスの '+(start+approach+offset)+'f。'
+  : 'コマ数・命中タイミング・600コマ以内の制限を確認してください。攻撃中の命中は0〜攻撃コマ数-1です。';
+ $('#comboSummary').classList.toggle('limit-warning',!valid);
+ return valid;
+}
+async function createAttackCombo(){
+ if(!currentSequenceId)return toast('先に戦闘シーケンスを作成してください',true);
+ const run=$('#comboRunAsset').value,attack=$('#comboAttackAsset').value;
+ if(!run||!attack)return toast('走行と攻撃の素材を両方選択してください',true);
+ if(!refreshAttackComboSummary())return toast('フレーム数・命中タイミングが不正です',true);
+ const num=id=>Number($('#'+id).value);
+ const payload={
+  run_asset_id:run,attack_asset_id:attack,
+  effect_asset_id:$('#comboEffectAsset').value||null,
+  sound_asset_id:$('#comboSoundAsset').value||null,
+  reaction_asset_id:$('#comboReactionAsset').value||null,
+  start:num('comboStart'),approach_frames:num('comboApproachFrames'),
+  attack_frames:num('comboAttackFrames'),return_frames:num('comboReturnFrames'),
+  hit_offset:num('comboHitOffset'),origin_x:num('comboOriginX'),origin_y:num('comboOriginY'),
+  approach_x:num('comboNearX'),approach_y:num('comboNearY'),
+  enemy_x:num('comboEnemyX'),enemy_y:num('comboEnemyY'),
+  easing:$('#comboEasing').value,return_flip_x:$('#comboReturnFlip').checked
+ };
+ const button=$('#createAttackCombo');button.disabled=true;
+ try{
+  const result=await postJSON('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/attack-combo',payload);
+  await loadSequences();await openSequence(currentSequenceId);
+  seekBattle(result.hit_frame);
+  toast('接近・攻撃・帰還など '+result.created+'クリップを追加しました。');
+ }catch(e){toast('攻撃シーケンス：'+e.message,true)}
+ finally{button.disabled=false}
+}
+
+
+// Stage-coordinate picker: lets users place magic effects and movement points
+// by clicking/dragging the preview instead of guessing numeric X/Y offsets.
+const battlePlaceLabels={
+ 'clip-start':'素材の開始位置',
+ 'clip-end':'素材の終了位置',
+ 'combo-origin':'攻撃側の開始位置',
+ 'combo-near':'攻撃する場所',
+ 'combo-impact':'魔法・命中エフェクトの位置'
+};
+function battlePlacementAsset(){
+ const id=battlePlacementTarget?.startsWith('clip-')?$('#clipAsset').value
+  :battlePlacementTarget==='combo-impact'?$('#comboEffectAsset').value
+  :$('#comboRunAsset').value;
+ return allAssets.find(asset=>asset.id===id);
+}
+function drawBattlePlacementMarker(){
+ if(!battlePlacementTarget)return;
+ const marker=$('#battlePlacementMarker'),sprite=$('#battlePlacementSprite');
+ const ids={
+  'clip-start':['clipX','clipY'],
+  'clip-end':['clipEndX','clipEndY'],
+  'combo-origin':['comboOriginX','comboOriginY'],
+  'combo-near':['comboNearX','comboNearY'],
+  'combo-impact':['comboEnemyX','comboEnemyY']
+ };
+ const [inputX,inputY]=ids[battlePlacementTarget];
+ const x=Number($('#'+inputX).value),y=Number($('#'+inputY).value),canvas=$('#battlePreview');
+ const px=Math.max(0,Math.min(canvas.width,Math.floor(canvas.width/2)+x));
+ const py=Math.max(0,Math.min(canvas.height,Math.floor(canvas.height/2)+y));
+ marker.style.left=(px/canvas.width*100)+'%';
+ marker.style.top=(py/canvas.height*100)+'%';
+ marker.classList.remove('hidden');
+ sprite.classList.remove('hidden');
+ const asset=battlePlacementAsset(),url=asset&&asset.kind!=='audio'?battleAssetUrl(asset):null;
+ if(url){
+  const updateSpriteScale=()=>{
+   const rect=canvas.getBoundingClientRect(),scale=rect.width/canvas.width;
+   if(sprite.naturalWidth&&scale>0){
+    sprite.style.width=Math.round(sprite.naturalWidth*scale)+'px';
+    sprite.style.height=Math.round(sprite.naturalHeight*scale)+'px';
+   }
+  };
+  if(sprite.getAttribute('src')!==url){
+   sprite.onload=updateSpriteScale;
+   sprite.src=url;
+  }else if(sprite.complete)updateSpriteScale();
+ }else{sprite.removeAttribute('src');sprite.classList.add('hidden');}
+ $('#battlePlacementStatus').textContent='配置中：'+(battlePlaceLabels[battlePlacementTarget]||'位置')+' / X:'+x+' Y:'+y+' — プレビューをクリック・ドラッグ（Escで終了）';
+}
+function beginBattlePlacement(target){
+ if(!battleSequence)return toast('先にシーケンスを作成または選択してください。',true);
+ if(target.startsWith('clip-')&&!$('#clipAsset').value)return toast('位置を指定するアセットを選んでください',true);
+ if(target==='clip-end'){
+  if($('#clipTrack').value==='sound')return toast('音声クリップの座標は指定できません',true);
+  $('#clipMoveEnabled').checked=true;
+  updateClipMovementVisibility();
+ }
+ battlePlacementTarget=target;
+ battlePlacementDragging=false;
+ for(const button of document.querySelectorAll('[data-place-target]')){
+  button.classList.toggle('placement-active',button.dataset.placeTarget===target);
+  button.setAttribute('aria-pressed',String(button.dataset.placeTarget===target));
+ }
+ $('#battlePreview').classList.add('placement-active');
+ $('#cancelBattlePlacement').classList.remove('hidden');
+ drawBattlePlacementMarker();
+ $('#battlePreview').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function cancelBattlePlacement(){
+ battlePlacementTarget=null;battlePlacementDragging=false;
+ const marker=$('#battlePlacementMarker');
+ if(marker)marker.classList.add('hidden');
+ const canvas=$('#battlePreview');if(canvas)canvas.classList.remove('placement-active');
+ const cancel=$('#cancelBattlePlacement');if(cancel)cancel.classList.add('hidden');
+ for(const btn of document.querySelectorAll('[data-place-target]')){
+  btn.classList.remove('placement-active');btn.setAttribute('aria-pressed','false');
+ }
+ const status=$('#battlePlacementStatus');
+ if(status)status.textContent='位置指定：未選択。素材または魔法の命中位置を画面から設定できます。';
+}
+function updateBattlePlacementWithPointer(event){
+ const canvas=$('#battlePreview'),rect=canvas.getBoundingClientRect();
+ if(!rect.width||!rect.height||!battlePlacementTarget)return;
+ const pixelX=Math.max(0,Math.min(canvas.width-1,Math.floor((event.clientX-rect.left)/rect.width*canvas.width)));
+ const pixelY=Math.max(0,Math.min(canvas.height-1,Math.floor((event.clientY-rect.top)/rect.height*canvas.height)));
+ const x=pixelX-Math.floor(canvas.width/2),y=pixelY-Math.floor(canvas.height/2);
+ const ids={
+  'clip-start':['clipX','clipY'],
+  'clip-end':['clipEndX','clipEndY'],
+  'combo-origin':['comboOriginX','comboOriginY'],
+  'combo-near':['comboNearX','comboNearY'],
+  'combo-impact':['comboEnemyX','comboEnemyY']
+ };
+ const [i,j]=ids[battlePlacementTarget];
+ $('#'+i).value=x;$('#'+j).value=y;
+ drawBattlePlacementMarker();
+}
+function battlePlacementPointerDown(event){
+ if(!battlePlacementTarget||event.button!==0)return;
+ event.preventDefault();battlePlacementDragging=true;
+ $('#battlePreview').setPointerCapture(event.pointerId);
+ updateBattlePlacementWithPointer(event);
+}
+function battlePlacementPointerMove(event){
+ if(battlePlacementDragging&&battlePlacementTarget)updateBattlePlacementWithPointer(event);
+}
+async function battlePlacementPointerUp(event){
+ if(!battlePlacementDragging)return;
+ battlePlacementDragging=false;
+ if($('#battlePreview').hasPointerCapture(event.pointerId))$('#battlePreview').releasePointerCapture(event.pointerId);
+ updateBattlePlacementWithPointer(event);
+ const selected=battlePlacementTarget?.startsWith('clip-')&&Boolean(selectedClipId);
+ const target=battlePlacementTarget;
+ cancelBattlePlacement();
+ if(selected){
+  await saveSelectedClip();
+ }else if(target==='combo-origin'||target==='combo-near'||target==='combo-impact'){
+  refreshAttackComboSummary();
+  $('#battlePlacementStatus').textContent='位置を設定しました。位置を確認して「一連の攻撃をタイムラインに追加」を押してください。';
+ }else{
+  $('#battlePlacementStatus').textContent='位置を入力しました。「タイムラインに追加」を押すと保存されます。';
+ }
 }
