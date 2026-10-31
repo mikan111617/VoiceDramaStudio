@@ -160,6 +160,8 @@ def estimate_usd(mode: str, size: int, frames: int = 8, provider: str='pixellab'
         return None  # Pro GPU costs vary; do not fake a per-call amount.
     if mode == 'vfx':
         return None  # VFX is quoted/billed in PixelLab generations, not fixed USD.
+    if mode == 'redraw':
+        return None  # Pro reference-guided creation is a variable-price endpoint.
     if mode == 'text':
         pairs = {32:0.0070,64:0.00718,96:0.0076,128:0.00793,192:0.0086,256:0.0089,512:0.0169}
         return pairs.get(size)
@@ -433,7 +435,7 @@ def request_openai_image(mode: str, model: str, prompt: str, quality: str, gpt_s
 
 def gpt_prompt(user_prompt: str, mode: str, fidelity: str) -> str:
     pixel = 'Create actual readable pixel art with crisp, consistent pixel clusters, limited-color game-sprite shading and distinct silhouettes. Avoid blurry faux pixel textures and avoid smooth raster painting.'
-    if mode == 'text':
+    if mode in ('text','redraw'):
         return pixel + '\n' + user_prompt
     base = ('Convert the attached reference artwork into high-quality pixel art. Preserve the same character identity, original pose, facial features, eyewear, hairstyle, clothing layers, accessories, proportions, colors and overall composition. No redesign, no chibi proportions, no different face. ' if fidelity=='faithful' else 'Convert the attached reference artwork into polished pixel art while retaining its main composition and recognizable details. ')
     if fidelity == 'creative':
@@ -461,7 +463,7 @@ def demo_images(mode: str, size: int, frames: int, width: int | None=None, heigh
         rect(-3, 2, 3, 5, '#5c87b9')
         rect(-3, 5, -1, 7, '#423c51')
         rect(1, 5, 3, 7, '#423c51')
-        if mode == 'text' and width is not None and height is not None:
+        if mode in ('text','redraw') and width is not None and height is not None:
             # Demo only: retain exact requested dimensions without calling the service.
             resized = img.copy()
             resized.thumbnail((width, height), Image.Resampling.NEAREST)
@@ -652,6 +654,20 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
                     result = pixel_request('POST', '/generate-image-v2', data, timeout=180)
                 else:
                     result = pixel_request('POST', '/create-image-pixen', {'description': prompt, 'image_size': {'width': width or size, 'height': height or size}, 'no_background': transparent}, timeout=180)
+            elif mode == 'redraw':
+                assert reference is not None
+                img, dimensions = sized_image(reference, 1024)
+                guidance = {
+                    'image': img,
+                    'size': {'width': dimensions[0], 'height': dimensions[1]},
+                    'usage_description': 'Use the subject identity, hair, outfit, distinctive colors and accessories as design guidance. Redraw intentionally at the target pixel resolution; do not simply shrink or convert the source pixels.'
+                }
+                result = pixel_request('POST', '/generate-image-v2', {
+                    'description': prompt,
+                    'image_size': {'width': width or size, 'height': height or size},
+                    'reference_images': [guidance],
+                    'no_background': transparent
+                }, timeout=200)
             elif mode == 'convert':
                 assert reference is not None
                 if model == 'pro':
@@ -963,15 +979,17 @@ def set_settings(data: SettingsRequest):
 
 
 def validate_options(mode: str, size: int, frames: int, provider: str, model: str, quality: str, gpt_size: str, width: int | None = None, height: int | None = None) -> None:
-    if mode not in ('text','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,6,8,10,12,14,16):
+    if mode not in ('text','redraw','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,6,8,10,12,14,16):
         raise ValueError('生成条件を確認してください。')
     if provider not in ('pixellab','openai'):
         raise ValueError('未対応のプロバイダーです。')
     if width is not None or height is not None:
-        if mode != 'text' or provider != 'pixellab' or width is None or height is None:
-            raise ValueError('縦横サイズはPixelLab新規生成専用です。')
+        if mode not in ('text','redraw') or provider != 'pixellab' or width is None or height is None:
+            raise ValueError('幅・高さの個別指定はPixelLab新規生成・参考画像から描き直す場合に使えます。')
         if not (16 <= width <= 512 and 16 <= height <= 512):
             raise ValueError('幅・高さはそれぞれ16〜512pxで指定してください。')
+    if mode == 'redraw' and (provider!='pixellab' or model!='pro'):
+        raise ValueError('参照画像から描き直す機能はPixelLab Pro専用です。')
     if provider == 'pixellab':
         if model not in ('standard','pro'):
             raise ValueError('PixelLabモデルの指定が不正です。')
@@ -990,7 +1008,7 @@ def validate_options(mode: str, size: int, frames: int, provider: str, model: st
 def estimate(data: EstimateRequest):
     try: validate_options(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size,data.width,data.height)
     except ValueError as e: raise HTTPException(422,str(e))
-    price=None if (data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES)) or (data.provider=='pixellab' and data.mode=='text' and data.model=='pro' and data.category=='ui') else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
+    price=None if data.mode=='redraw' or (data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES)) or (data.provider=='pixellab' and data.mode=='text' and data.model=='pro' and data.category=='ui') else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
     if not .01 <= data.reservation_usd <= 500:
         raise HTTPException(422,'予約額は0.01〜500ドルで指定してください。')
     reserve=round(price*1.5,6) if price is not None else round(data.reservation_usd,2)
@@ -1011,11 +1029,11 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         raise HTTPException(422,'予約額は0.01〜500ドルにしてください。')
     if mode == 'text' and max(width or size,height or size)>256 and transparent and provider=='pixellab' and model=='standard':
         raise HTTPException(422,'Pixenの512px生成では透過背景を指定できません。')
-    if mode in ('text','animate','vfx') and not prompt.strip():
+    if mode in ('text','redraw','animate','vfx') and not prompt.strip():
         raise HTTPException(422,'文章を入力してください。')
     if len(prompt)>2000: raise HTTPException(422,'文章は2000字以下にしてください。')
     blob=None
-    if mode in ('convert','animate','vfx') and (mode!='vfx' or image is not None):
+    if mode in ('redraw','convert','animate','vfx') and (mode!='vfx' or image is not None):
         if image is None: raise HTTPException(422,'参照画像を選んでください。')
         blob=await image.read(12*1024*1024+1)
         try:
@@ -1028,9 +1046,14 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
                 if dims[0]*dims[1]*frames>524288:
                     raise HTTPException(422,'入力サイズとフレーム数の組み合わせが上限を超えています。')
         except ValueError as e: raise HTTPException(422,str(e))
+    category = normalize_category(category, mode)
+    if category == 'sound':
+        raise HTTPException(422,'音声は画像生成カテゴリーに指定できません。音声はアセット管理で取り込んでください。')
+    if mode == 'vfx' and category != 'effect':
+        raise HTTPException(422,'VFXはエフェクトカテゴリーへ保存してください。')
     if not demo and not (_token if provider=='pixellab' else _openai_token):
         raise HTTPException(401,'選択したサービスのAPIキーを登録するか、デモモードを選んでください。')
-    price=None if (width is not None and (width != height or width not in PIXEL_SIZES)) or (provider=='pixellab' and mode=='text' and model=='pro' and category=='ui') else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
+    price=None if mode=='redraw' or (width is not None and (width != height or width not in PIXEL_SIZES)) or (provider=='pixellab' and mode=='text' and model=='pro' and category=='ui') else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
     reserve=round(price*1.5,6) if price is not None else round(reservation_usd,2)
     with _lock:
         stats=local_stats()
@@ -1042,7 +1065,7 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         job_id=str(uuid.uuid4())
         category = normalize_category(category, mode)
         job={'id':job_id,'created_at':now(),'month':month(),'status':'queued','provider':provider,'model':model,'fidelity':fidelity,
-             'quality':quality,'gpt_size':gpt_size,'mode':mode,'prompt':prompt[:2000], 'size':size, 'width':width if mode=='text' else None, 'height':height if mode=='text' else None, 'frames':frames if mode=='animate' else None,
+             'quality':quality,'gpt_size':gpt_size,'mode':mode,'prompt':prompt[:2000], 'size':size, 'width':width if mode in ('text','redraw') else None, 'height':height if mode in ('text','redraw') else None, 'frames':frames if mode=='animate' else None,
              'quoted_generations':vfx_quote_generations('pro' if model=='pro' else 'lite',blob) if mode=='vfx' else None,
              'transparent':transparent,'demo':demo,'estimate_usd':price if not demo else 0,'reservation_usd':reserve if not demo else 0,
              'usd_charged':None,'generations_used':None,'usage_status':'unknown','files':[], 'category':category, 'asset_name':asset_name[:120]}
