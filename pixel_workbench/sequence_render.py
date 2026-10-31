@@ -117,6 +117,30 @@ def validate_stage(seq: dict, for_export: bool = False) -> tuple[int, int, int, 
     return width, height, fps, length
 
 
+def clip_position(clip: dict, frame: int) -> tuple[int, int]:
+    """Evaluate the local motion path, in stage-relative pixels, at a global frame.
+
+    Old clips have no end coordinates and remain stationary. A moving clip
+    reaches its end point on its last visible frame. This function is shared
+    by the PNG preview, animated GIF export and MP4 renderer.
+    """
+    x, y = int(clip.get('x', 0)), int(clip.get('y', 0))
+    end_x = clip.get('end_x')
+    end_y = clip.get('end_y')
+    if end_x is None and end_y is None:
+        return x, y
+    dx = x if end_x is None else int(end_x)
+    dy = y if end_y is None else int(end_y)
+    duration = max(1, int(clip.get('duration', 1)))
+    offset = max(0, min(duration - 1, frame - int(clip.get('start', 0))))
+    t = offset / (duration - 1) if duration > 1 else 1.0
+    if clip.get('easing') == 'ease_in_out':
+        t = t * t * (3 - 2 * t)
+    elif clip.get('easing') == 'ease_out':
+        t = 1 - (1 - t) * (1 - t)
+    return round(x + (dx - x) * t), round(y + (dy - y) * t)
+
+
 def render_frame(seq: dict, assets: dict[str, dict], root: Path, frame: int) -> Image.Image:
     w, h, fps, length = validate_stage(seq)
     if frame < 0 or frame > min(MAX_PREVIEW_FRAME, length):
@@ -133,7 +157,9 @@ def render_frame(seq: dict, assets: dict[str, dict], root: Path, frame: int) -> 
             continue
         if image.width * image.height > 4096 * 4096:
             continue
-        x, y = int(clip.get('x', 0)), int(clip.get('y', 0))
+        x, y = clip_position(clip, frame)
+        if clip.get('flip_x') and clip.get('track') != 'background':
+            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         if clip.get('track') == 'background':
             # Make backgrounds cover the stage; a separate crop is needed for larger compositions.
             image = image.resize((w, h), Image.Resampling.NEAREST)
