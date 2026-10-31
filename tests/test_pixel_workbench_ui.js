@@ -17,6 +17,7 @@ new vm.Script(js, {filename: 'pixel_workbench/static/app.js'});
 // Every interactive control introduced by the workbench must have a matching DOM element.
 for (const id of [
   'purposePicker', 'purposeSummary', 'assetTypePicker', 'workflowPicker', 'categorySummary', 'workflowExplanation', 'resultZoom', 'modeGuide', 'providerGuide',
+  'rememberPixelLab', 'rememberOpenAI', 'pixelKeyState', 'openaiKeyState',
   'imageWidth', 'imageHeight', 'dimensionsField', 'animationHelp',
   'ui-frame', 'uiTheme', 'uiSourceFile', 'uiFramePreset',
   'uiTargetWidth', 'uiTargetHeight', 'uiCornerSize', 'uiFrameName',
@@ -36,6 +37,13 @@ assert.match(js, /function applyResultZoom\(/);
 assert.match(js, /redraw:'参考画像から描き直す'/);
 assert.match(js, /参照画像の人物・衣装・色・特徴/);
 assert.match(py, /mode == 'redraw'/);
+assert.match(py, /from credential_store import read_credentials, write_credentials/);
+assert.match(py, /'saved_keys'/);
+assert.match(py, /'credential_store_supported'/);
+assert.match(py, /remember: bool = True/);
+assert.match(js, /function updateKeyPersistenceStatus\(/);
+assert.match(js, /remember:remember\.checked/);
+assert.match(html, /DPAPI/);
 assert.match(py, /'reference_images': \[guidance\]/);
 assert.match(py, /'size': \{'width': dimensions\[0\], 'height': dimensions\[1\]\}/);
 assert.match(py, /generate-image-v2/);
