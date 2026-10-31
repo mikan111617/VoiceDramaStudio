@@ -814,7 +814,7 @@ class ClipCreateRequest(BaseModel):
     y: int = Field(default=0, ge=-9999, le=9999)
     end_x: int | None = Field(default=None, ge=-9999, le=9999)
     end_y: int | None = Field(default=None, ge=-9999, le=9999)
-    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out) str = Field(default='', max_length=120))
+    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out)$')
     flip_x: bool = False
     label: str = Field(default='', max_length=120)
 
@@ -827,11 +827,11 @@ class ClipUpdateRequest(BaseModel):
     y: int = Field(ge=-9999, le=9999)
     end_x: int | None = Field(default=None, ge=-9999, le=9999)
     end_y: int | None = Field(default=None, ge=-9999, le=9999)
-    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out) str = Field(default='', max_length=120)
-    track: str = 'character')
+    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out)$')
     flip_x: bool = False
     label: str = Field(default='', max_length=120)
     track: str = 'character'
+
 
 class AttackComboRequest(BaseModel):
     """Three consecutive motions plus optional impact overlays."""
