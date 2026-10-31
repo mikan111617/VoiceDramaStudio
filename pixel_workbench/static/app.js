@@ -327,6 +327,8 @@ let battleDrawTicket = 0;
 let battleFrameRequested = -1;
 let soundInstances = new Map();
 let dragStart = null;
+let battlePlacementTarget = null;
+let battlePlacementDragging = false;
 
 function battleLastFrame(){ return Math.max(0, ...(battleSequence?.clips || []).map(c => Number(c.start) + Number(c.duration) - 1)); }
 function battleLength(){ return battleLastFrame()+1; }
@@ -389,6 +391,7 @@ function seekBattle(frame, stop=true){
  }).catch(err=>{if(ticket===battleDrawTicket)$('#exportStatus').textContent='プレビュー: '+err.message;});
 }
 function resetBattleView(seq){
+ cancelBattlePlacement();
  haltBattle();battleSequence=seq;selectedClipId=null;$('#updateClipBtn').classList.add('hidden');$('#cancelClipEditBtn').classList.add('hidden');$('#addClipBtn').classList.remove('hidden');
  battleFrameRequested=-1;
  $('#seqScrub').max=String(battleLastFrame());
@@ -423,7 +426,7 @@ function clearBattleSelection(){selectedClipId=null;$('#updateClipBtn').classLis
 async function saveSelectedClip(){
  if(!selectedClipId||!currentSequenceId)return;
  const data={track:$('#clipTrack').value,start:Number($('#clipStart').value),duration:Number($('#clipDuration').value),volume:Number($('#clipVolume').value),x:Number($('#clipX').value),y:Number($('#clipY').value),...clipMotionPayload(),label:$('#clipLabel').value.trim()};
- try{await postJSON(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/clips/${encodeURIComponent(selectedClipId)}`,data,'PUT');const id=selectedClipId;await loadSequences();selectBattleClip(id,false);toast('クリップを更新しました。')}catch(e){toast(e.message,true)}
+ try{await postJSON(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/clips/${encodeURIComponent(selectedClipId)}`,data,'PUT');const id=selectedClipId,frame=battleFrame;await loadSequences();await openSequence(currentSequenceId);selectBattleClip(id,false);seekBattle(frame);toast('クリップを更新しました。')}catch(e){toast(e.message,true)}
 }
 function renderTimeline(seq){
  const box=$('#timelineView'),clips=seq.clips||[],tracks=['background','item','character','effect','sound'];
@@ -514,6 +517,13 @@ function installBattleControls(){
  $('#clipX').addEventListener('change',()=>{if(!$('#clipMoveEnabled').checked)$('#clipEndX').value=$('#clipX').value});
  $('#clipY').addEventListener('change',()=>{if(!$('#clipMoveEnabled').checked)$('#clipEndY').value=$('#clipY').value});
  $('#createAttackCombo').addEventListener('click',createAttackCombo);
+ document.querySelectorAll('[data-place-target]').forEach(button=>button.addEventListener('click',()=>beginBattlePlacement(button.dataset.placeTarget)));
+ $('#cancelBattlePlacement').addEventListener('click',cancelBattlePlacement);
+ $('#battlePreview').addEventListener('pointerdown',battlePlacementPointerDown);
+ $('#battlePreview').addEventListener('pointermove',battlePlacementPointerMove);
+ $('#battlePreview').addEventListener('pointerup',battlePlacementPointerUp);
+ $('#battlePreview').addEventListener('pointercancel',cancelBattlePlacement);
+ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&battlePlacementTarget)cancelBattlePlacement();});
  for(const id of ['comboStart','comboApproachFrames','comboAttackFrames','comboReturnFrames','comboHitOffset'])$('#'+id).addEventListener('input',refreshAttackComboSummary);
  updateClipMovementVisibility();refreshAttackComboSummary();
  window.addEventListener('beforeunload',stopBattleSounds);
@@ -807,4 +817,119 @@ async function createAttackCombo(){
   toast('接近・攻撃・帰還など '+result.created+'クリップを追加しました。');
  }catch(e){toast('攻撃シーケンス：'+e.message,true)}
  finally{button.disabled=false}
+}
+
+
+// Stage-coordinate picker: lets users place magic effects and movement points
+// by clicking/dragging the preview instead of guessing numeric X/Y offsets.
+const battlePlaceLabels={
+ 'clip-start':'素材の開始位置',
+ 'clip-end':'素材の終了位置',
+ 'combo-origin':'攻撃側の開始位置',
+ 'combo-near':'攻撃する場所',
+ 'combo-impact':'魔法・命中エフェクトの位置'
+};
+function battlePlacementAsset(){
+ const id=battlePlacementTarget?.startsWith('clip-')?$('#clipAsset').value
+  :battlePlacementTarget==='combo-impact'?$('#comboEffectAsset').value
+  :$('#comboRunAsset').value;
+ return allAssets.find(asset=>asset.id===id);
+}
+function drawBattlePlacementMarker(){
+ if(!battlePlacementTarget)return;
+ const marker=$('#battlePlacementMarker'),sprite=$('#battlePlacementSprite');
+ const ids={
+  'clip-start':['clipX','clipY'],
+  'clip-end':['clipEndX','clipEndY'],
+  'combo-origin':['comboOriginX','comboOriginY'],
+  'combo-near':['comboNearX','comboNearY'],
+  'combo-impact':['comboEnemyX','comboEnemyY']
+ };
+ const [inputX,inputY]=ids[battlePlacementTarget];
+ const x=Number($('#'+inputX).value),y=Number($('#'+inputY).value),canvas=$('#battlePreview');
+ const px=Math.max(0,Math.min(canvas.width,Math.floor(canvas.width/2)+x));
+ const py=Math.max(0,Math.min(canvas.height,Math.floor(canvas.height/2)+y));
+ marker.style.left=(px/canvas.width*100)+'%';
+ marker.style.top=(py/canvas.height*100)+'%';
+ marker.classList.remove('hidden');
+ sprite.classList.remove('hidden');
+ const asset=battlePlacementAsset(),url=asset&&asset.kind!=='audio'?battleAssetUrl(asset):null;
+ if(url){
+  if(sprite.getAttribute('src')!==url)sprite.src=url;
+ }else{sprite.removeAttribute('src');sprite.classList.add('hidden');}
+ $('#battlePlacementStatus').textContent='配置中：'+(battlePlaceLabels[battlePlacementTarget]||'位置')+' / X:'+x+' Y:'+y+' — プレビューをクリック・ドラッグ（Escで終了）';
+}
+function beginBattlePlacement(target){
+ if(!battleSequence)return toast('先にシーケンスを作成または選択してください。',true);
+ if(target.startsWith('clip-')&&!$('#clipAsset').value)return toast('位置を指定するアセットを選んでください',true);
+ if(target==='clip-end'){
+  if($('#clipTrack').value==='sound')return toast('音声クリップの座標は指定できません',true);
+  $('#clipMoveEnabled').checked=true;
+  updateClipMovementVisibility();
+ }
+ battlePlacementTarget=target;
+ battlePlacementDragging=false;
+ for(const button of document.querySelectorAll('[data-place-target]')){
+  button.classList.toggle('placement-active',button.dataset.placeTarget===target);
+  button.setAttribute('aria-pressed',String(button.dataset.placeTarget===target));
+ }
+ $('#battlePreview').classList.add('placement-active');
+ $('#cancelBattlePlacement').classList.remove('hidden');
+ drawBattlePlacementMarker();
+ $('#battlePreview').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function cancelBattlePlacement(){
+ battlePlacementTarget=null;battlePlacementDragging=false;
+ const marker=$('#battlePlacementMarker');
+ if(marker)marker.classList.add('hidden');
+ const canvas=$('#battlePreview');if(canvas)canvas.classList.remove('placement-active');
+ const cancel=$('#cancelBattlePlacement');if(cancel)cancel.classList.add('hidden');
+ for(const btn of document.querySelectorAll('[data-place-target]')){
+  btn.classList.remove('placement-active');btn.setAttribute('aria-pressed','false');
+ }
+ const status=$('#battlePlacementStatus');
+ if(status)status.textContent='位置指定：未選択。素材または魔法の命中位置を画面から設定できます。';
+}
+function updateBattlePlacementWithPointer(event){
+ const canvas=$('#battlePreview'),rect=canvas.getBoundingClientRect();
+ if(!rect.width||!rect.height||!battlePlacementTarget)return;
+ const pixelX=Math.max(0,Math.min(canvas.width-1,Math.floor((event.clientX-rect.left)/rect.width*canvas.width)));
+ const pixelY=Math.max(0,Math.min(canvas.height-1,Math.floor((event.clientY-rect.top)/rect.height*canvas.height)));
+ const x=pixelX-Math.floor(canvas.width/2),y=pixelY-Math.floor(canvas.height/2);
+ const ids={
+  'clip-start':['clipX','clipY'],
+  'clip-end':['clipEndX','clipEndY'],
+  'combo-origin':['comboOriginX','comboOriginY'],
+  'combo-near':['comboNearX','comboNearY'],
+  'combo-impact':['comboEnemyX','comboEnemyY']
+ };
+ const [i,j]=ids[battlePlacementTarget];
+ $('#'+i).value=x;$('#'+j).value=y;
+ drawBattlePlacementMarker();
+}
+function battlePlacementPointerDown(event){
+ if(!battlePlacementTarget||event.button!==0)return;
+ event.preventDefault();battlePlacementDragging=true;
+ $('#battlePreview').setPointerCapture(event.pointerId);
+ updateBattlePlacementWithPointer(event);
+}
+function battlePlacementPointerMove(event){
+ if(battlePlacementDragging&&battlePlacementTarget)updateBattlePlacementWithPointer(event);
+}
+async function battlePlacementPointerUp(event){
+ if(!battlePlacementDragging)return;
+ battlePlacementDragging=false;
+ if($('#battlePreview').hasPointerCapture(event.pointerId))$('#battlePreview').releasePointerCapture(event.pointerId);
+ updateBattlePlacementWithPointer(event);
+ const selected=battlePlacementTarget?.startsWith('clip-')&&Boolean(selectedClipId);
+ const target=battlePlacementTarget;
+ cancelBattlePlacement();
+ if(selected){
+  await saveSelectedClip();
+ }else if(target==='combo-origin'||target==='combo-near'||target==='combo-impact'){
+  refreshAttackComboSummary();
+  $('#battlePlacementStatus').textContent='位置を設定しました。位置を確認して「一連の攻撃をタイムラインに追加」を押してください。';
+ }else{
+  $('#battlePlacementStatus').textContent='位置を入力しました。「タイムラインに追加」を押すと保存されます。';
+ }
 }
