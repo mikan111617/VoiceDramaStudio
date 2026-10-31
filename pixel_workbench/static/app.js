@@ -207,7 +207,7 @@ function updateKeyPersistenceStatus(s){
   label.textContent=s.credential_store_warning
    ? '以前の暗号化保存を復号できません。必要ならキーを再登録してください。'
    : stored?'このWindowsユーザー用に暗号化保存済み・再起動後も利用可能'
-   : fromEnv?'環境変数から接続（環境変数の削除はWindows側で行ってください）'
+   : fromEnv?(active?'環境変数から接続中':'環境変数にキーが残っています。再起動すると再接続します。')
    : active?'現在の起動中のみ接続・PCには未保存'
    : available?'未接続・未保存':'未接続・安全な保存はWindows専用';
   button.textContent=checkbox.checked?'保存して接続':'今回だけ接続';
