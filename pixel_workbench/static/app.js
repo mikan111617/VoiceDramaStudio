@@ -54,8 +54,21 @@ function updateWorkflowPicker(){
  const explain=$('#workflowExplanation');if(explain)explain.textContent=workflowHelp[mode]||'';
  const title=$('#workflowTitle');if(title)title.textContent='② '+(categoryLabels[category]||'素材')+'をどう作りますか？';
 }
+const workflowDrafts=new Map();
+function defaultWorkflowPrompt(workflow){
+ return workflow==='redraw'?'参照画像のキャラクターの顔つき、髪型、衣装の色、主要な小物を参考にする。元画像を縮小して変換するのではなく、ゲーム用の新しいドット絵として描き直す。輪郭とポーズは明快に、背景透明。':
+ workflow==='animate'?'元画像のキャラクターがその場で自然に足踏みする。ループできる動き。':
+ workflow==='vfx'?'青白い稲妻が落ち、火花が散って消える。透明背景の独立した魔法エフェクト。':'';
+}
 function setAssetType(category){
  if(!assetWorkflowRules[category])category='other';
+ const oldCategory=currentCategory();
+ if(oldCategory!==category){
+  workflowDrafts.set(oldCategory+':'+mode,$('#description').value);
+  if(!(assetWorkflowRules[category]||[]).includes(mode))mode=category==='effect'?'vfx':'text';
+  const key=category+':'+mode;
+  $('#description').value=workflowDrafts.has(key)?workflowDrafts.get(key):defaultWorkflowPrompt(mode);
+ }
  $('#assetCategory').value=category;
  document.querySelectorAll('[data-asset-type]').forEach(b=>{
   const selected=b.dataset.assetType===category;
@@ -117,6 +130,10 @@ function setMode(m){
  if(m==='redraw'){
   if(getProvider()!=='pixellab'){$('#provider').value='pixellab';setProvider();}
   $('#model').value='pro';
+ }
+ if(m!==mode){
+  workflowDrafts.set(currentCategory()+':'+mode,$('#description').value);
+  $('#description').value=workflowDrafts.has(currentCategory()+':'+m)?workflowDrafts.get(currentCategory()+':'+m):defaultWorkflowPrompt(m);
  }
  mode=m;
  document.querySelectorAll('.tab').forEach(b=>{const selected=b.dataset.mode===m;b.classList.toggle('current',selected);b.setAttribute('aria-selected',String(selected))});
