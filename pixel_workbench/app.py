@@ -1339,6 +1339,85 @@ def add_clip(sequence_id: str, data: ClipCreateRequest):
     return clip
 
 
+@app.post('/api/sequences/{sequence_id}/attack-combo')
+def create_attack_combo(sequence_id: str, data: AttackComboRequest):
+    """Insert a synchronized approach/strike/return combo as one atomic edit."""
+    if data.hit_offset >= data.attack_frames:
+        raise HTTPException(422, '命中タイミングは攻撃モーションの長さより小さくしてください。')
+    finish = data.start + data.approach_frames + data.attack_frames + data.return_frames
+    if finish > 600:
+        raise HTTPException(422, '攻撃シーケンスは600フレーム以内で構成してください。')
+    attack_start = data.start + data.approach_frames
+    retreat_start = attack_start + data.attack_frames
+    hit_frame = attack_start + data.hit_offset
+    with _lock:
+        seq = next((s for s in _state.get('sequences', []) if s.get('id') == sequence_id), None)
+        if seq is None:
+            raise HTTPException(404, 'シーケンスが見つかりません。')
+        asset_lookup = {a.get('id'): a for a in _state.get('assets', [])}
+        fields = [
+            (data.run_asset_id, '走行アニメ', 'image'),
+            (data.attack_asset_id, '攻撃アニメ', 'image'),
+            (data.effect_asset_id, '命中エフェクト', 'image'),
+            (data.sound_asset_id, '命中効果音', 'audio'),
+            (data.reaction_asset_id, '敵の被弾アニメ', 'image')
+        ]
+        for asset_id, label, expected in fields:
+            if asset_id is None:
+                continue
+            asset = asset_lookup.get(asset_id)
+            if not asset or (asset.get('kind') == 'audio') != (expected == 'audio'):
+                raise HTTPException(422, f'{label}の素材を確認してください。')
+        if len(seq.get('clips', [])) + 3 + sum(bool(x) for x in (
+                data.effect_asset_id, data.sound_asset_id, data.reaction_asset_id)) > 100:
+            raise HTTPException(422, 'シーケンスのクリップ数は100個以内にしてください。')
+
+        def make_clip(asset_id: str, track: str, start: int, duration: int,
+                      label: str, x: int = 0, y: int = 0,
+                      end_x: int | None = None, end_y: int | None = None,
+                      flip_x: bool = False, easing: str = 'linear') -> dict:
+            asset = asset_lookup[asset_id]
+            return {
+                'id': str(uuid.uuid4()), 'asset_id': asset_id, 'asset_name': asset.get('name'),
+                'asset_category': asset.get('category'), 'track': track, 'start': start,
+                'duration': duration, 'volume': 1.0, 'x': x, 'y': y,
+                'end_x': end_x, 'end_y': end_y, 'easing': easing,
+                'flip_x': flip_x, 'label': label, 'created_at': now()
+            }
+
+        added = [
+            make_clip(data.run_asset_id, 'character', data.start,
+                      data.approach_frames, '① 敵へ接近（走行）',
+                      data.origin_x, data.origin_y, data.approach_x, data.approach_y,
+                      easing=data.easing),
+            make_clip(data.attack_asset_id, 'character', attack_start,
+                      data.attack_frames, '② 攻撃モーション',
+                      data.approach_x, data.approach_y),
+            make_clip(data.run_asset_id, 'character', retreat_start,
+                      data.return_frames, '③ 元の位置へ帰還（走行）',
+                      data.approach_x, data.approach_y, data.origin_x, data.origin_y,
+                      flip_x=data.return_flip_x, easing=data.easing)
+        ]
+        effect_frames = min(6, finish - hit_frame)
+        if data.effect_asset_id:
+            added.append(make_clip(data.effect_asset_id, 'effect', hit_frame,
+                                   effect_frames, '④ 命中エフェクト',
+                                   data.enemy_x, data.enemy_y))
+        if data.sound_asset_id:
+            sound_frames = min(max(1, int(seq.get('fps', 12) // 2)), finish - hit_frame)
+            added.append(make_clip(data.sound_asset_id, 'sound', hit_frame,
+                                   sound_frames, '⑤ 命中効果音'))
+        if data.reaction_asset_id:
+            added.append(make_clip(data.reaction_asset_id, 'character', hit_frame,
+                                   effect_frames, '⑥ 敵の被弾',
+                                   data.enemy_x, data.enemy_y))
+        seq.setdefault('clips', []).extend(added)
+        seq['clips'].sort(key=lambda c: (c.get('track', ''), c.get('start', 0)))
+        seq['updated_at'] = now()
+        save_state()
+    return {'created': len(added), 'clips': added, 'hit_frame': hit_frame, 'end_frame': finish}
+
+
 @app.delete('/api/sequences/{sequence_id}/clips/{clip_id}')
 def remove_clip(sequence_id: str, clip_id: str):
     with _lock:
