@@ -161,3 +161,34 @@
 .ui-ai-preview img{max-width:100%;max-height:350px;object-fit:contain;image-rendering:pixelated}
 #uiAIGenerate:disabled{opacity:.6}
 #uiAIDownload{text-decoration:none}
+
+/* Purpose-first Pixel Workbench: material is not an operation. */
+.guided-studio{padding:22px;margin-bottom:20px}
+.asset-type-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.asset-type-card{display:flex;flex-direction:column;align-items:flex-start;gap:7px;text-align:left;min-height:83px;padding:14px 15px;border:1px solid #37505e;background:#182838;border-radius:11px;color:#e1eef1}
+.asset-type-card b{font-size:14px}
+.asset-type-card small{font-size:11px;line-height:1.5;color:#a2b9c5}
+.asset-type-card:hover,.asset-type-card.selected{background:#2a454b;border-color:#8dcebe}
+.asset-type-card.selected{box-shadow:inset 0 0 0 1px #8dcebe}
+.studio-substep{margin-top:24px;padding-top:19px;border-top:1px solid #36505b}
+.studio-substep h3{margin:0 0 12px;font-size:15px;color:#edf7f6}
+.workflow-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.workflow-card{display:flex;flex-direction:column;text-align:left;gap:7px;min-height:87px;padding:13px;border:1px solid #3f5464;border-radius:9px;color:#dee8ee;background:#142433}
+.workflow-card b{font-size:12.5px;line-height:1.4}
+.workflow-card small{font-size:11px;color:#a1b5c3;line-height:1.5}
+.workflow-card.current,.workflow-card:hover{border-color:#86ccb8;background:#24444b}
+.workflow-card.current{box-shadow:inset 0 0 0 1px #86ccb8}
+#workflowExplanation{margin:16px 0 0}
+#assetPresetsDetails,#advancedProviderSettings{margin-top:16px;border:1px solid #344b59;border-radius:10px;padding:10px 12px;background:#132431}
+#assetPresetsDetails>summary,#advancedProviderSettings>summary{cursor:pointer;color:#b7ded3;font-size:12px;padding:6px}
+#assetPresetsDetails[open]>.purpose-grid,#advancedProviderSettings[open]>.selection-grid{margin-top:14px}
+#assetPresetsDetails>.purpose-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+#advancedProviderSettings{margin:4px 0 18px}
+#advancedProviderSettings>.selection-grid{margin-bottom:2px}
+.compare-zoom{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding-top:13px}
+.compare-zoom label{font-size:12px;color:#ccdce1}
+.compare-zoom select{background:#0f1722;color:#dcebf0;border:1px solid #3b4a5a;border-radius:7px;padding:7px;font-size:11px}
+.compare-zoom small{font-size:10px;color:#91a6af}
+#previewCanvas img{image-rendering:pixelated;max-width:100%;object-fit:contain}
+@media(max-width:1150px){.asset-type-grid,.workflow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.guided-studio{padding:12px}.asset-type-card,.workflow-card{min-height:78px;padding:10px}.asset-type-card b{font-size:12px}.asset-type-card small,.workflow-card small{font-size:10px}#assetPresetsDetails>.purpose-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
