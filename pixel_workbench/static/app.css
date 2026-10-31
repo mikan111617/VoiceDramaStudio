@@ -192,3 +192,11 @@
 #previewCanvas img{image-rendering:pixelated;max-width:100%;object-fit:contain}
 @media(max-width:1150px){.asset-type-grid,.workflow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.guided-studio{padding:12px}.asset-type-card,.workflow-card{min-height:78px;padding:10px}.asset-type-card b{font-size:12px}.asset-type-card small,.workflow-card small{font-size:10px}#assetPresetsDetails>.purpose-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Per-user encrypted API credential preferences. */
+.account-row .remember-option{display:flex;align-items:center;gap:8px;margin:10px 0 0;font-size:11px;line-height:1.55;color:#c3ddd2;font-weight:500;cursor:pointer}
+.account-row .remember-option input{width:15px;height:15px;flex:none;accent-color:#84c9b7}
+.account-row .remember-option input:disabled{opacity:.4}
+.account-row .credential-status{display:block;margin-top:6px;font-size:11px;line-height:1.5;color:#9fb9c6}
+.account-row .token-row button{white-space:nowrap}
+@media(max-width:700px){.account-panel{flex-wrap:wrap}.account-row{flex-basis:100%}.token-row{flex-wrap:wrap}.token-row input{min-width:180px}}
