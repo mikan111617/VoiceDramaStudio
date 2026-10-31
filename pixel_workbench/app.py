@@ -463,7 +463,7 @@ def demo_images(mode: str, size: int, frames: int, width: int | None=None, heigh
         rect(-3, 2, 3, 5, '#5c87b9')
         rect(-3, 5, -1, 7, '#423c51')
         rect(1, 5, 3, 7, '#423c51')
-        if mode == 'text' and width is not None and height is not None:
+        if mode in ('text','redraw') and width is not None and height is not None:
             # Demo only: retain exact requested dimensions without calling the service.
             resized = img.copy()
             resized.thumbnail((width, height), Image.Resampling.NEAREST)
