@@ -1,6 +1,7 @@
 """PixelLab Local Trial - personal local UI for PixelLab API v2.
 
-This app never writes API secrets to disk. It binds to 127.0.0.1 only.
+API keys can be kept encrypted for the local Windows user using DPAPI.
+The app binds to 127.0.0.1 only.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, UnidentifiedImageError
 from sequence_render import render_png, validate_stage, save_media, package_project, project_manifest, media_file, sequence_length
+from credential_store import read_credentials, write_credentials, supported as credential_storage_supported
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent
@@ -47,8 +49,18 @@ app = FastAPI(title='PixelLab + GPT Local Workbench', version='0.7.0', docs_url=
 app.mount('/static', StaticFiles(directory=str(STATIC)), name='static')
 _lock = threading.RLock()
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='art-job')
-_token = os.environ.get('PIXELLAB_API_KEY', '').strip() or os.environ.get('PIXELLAB_SECRET', '').strip()
-_openai_token = os.environ.get('OPENAI_API_KEY', '').strip()
+_saved_tokens: dict[str, str] = {}
+_credential_store_warning = False
+try:
+    _saved_tokens = read_credentials()
+except RuntimeError:
+    # Do not reveal ciphertext, plaintext credentials, or operating-system details.
+    _credential_store_warning = True
+    log.warning('Stored API credentials could not be loaded; they may need replacing.')
+_pixellab_env = os.environ.get('PIXELLAB_API_KEY', '').strip() or os.environ.get('PIXELLAB_SECRET', '').strip()
+_openai_env = os.environ.get('OPENAI_API_KEY', '').strip()
+_token = _pixellab_env or _saved_tokens.get('pixellab', '')
+_openai_token = _openai_env or _saved_tokens.get('openai', '')
 
 
 def now() -> str:
@@ -754,6 +766,7 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
 class TokenRequest(BaseModel):
     token: str = Field(min_length=8, max_length=1024)
     provider: str = 'pixellab'
+    remember: bool = True
 
 
 class SettingsRequest(BaseModel):
@@ -941,25 +954,77 @@ async def import_chatgpt(result_image: UploadFile = File(...), prompt: str = For
 
 @app.get('/api/status')
 def status():
-    return {'has_key': bool(_token), 'has_openai_key': bool(_openai_token), 'stats': local_stats(), 'jobs': list(reversed(_state['jobs'][-60:]))}
+    return {
+        'has_key': bool(_token), 'has_openai_key': bool(_openai_token),
+        # Only boolean configuration metadata is returned; never return a secret.
+        'saved_keys': {p: bool(_saved_tokens.get(p)) for p in ('pixellab', 'openai')},
+        'env_keys': {'pixellab': bool(_pixellab_env), 'openai': bool(_openai_env)},
+        'credential_store_supported': credential_storage_supported(),
+        'credential_store_warning': _credential_store_warning,
+        'stats': local_stats(), 'jobs': list(reversed(_state['jobs'][-60:]))
+    }
 
 
 @app.post('/api/session')
 def set_token(data: TokenRequest):
-    global _token, _openai_token
-    if data.provider == 'pixellab': _token = data.token.strip()
-    elif data.provider == 'openai': _openai_token = data.token.strip()
-    else: raise HTTPException(422, '未対応のAPIです。')
-    return {'has_key': True, 'message': 'APIキーをメモリに設定しました。ディスクには保存していません。'}
+    global _token, _openai_token, _credential_store_warning
+    provider = data.provider
+    if provider not in ('pixellab', 'openai'):
+        raise HTTPException(422, '未対応のAPIです。')
+    token = data.token.strip()
+    if len(token) < 8:
+        raise HTTPException(422, 'APIキーを入力してください。')
+    if data.remember and not credential_storage_supported():
+        raise HTTPException(422, 'この環境では暗号化保存を利用できません。保存なしで接続してください。')
+    with _lock:
+        new_saved = dict(_saved_tokens)
+        if data.remember:
+            new_saved[provider] = token
+        else:
+            new_saved.pop(provider, None)
+        if credential_storage_supported():
+            try:
+                write_credentials(new_saved)
+            except (OSError, RuntimeError) as exc:
+                log.warning('Credential persistence failed: %s', type(exc).__name__)
+                raise HTTPException(500, 'APIキーの暗号化保存に失敗しました。Windowsの権限をご確認ください。保存なしでの接続も可能です。') from None
+        _saved_tokens.clear()
+        _saved_tokens.update(new_saved)
+        _credential_store_warning = False
+        if provider == 'pixellab':
+            _token = token
+        else:
+            _openai_token = token
+    return {
+        'has_key': True, 'saved': bool(data.remember),
+        'message': 'このWindowsユーザー用に暗号化保存しました。次回起動時にも利用できます。' if data.remember else '今回の起動中だけAPIキーを保持します。'
+    }
 
 
 @app.delete('/api/session')
 def delete_token(provider: str='pixellab'):
-    global _token, _openai_token
-    if provider == 'pixellab': _token = ''
-    elif provider == 'openai': _openai_token = ''
-    else: raise HTTPException(422,'未対応のAPIです。')
-    return {'has_key': False}
+    global _token, _openai_token, _credential_store_warning
+    if provider not in ('pixellab', 'openai'):
+        raise HTTPException(422, '未対応のAPIです。')
+    with _lock:
+        new_saved = dict(_saved_tokens)
+        new_saved.pop(provider, None)
+        if credential_storage_supported():
+            try:
+                write_credentials(new_saved)
+            except (OSError, RuntimeError):
+                raise HTTPException(500, '保存済みAPIキーの削除に失敗しました。') from None
+        _saved_tokens.clear()
+        _saved_tokens.update(new_saved)
+        _credential_store_warning = False
+        if provider == 'pixellab':
+            _token = ''
+        else:
+            _openai_token = ''
+    return {
+        'has_key': False, 'saved': False,
+        'message': '接続と暗号化済みの保存キーを削除しました。環境変数に設定したキーは別途削除してください。'
+    }
 
 
 @app.get('/api/balance')

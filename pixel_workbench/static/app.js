@@ -194,7 +194,26 @@ async function updateEstimate(){
  if(getProvider()==='chatgpt'){currentEstimate={estimate_usd:0,budget_reservation_usd:0};$('#estimatePrice').textContent='API料金なし';$('#estimateNotice').textContent='ChatGPT側の利用枠は別管理';return;}
  try{const d=await postJSON('/pixel/api/estimate',opts());currentEstimate=d;$('#estimatePrice').textContent=$('#demo').checked?'$0.0000':d.estimate_usd==null?'要確認':usd(d.estimate_usd);$('#estimateNotice').textContent=$('#demo').checked?'デモ・API送信なし':d.estimate_usd==null?`予算予約 ${usd(d.budget_reservation_usd)}（請求上限ではない）`:'参考額・変動あり';}catch(e){$('#estimatePrice').textContent='—';currentEstimate=null;$('#estimateNotice').textContent=e.message}
 }
-async function status(){try{const s=await api('/pixel/api/status');allJobs=s.jobs;if(getProvider()!=='chatgpt'){$('#connectionStatus').textContent=getProvider()==='openai'?(s.has_openai_key?'● OpenAI接続':'● OpenAI未接続'):(s.has_key?'● PixelLab接続':'● PixelLab未接続');$('#connectionStatus').classList.toggle('connected',getProvider()==='openai'?s.has_openai_key:s.has_key);}$('#openaiStatus').textContent=s.has_openai_key?'● GPT接続済み':'○ GPT未接続';$('#monthSpend').textContent=usd(s.stats.usd_confirmed);$('#budgetReserved').textContent=usd(s.stats.budget_reserved);$('#budget').value=Number(s.stats.budget_usd).toFixed(2);renderHistory(s.jobs);return s}catch(e){toast(e.message,true)}}
+function updateKeyPersistenceStatus(s){
+ for(const [provider,rememberId,statusId,buttonId,active] of [
+  ['pixellab','rememberPixelLab','pixelKeyState','saveToken',s.has_key],
+  ['openai','rememberOpenAI','openaiKeyState','saveOpenAI',s.has_openai_key]
+ ]){
+  const checkbox=$('#'+rememberId),label=$('#'+statusId),button=$('#'+buttonId);
+  const available=s.credential_store_supported===true;
+  checkbox.disabled=!available;
+  if(!available)checkbox.checked=false;
+  const stored=Boolean(s.saved_keys?.[provider]),fromEnv=Boolean(s.env_keys?.[provider]);
+  label.textContent=s.credential_store_warning
+   ? '以前の暗号化保存を復号できません。必要ならキーを再登録してください。'
+   : stored?'このWindowsユーザー用に暗号化保存済み・再起動後も利用可能'
+   : fromEnv?(active?'環境変数から接続中':'環境変数にキーが残っています。再起動すると再接続します。')
+   : active?'現在の起動中のみ接続・PCには未保存'
+   : available?'未接続・未保存':'未接続・安全な保存はWindows専用';
+  button.textContent=checkbox.checked?'保存して接続':'今回だけ接続';
+ }
+}
+async function status(){try{const s=await api('/pixel/api/status');allJobs=s.jobs;updateKeyPersistenceStatus(s);if(getProvider()!=='chatgpt'){$('#connectionStatus').textContent=getProvider()==='openai'?(s.has_openai_key?'● OpenAI接続':'● OpenAI未接続'):(s.has_key?'● PixelLab接続':'● PixelLab未接続');$('#connectionStatus').classList.toggle('connected',getProvider()==='openai'?s.has_openai_key:s.has_key);}$('#openaiStatus').textContent=s.has_openai_key?'● GPT接続済み':'○ GPT未接続';$('#monthSpend').textContent=usd(s.stats.usd_confirmed);$('#budgetReserved').textContent=usd(s.stats.budget_reserved);$('#budget').value=Number(s.stats.budget_usd).toFixed(2);renderHistory(s.jobs);return s}catch(e){toast(e.message,true)}}
 async function fetchBalance(silent=false){try{const b=await api('/pixel/api/balance');$('#providerCredits').textContent=usd(b.credits?.usd);const gen=b.subscription?.generations, tot=b.subscription?.total;$('#providerGenerations').textContent=gen==null?'—':Number(gen).toLocaleString('ja-JP')+(tot==null?'':' / '+Number(tot).toLocaleString('ja-JP'));$('#subscriptionInfo').textContent=b.subscription?.plan||b.subscription?.status||'PixelLab残高';if(!silent)toast('PixelLab残高を取得しました')}catch(e){if(!silent)toast('残高取得：'+e.message,true)}}
 function jobFiles(job){return (job.files||[]).filter(f=>f!=='reference.png')}
 function setCompareOptions(job){const sel=$('#compareSelect'),before=sel.value;sel.replaceChildren();const src=document.createElement('option');src.value='reference';src.textContent='今回の元画像';sel.append(src);const empty=document.createElement('option');empty.value='none';empty.textContent='比較しない';sel.append(empty);for(const j of allJobs.filter(x=>x.status==='completed'&&x.id!==job.id&&jobFiles(x).some(f=>f.endsWith('.png')))){const opt=document.createElement('option');opt.value=j.id;opt.textContent=`${providerName(j.provider)} ${j.model||'standard'} / ${j.created_at.slice(0,16).replace('T',' ')} / ${modeNames[j.mode]}`;sel.append(opt)}sel.value=[...sel.options].some(x=>x.value===before)?before:(job.files||[]).includes('reference.png')?'reference':'none';}
@@ -252,7 +271,36 @@ function attachEvents(){
  $('#referenceImage').addEventListener('change',()=>{fileInputUpdate();updateEstimate();updateAnimationHelp()});$('#compareSelect').addEventListener('change',()=>{const job=allJobs.find(j=>j.id===currentJob);if(job)updateCompare(job)});
  document.querySelectorAll('[data-text]').forEach(b=>b.addEventListener('click',()=>{$('#description').value=b.dataset.text;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt()}));
  $('#generate').addEventListener('click',generate);attachUIFrameEvents();$('#refreshBalance').addEventListener('click',()=>fetchBalance());
- for(const [provider,input,save,clear] of [['pixellab','apiToken','saveToken','clearToken'],['openai','openaiToken','saveOpenAI','clearOpenAI']]){$('#'+save).addEventListener('click',async()=>{const token=$('#'+input).value.trim();if(!token)return toast('APIキーを入力してください',true);try{await postJSON('/pixel/api/session',{token,provider});$('#'+input).value='';await status();if(provider==='pixellab')await fetchBalance(true);toast((provider==='openai'?'OpenAI':'PixelLab')+'キーをメモリに設定しました')}catch(e){toast(e.message,true)}});$('#'+clear).addEventListener('click',async()=>{try{await api('/pixel/api/session?provider='+provider,{method:'DELETE'});await status();if(provider==='pixellab'){$('#providerCredits').textContent='—';$('#providerGenerations').textContent='—'}toast('接続情報を解除しました')}catch(e){toast(e.message,true)}})}
+ for(const [provider,input,save,clear,rememberId] of [
+  ['pixellab','apiToken','saveToken','clearToken','rememberPixelLab'],
+  ['openai','openaiToken','saveOpenAI','clearOpenAI','rememberOpenAI']
+ ]){
+  const saveButton=$('#'+save), clearButton=$('#'+clear), remember=$('#'+rememberId);
+  remember.addEventListener('change',()=>{saveButton.textContent=remember.checked?'保存して接続':'今回だけ接続'});
+  saveButton.addEventListener('click',async()=>{
+   const token=$('#'+input).value.trim();
+   if(!token)return toast('APIキーを入力してください',true);
+   saveButton.disabled=true;
+   try{
+    const response=await postJSON('/pixel/api/session',{token,provider,remember:remember.checked});
+    $('#'+input).value='';
+    await status();
+    if(provider==='pixellab')await fetchBalance(true);
+    toast(response.message);
+   }catch(e){toast(e.message,true)}finally{saveButton.disabled=false}
+  });
+  clearButton.addEventListener('click',async()=>{
+   if(!confirm('現在の接続と、このPCに保存したキーを削除しますか？'))return;
+   clearButton.disabled=true;
+   try{
+    const response=await api('/pixel/api/session?provider='+encodeURIComponent(provider),{method:'DELETE'});
+    $('#'+input).value='';
+    await status();
+    if(provider==='pixellab'){$('#providerCredits').textContent='—';$('#providerGenerations').textContent='—'}
+    toast(response.message);
+   }catch(e){toast(e.message,true)}finally{clearButton.disabled=false}
+  });
+ }
  $('#saveBudget').addEventListener('click',async()=>{try{await postJSON('/pixel/api/settings',{budget_usd:Number($('#budget').value)});await status();toast('月間予算を保存しました')}catch(e){toast(e.message,true)}});
  $('#newWindow').addEventListener('click',()=>window.open('/pixel/','_blank','noopener'));$('#refreshOllama').addEventListener('click',refreshOllama);$('#improvePrompt').addEventListener('click',()=>ollamaAssist('refine'));$('#describeImage').addEventListener('click',()=>ollamaAssist('describe'));$('#compareWithOllama').addEventListener('click',compareWithOllama);$('#applyOllama').addEventListener('click',()=>{savedPrompt=$('#description').value;$('#description').value=$('#ollamaOutput').value.slice(0,2000);if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();$('#undoPrompt').classList.remove('hidden');toast('プロンプトに反映しました。')});$('#undoPrompt').addEventListener('click',()=>{if(savedPrompt!==null){$('#description').value=savedPrompt;if(getProvider()==='chatgpt')$('#browserPreparedPrompt').value=browserPrompt();savedPrompt=null;$('#undoPrompt').classList.add('hidden');toast('変更前の指示に戻しました')}});$('#launchChatGPT').addEventListener('click',launchChatGPT);if($('#importChatGPT'))$('#importChatGPT').addEventListener('click',importChatGPT);$('#pasteChatGPT').addEventListener('click',clipboardReadButton);$('#copyBrowserPrompt').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(browserPrompt());toast('プロンプトをコピーしました')}catch(e){toast('コピー失敗：'+e.message,true)}});$('#importResult').addEventListener('change',()=>{if($('#importResult').files[0])clipboardFile($('#importResult').files[0])});document.addEventListener('paste',handleImagePaste);bindFileDrop($('#chatgptDropzone'),file=>{if(getProvider()!=='chatgpt'){$('#provider').value='chatgpt';setProvider()}clipboardFile(file)});bindFileDrop(document.querySelector('#imageField .dropzone'),setReferenceFile);$('#useResultAsReference').addEventListener('click',useResultAsReference);$('#reuseJobSettings').addEventListener('click',reuseJobSettings);$('#copyResultImage').addEventListener('click',copyResultImage);$('#toggleAccount').addEventListener('click',()=>{const collapsed=$('#account').classList.toggle('collapsed');$('#toggleAccount').textContent=collapsed?'接続・料金を表示 ▾':'接続・料金を閉じる ▴';$('#toggleAccount').setAttribute('aria-expanded',String(!collapsed))});for(const [id,rating] of [['rateGood','good'],['rateBad','bad']])$('#'+id).addEventListener('click',async()=>{if(!currentJob)return;try{await postJSON(`/pixel/api/jobs/${encodeURIComponent(currentJob)}/rating`,{rating});const s=await status();const j=s.jobs.find(x=>x.id===currentJob);if(j)displayResult(j);toast('評価をローカルに保存しました')}catch(e){toast(e.message,true)}});
  if($('#assetFilter'))$('#assetFilter').addEventListener('change',()=>loadAssets($('#assetFilter').value));
