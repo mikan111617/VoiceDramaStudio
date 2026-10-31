@@ -812,6 +812,10 @@ class ClipCreateRequest(BaseModel):
     volume: float = Field(default=1.0, ge=0.0, le=2.0)
     x: int = Field(default=0, ge=-9999, le=9999)
     y: int = Field(default=0, ge=-9999, le=9999)
+    end_x: int | None = Field(default=None, ge=-9999, le=9999)
+    end_y: int | None = Field(default=None, ge=-9999, le=9999)
+    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out) str = Field(default='', max_length=120))
+    flip_x: bool = False
     label: str = Field(default='', max_length=120)
 
 
@@ -821,8 +825,34 @@ class ClipUpdateRequest(BaseModel):
     volume: float = Field(ge=0.0, le=2.0)
     x: int = Field(ge=-9999, le=9999)
     y: int = Field(ge=-9999, le=9999)
+    end_x: int | None = Field(default=None, ge=-9999, le=9999)
+    end_y: int | None = Field(default=None, ge=-9999, le=9999)
+    easing: str = Field(default='linear', pattern='^(linear|ease_in_out|ease_out) str = Field(default='', max_length=120)
+    track: str = 'character')
+    flip_x: bool = False
     label: str = Field(default='', max_length=120)
     track: str = 'character'
+
+class AttackComboRequest(BaseModel):
+    """Three consecutive motions plus optional impact overlays."""
+    run_asset_id: str = Field(min_length=1, max_length=120)
+    attack_asset_id: str = Field(min_length=1, max_length=120)
+    effect_asset_id: str | None = None
+    sound_asset_id: str | None = None
+    reaction_asset_id: str | None = None
+    start: int = Field(default=0, ge=0, le=999999)
+    approach_frames: int = Field(default=8, ge=2, le=120)
+    attack_frames: int = Field(default=8, ge=1, le=120)
+    return_frames: int = Field(default=8, ge=2, le=120)
+    hit_offset: int = Field(default=4, ge=0, le=119)
+    origin_x: int = Field(default=-65, ge=-9999, le=9999)
+    origin_y: int = Field(default=0, ge=-9999, le=9999)
+    approach_x: int = Field(default=30, ge=-9999, le=9999)
+    approach_y: int = Field(default=0, ge=-9999, le=9999)
+    enemy_x: int = Field(default=68, ge=-9999, le=9999)
+    enemy_y: int = Field(default=0, ge=-9999, le=9999)
+    easing: str = Field(default='ease_in_out', pattern='^(linear|ease_in_out|ease_out)$')
+    return_flip_x: bool = True
 
 
 @app.middleware('http')
@@ -1301,7 +1331,7 @@ def add_clip(sequence_id: str, data: ClipCreateRequest):
             raise HTTPException(422, '未対応のレーンです。')
         if (data.track == 'sound') != (asset.get('kind') == 'audio'):
             raise HTTPException(422, '音声は効果音レーン、画像は画像レーンを選択してください。')
-        clip = {'id': str(uuid.uuid4()), 'asset_id': data.asset_id, 'asset_name': asset.get('name'), 'asset_category': asset.get('category'), 'track': data.track, 'start': data.start, 'duration': data.duration, 'volume': data.volume, 'x': data.x, 'y': data.y, 'label': data.label[:120], 'created_at': now()}
+        clip = {'id': str(uuid.uuid4()), 'asset_id': data.asset_id, 'asset_name': asset.get('name'), 'asset_category': asset.get('category'), 'track': data.track, 'start': data.start, 'duration': data.duration, 'volume': data.volume, 'x': data.x, 'y': data.y, 'end_x': data.end_x, 'end_y': data.end_y, 'easing': data.easing, 'flip_x': data.flip_x, 'label': data.label[:120], 'created_at': now()}
         seq.setdefault('clips', []).append(clip)
         seq['clips'].sort(key=lambda c: (c.get('track',''), c.get('start',0), c.get('asset_name','')))
         seq['updated_at'] = now()
