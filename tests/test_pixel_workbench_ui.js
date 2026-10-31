@@ -34,7 +34,7 @@ assert.match(js, /function setAssetType\(/);
 assert.match(js, /function updateWorkflowPicker\(/);
 assert.match(js, /function applyResultZoom\(/);
 assert.match(js, /redraw:'参考画像から描き直す'/);
-assert.match(js, /参考画像の人物・衣装・色・特徴/);
+assert.match(js, /参照画像の人物・衣装・色・特徴/);
 assert.match(py, /mode == 'redraw'/);
 assert.match(py, /'reference_images': \[guidance\]/);
 assert.match(py, /'size': \{'width': dimensions\[0\], 'height': dimensions\[1\]\}/);
