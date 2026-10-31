@@ -855,7 +855,17 @@ function drawBattlePlacementMarker(){
  sprite.classList.remove('hidden');
  const asset=battlePlacementAsset(),url=asset&&asset.kind!=='audio'?battleAssetUrl(asset):null;
  if(url){
-  if(sprite.getAttribute('src')!==url)sprite.src=url;
+  const updateSpriteScale=()=>{
+   const rect=canvas.getBoundingClientRect(),scale=rect.width/canvas.width;
+   if(sprite.naturalWidth&&scale>0){
+    sprite.style.width=Math.round(sprite.naturalWidth*scale)+'px';
+    sprite.style.height=Math.round(sprite.naturalHeight*scale)+'px';
+   }
+  };
+  if(sprite.getAttribute('src')!==url){
+   sprite.onload=updateSpriteScale;
+   sprite.src=url;
+  }else if(sprite.complete)updateSpriteScale();
  }else{sprite.removeAttribute('src');sprite.classList.add('hidden');}
  $('#battlePlacementStatus').textContent='配置中：'+(battlePlaceLabels[battlePlacementTarget]||'位置')+' / X:'+x+' Y:'+y+' — プレビューをクリック・ドラッグ（Escで終了）';
 }
