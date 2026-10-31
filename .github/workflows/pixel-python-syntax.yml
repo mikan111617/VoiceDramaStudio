@@ -1,0 +1,29 @@
+name: Pixel Workbench syntax checks
+
+on:
+  pull_request:
+    paths:
+      - "pixel_workbench/**"
+      - "pixel_integration.py"
+      - "tests/test_pixel_python_syntax.py"
+      - ".github/workflows/pixel-python-syntax.yml"
+  push:
+    branches: [main]
+    paths:
+      - "pixel_workbench/**"
+      - "pixel_integration.py"
+      - "tests/test_pixel_python_syntax.py"
+      - ".github/workflows/pixel-python-syntax.yml"
+
+jobs:
+  python-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify app and integration syntax
+        run: python -m unittest discover -s tests -p test_pixel_python_syntax.py
+      - name: Compile Python application source
+        run: python -m py_compile pixel_workbench/app.py pixel_integration.py
