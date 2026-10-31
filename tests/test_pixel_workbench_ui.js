@@ -23,7 +23,15 @@ for (const id of [
   'uiTargetWidth', 'uiTargetHeight', 'uiCornerSize', 'uiFrameName',
   'uiFrameCanvas', 'uiFrameStatus', 'uiDownload', 'uiRegister', 'uiUseCurrent',
   'uiAIPreset', 'uiAIPrompt', 'uiAIColors', 'uiAIWidth', 'uiAIHeight', 'uiAITransparent', 'uiAIDemo',
-  'uiAIGenerate', 'uiAIStatus', 'uiAIState', 'uiAIResult', 'uiAIEmpty', 'uiAIDownload', 'uiAIGoHistory'
+  'uiAIGenerate', 'uiAIStatus', 'uiAIState', 'uiAIResult', 'uiAIEmpty', 'uiAIDownload', 'uiAIGoHistory',
+  'attackComboBuilder', 'comboRunAsset', 'comboAttackAsset', 'comboEffectAsset',
+  'comboSoundAsset', 'comboReactionAsset', 'comboStart', 'comboApproachFrames',
+  'comboAttackFrames', 'comboReturnFrames', 'comboHitOffset', 'comboOriginX',
+  'comboOriginY', 'comboNearX', 'comboNearY', 'comboEnemyX', 'comboEnemyY',
+  'comboEasing', 'comboReturnFlip', 'comboSummary', 'createAttackCombo',
+  'clipMotionPanel', 'clipMoveEnabled', 'clipEndX', 'clipEndY',
+  'clipEasing', 'clipFlipX', 'battlePreview', 'battlePlacementMarker',
+  'battlePlacementSprite', 'battlePlacementStatus', 'cancelBattlePlacement'
 ]) {
   assert.ok(html.includes('id="' + id + '"'), 'Missing UI control: ' + id);
 }
@@ -59,6 +67,23 @@ assert.match(js, /total|総コマ数|総フレーム数/);
 assert.match(html, /id="uiAIDemo"/);
 assert.match(html, /value="14">14コマ/);
 assert.match(py, /4,6,8,10,12,14,16/);
+assert.match(js, /function createAttackCombo\(/);
+assert.match(js, /function clipMotionPayload\(/);
+assert.match(js, /function beginBattlePlacement\(/);
+assert.match(js, /function battlePlacementPointerDown\(/);
+assert.match(js, /function battlePlacementPointerUp\(/);
+assert.match(js, /function updateBattlePlacementWithPointer\(/);
+assert.match(js, /function drawBattlePlacementMarker\(/);
+assert.match(js, /function renderAttackComboOptions\(/);
+assert.match(js, /function refreshAttackComboSummary\(/);
+assert.match(html, /data-place-target="combo-impact"/);
+assert.match(html, /data-place-target="clip-start"/);
+assert.match(html, /data-place-target="clip-end"/);
+assert.match(py, /class AttackComboRequest/);
+assert.match(py, /def create_attack_combo\(/);
+assert.match(py, /end_x: int \| None/);
+assert.match(py, /end_y: int \| None/);
+assert.match(css, /\.battle-placement-marker/);
 assert.match(js, /function renderUIFrame\(/);
 assert.match(js, /function tileUIArea\(/);
 assert.match(js, /imageSmoothingEnabled=false/);
