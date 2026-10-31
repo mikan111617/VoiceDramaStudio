@@ -758,8 +758,8 @@ function updateClipMovementVisibility(){
 }
 function renderAttackComboOptions(){
  const names=[
-  ['comboRunAsset','image'],['comboAttackAsset','image'],
-  ['comboEffectAsset','image'],['comboSoundAsset','audio'],['comboReactionAsset','image']
+  ['comboRunAsset','character'],['comboAttackAsset','character'],
+  ['comboEffectAsset','effect'],['comboSoundAsset','sound'],['comboReactionAsset','character']
  ];
  for(const [id,kind] of names){
   const sel=$('#'+id);if(!sel)continue;
@@ -767,8 +767,9 @@ function renderAttackComboOptions(){
   sel.replaceChildren();
   const defaultOption=document.createElement('option');
   defaultOption.value='';defaultOption.textContent=required?'素材を選択':'なし';sel.append(defaultOption);
-  const filtered=allAssets.filter(a=>(kind==='audio')===(a.kind==='audio')&&
-   (kind==='audio'||!a.kind||a.kind!=='audio'));
+  const filtered=allAssets.filter(a=>kind==='sound'
+   ?a.kind==='audio'
+   :a.kind!=='audio'&&a.category===kind);
   for(const asset of filtered){
    const option=document.createElement('option');option.value=asset.id;
    option.textContent=asset.name+' / '+(categoryLabels[asset.category]||asset.category);
