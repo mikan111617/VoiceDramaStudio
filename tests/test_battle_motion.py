@@ -64,7 +64,7 @@ class MotionTimelineTests(unittest.TestCase):
             seq["clips"][0].update({"flip_x": True, "end_x": None, "end_y": None})
             flipped = render_frame(seq, assets, root, 0)
             self.assertEqual(flipped.getpixel((11, 15)), (0, 0, 255, 255))
-            self.assertTrue(render_png(seq, assets, root, 0).startswith(b"\\x89PNG\\r\\n\\x1a\\n"))
+            self.assertTrue(render_png(seq, assets, root, 0).startswith(b"\x89PNG\r\n\x1a\n"))
 
 
 if __name__ == "__main__":
