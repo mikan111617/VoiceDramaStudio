@@ -303,6 +303,46 @@ def import_png(name, blob):
         raise ValueError("画像を読み取れませんでした") from exc
 
 
+def _ai_schema(width, height, frames):
+    shape = {"type": "object", "properties": {
+        "type": {"type": "string", "enum": ["pixel", "rect", "line", "ellipse"]},
+        "color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"},
+        **{key: {"type": "integer", "minimum": low, "maximum": high}
+           for key, low, high in [("x", -width, width * 2), ("y", -height, height * 2),
+                                  ("x2", -width, width * 2), ("y2", -height, height * 2),
+                                  ("w", 1, width * 2), ("h", 1, height * 2)]},
+        "fill": {"type": "boolean"}}, "required": ["type", "color", "x", "y"],
+        "additionalProperties": False}
+    return {"type": "object", "properties": {
+        "name": {"type": "string"},
+        "layers": {"type": "array", "minItems": 1, "maxItems": 6, "items": {
+            "type": "object", "properties": {
+                "name": {"type": "string"},
+                "frames": {"type": "array", "minItems": frames, "maxItems": frames,
+                           "items": {"type": "array", "maxItems": 200, "items": shape}}},
+            "required": ["name", "frames"], "additionalProperties": False}}},
+        "required": ["name", "layers"], "additionalProperties": False}
+
+
+def _validate_ai_plan(spec, width, height, frames):
+    if not isinstance(spec, dict):
+        raise ValueError("AI応答はJSONオブジェクトで指定してください")
+    spec.update(width=width, height=height, frames=frames)
+    visible = False
+    for _, drawings in _layers(spec, frames):
+        for commands in drawings:
+            if isinstance(commands, list):
+                for command in commands:
+                    if isinstance(command, dict) and isinstance(command.get("type"), str):
+                        kind = command["type"].strip().lower()
+                        command["type"] = {"rectangle": "rect", "point": "pixel"}.get(kind, kind)
+            image = _draw(width, height, commands)
+            visible = visible or image.getbbox() is not None
+    if not visible:
+        raise ValueError("AIの描画結果が空です。キャンバス内に不透明な図形を描いてください")
+    return spec
+
+
 def ai_create(prompt, model, width, height, frames):
     if not re.fullmatch(r"[a-zA-Z0-9_.:/-]{1,80}", model):
         raise ValueError("Ollamaモデル名に使えない文字があります")
@@ -316,21 +356,29 @@ def ai_create(prompt, model, width, height, frames):
         "#RRGGBB or #RRGGBBAA colors. Up to 200 shapes, up to 6 layers. "
         "Retain consistent silhouette across frames. No code or markdown. "
         "User request (Japanese): " + prompt)
-    body = json.dumps({"model": model, "prompt": instruction, "stream": False,
-                       "format": "json", "options": {"temperature": 0.3}},
-                      ensure_ascii=False).encode("utf-8")
-    req = urlrequest.Request("http://127.0.0.1:11434/api/generate", data=body,
-                             headers={"Content-Type": "application/json"})
-    try:
-        with urlrequest.urlopen(req, timeout=95) as reply:
-            result = json.load(reply)
-        spec = json.loads(result["response"])
-    except Exception as exc:
-        raise RuntimeError("Ollama接続または描画JSONの解析に失敗しました: " + str(exc)[:120]) from exc
-    if not isinstance(spec, dict):
-        raise ValueError("AI応答はJSONオブジェクトで指定してください")
-    spec.update(width=width, height=height, frames=frames)
-    return {"sprite": create_sprite(spec), "plan": spec}
+    correction = ""
+    for attempt in range(2):
+        body = json.dumps({"model": model, "prompt": instruction + correction, "stream": False,
+                           "format": _ai_schema(width, height, frames),
+                           "options": {"temperature": 0.3}}, ensure_ascii=False).encode("utf-8")
+        req = urlrequest.Request("http://127.0.0.1:11434/api/generate", data=body,
+                                 headers={"Content-Type": "application/json"})
+        try:
+            with urlrequest.urlopen(req, timeout=95) as reply:
+                result = json.load(reply)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Ollama接続または応答の読み取りに失敗しました: " + str(exc)[:120]) from exc
+        try:
+            spec = _validate_ai_plan(json.loads(result["response"]), width, height, frames)
+        except (ValueError, KeyError, TypeError) as exc:
+            if attempt:
+                raise RuntimeError("AIの描画指示を修正できませんでした。指示を具体化して再試行してください: "
+                                   + str(exc)[:160]) from exc
+            correction = ("\nThe previous response failed validation: " + str(exc)[:160]
+                          + "\nGenerate a complete corrected plan matching the schema.")
+            continue
+        # CLI failures must not trigger another generation or duplicate saved sprites.
+        return {"sprite": create_sprite(spec), "plan": spec}
 
 
 def _safe(call, *args):

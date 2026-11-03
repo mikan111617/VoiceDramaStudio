@@ -92,3 +92,57 @@ def test_api_and_mcp(fake):
     output = io.StringIO()
     mcp.serve(io.StringIO(incoming), output)
     assert len(output.getvalue().strip().splitlines()) == 2
+
+
+def ollama_replies(monkeypatch, plans):
+    requests = []
+    replies = iter(plans)
+
+    def reply(request, timeout):
+        requests.append(json.loads(request.data))
+        return io.BytesIO(json.dumps({'response': json.dumps(next(replies))}).encode())
+
+    monkeypatch.setattr(bridge.urlrequest, 'urlopen', reply)
+    return requests
+
+
+def test_ai_corrects_invalid_shape_before_saving(fake, monkeypatch):
+    def plan(kind):
+        return {'commands': [{'type': kind, 'x': 2, 'y': 2,
+                              'w': 8, 'h': 8, 'color': '#ff0000'}]}
+    requests = ollama_replies(monkeypatch, [plan('polygon'), plan('rect')])
+    result = fake.ai_create('赤い箱を描いて', 'gemma3:4b', 32, 32, 1)
+    assert len(requests) == 2
+    assert 'failed validation' in requests[1]['prompt']
+    shape = requests[0]['format']['properties']['layers']['items']['properties']['frames']['items']['items']
+    assert shape['properties']['type']['enum'] == ['pixel', 'rect', 'line', 'ellipse']
+    assert result['plan']['width'] == 32
+    assert len(fake.list_sprites()) == 1
+
+
+@pytest.mark.parametrize('kind', ['Rectangle', 'point'])
+def test_ai_normalizes_known_shape_names(fake, monkeypatch, kind):
+    requests = ollama_replies(monkeypatch, [{'commands': [
+        {'type': kind, 'x': 1, 'y': 1, 'color': '#ffffff'}]}])
+    fake.ai_create('白い図形を描いて', 'gemma3:4b', 32, 32, 1)
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize('plan', [[], {'commands': []}, {'commands': [{'type': 'eval'}]}])
+def test_ai_invalid_response_has_bounded_retry_and_no_output(fake, monkeypatch, plan):
+    requests = ollama_replies(monkeypatch, [plan, plan])
+    with pytest.raises(RuntimeError, match='修正できませんでした'):
+        fake.ai_create('勇者を描いて', 'gemma3:4b', 32, 32, 1)
+    assert len(requests) == 2
+    assert fake.list_sprites() == []
+
+
+def test_ai_does_not_retry_cli_failure(fake, monkeypatch):
+    requests = ollama_replies(monkeypatch, [{'commands': [
+        {'type': 'pixel', 'x': 1, 'y': 1, 'color': '#ffffff'}]}])
+    def fail(*args, **kwargs):
+        raise RuntimeError('CLI failed')
+    monkeypatch.setattr(fake, '_cli', fail)
+    with pytest.raises(RuntimeError, match='CLI failed'):
+        fake.ai_create('白い点を描いて', 'gemma3:4b', 32, 32, 1)
+    assert len(requests) == 1
