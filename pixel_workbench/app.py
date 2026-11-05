@@ -1819,27 +1819,37 @@ def preview_sequence_frame(sequence_id: str, frame: int):
     return Response(content=data, media_type='image/png', headers={'Cache-Control': 'no-store'})
 
 
+EXPORT_KINDS = {
+    # kind: (file extension, media type, label used in the file name)
+    'json': ('json', 'application/json', ''), 'zip': ('zip', 'application/zip', ''),
+    'gif': ('gif', 'image/gif', ''), 'mp4': ('mp4', 'video/mp4', ''),
+    'apng': ('png', 'image/png', ''), 'webm': ('webm', 'video/webm', ''),
+    'unity': ('zip', 'application/zip', '_unity'), 'gba': ('zip', 'application/zip', '_gba'),
+}
+
+
 @app.get('/api/sequences/{sequence_id}/download/{kind}')
-def download_sequence(sequence_id: str, kind: str):
-    if kind not in ('json', 'zip', 'gif', 'mp4'):
+def download_sequence(sequence_id: str, kind: str, scale: int = 1, colors: int = 16):
+    if kind not in EXPORT_KINDS:
         raise HTTPException(404, '未対応の書き出し形式です。')
     seq, assets = lookup_sequence(sequence_id)
+    extension, media, suffix = EXPORT_KINDS[kind]
     directory = EXPORTS / sequence_id
     directory.mkdir(parents=True, exist_ok=True)
-    filename = f'battle_{uuid.uuid4().hex[:12]}.{kind}'
-    dest = directory / filename
+    dest = directory / f'battle_{uuid.uuid4().hex[:12]}.{extension}'
     try:
         if kind == 'json':
             dest.write_text(json.dumps(project_manifest(seq, assets), ensure_ascii=False, indent=2), encoding='utf-8')
         elif kind == 'zip':
             package_project(seq, assets, ASSETS, dest)
         else:
-            save_media(seq, assets, ASSETS, dest, kind)
+            save_media(seq, assets, ASSETS, dest, kind, scale=scale, colors=colors)
     except (ValueError, OSError, RuntimeError) as exc:
         dest.unlink(missing_ok=True)
         raise HTTPException(422, str(exc)[:500])
-    media = {'json':'application/json', 'zip':'application/zip', 'gif':'image/gif', 'mp4':'video/mp4'}[kind]
-    return FileResponse(dest, media_type=media, filename=f"{seq['name'][:60]}.{kind}")
+    if kind == 'gba':
+        suffix = f'_gba{colors}'
+    return FileResponse(dest, media_type=media, filename=f"{seq['name'][:60]}{suffix}.{extension}")
 
 
 @app.get('/api/sequences/{sequence_id}/export')

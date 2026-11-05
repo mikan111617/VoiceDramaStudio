@@ -504,19 +504,25 @@ async function importAsset(){
  const data=new FormData();data.set('file',file);data.set('category',$('#importCategory').value);data.set('name',$('#importName').value.trim());data.set('columns',$('#importColumns').value);data.set('rows',$('#importRows').value);
  try{await api('/pixel/api/assets/import',{method:'POST',body:data});$('#importFile').value='';$('#importName').value='';await loadAssets();toast('アセットを取り込みました。')}catch(e){toast(e.message,true)}
 }
+const EXPORT_BUTTONS={json:'Json',zip:'Zip',gif:'Gif',mp4:'Mp4',apng:'Apng',webm:'Webm',unity:'Unity',gba:'Gba'};
+const EXPORT_FILES={json:['json','JSON'],zip:['zip','素材込みZIP'],gif:['gif','GIF'],mp4:['mp4','MP4'],apng:['png','APNG'],webm:['webm','WebM'],unity:['zip','Unity用ZIP'],gba:['zip','GBA用ZIP']};
 async function downloadBattle(kind){
  if(!currentSequenceId)return toast('先にシーケンスを選択してください。',true);
- if((kind==='gif'||kind==='mp4')&&battleLength()>600)return toast('書き出しは600フレーム以内です。',true);
- const button=$('#export'+({json:'Json',zip:'Zip',gif:'Gif',mp4:'Mp4'}[kind])+'Btn');
+ if(!['json','zip'].includes(kind)&&battleLength()>600)return toast('書き出しは600フレーム以内です。',true);
+ if(kind==='gba'&&(battleSequence?.width!==240||battleSequence?.height!==160))return toast('GBA用の書き出しは幅240・高さ160のシーケンスで行ってください。',true);
+ const button=$('#export'+EXPORT_BUTTONS[kind]+'Btn');
  button.disabled=true;const previous=button.textContent;button.textContent='処理中…';
- $('#exportStatus').textContent=kind==='mp4'?'MP4と効果音を合成しています。アプリを閉じずにお待ちください。':'書き出しています…';
+ const scale=Number($('#exportScale')?.value)||1,colors=Number($('#exportGbaColors')?.value)||16;
+ $('#exportStatus').textContent=['mp4','webm'].includes(kind)?'映像と効果音を合成しています。アプリを閉じずにお待ちください。':'書き出しています…';
  try{
-  const response=await fetch(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/download/${kind}`);
+  const query=new URLSearchParams({scale:String(scale),colors:String(colors)});
+  const response=await fetch(`/pixel/api/sequences/${encodeURIComponent(currentSequenceId)}/download/${kind}?${query}`);
   if(!response.ok){let error;try{error=(await response.json()).detail}catch(_){error='書き出しに失敗しました。'}throw Error(error)}
   const blob=await response.blob(),url=URL.createObjectURL(blob),anchor=document.createElement('a');
-  anchor.href=url;anchor.download=`${(battleSequence?.name||'battle').replace(/[\\/:*?"<>|]/g,'_')}.${kind}`;
+  const [ext,label]=EXPORT_FILES[kind],suffix=kind==='unity'?'_unity':kind==='gba'?'_gba'+colors:'';
+  anchor.href=url;anchor.download=`${(battleSequence?.name||'battle').replace(/[\\/:*?"<>|]/g,'_')}${suffix}.${ext}`;
   document.body.append(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
-  $('#exportStatus').textContent=`${kind.toUpperCase()}を書き出しました（${(blob.size/1024).toFixed(0)} KB）。`;
+  $('#exportStatus').textContent=`${label}を書き出しました（${(blob.size/1024).toFixed(0)} KB）。`;
   toast('書き出しが完了しました。');
  }catch(e){$('#exportStatus').textContent=e.message;toast(e.message,true)}finally{button.disabled=false;button.textContent=previous;}
 }
@@ -526,7 +532,7 @@ function installBattleControls(){
  $('#seqScrub').addEventListener('input',ev=>seekBattle(Number(ev.target.value)));
  $('#updateClipBtn').addEventListener('click',saveSelectedClip);
  $('#cancelClipEditBtn').addEventListener('click',clearBattleSelection);
- for(const kind of ['json','zip','gif','mp4'])$('#export'+({json:'Json',zip:'Zip',gif:'Gif',mp4:'Mp4'}[kind])+'Btn').addEventListener('click',()=>downloadBattle(kind));
+ for(const kind of Object.keys(EXPORT_BUTTONS))$('#export'+EXPORT_BUTTONS[kind]+'Btn').addEventListener('click',()=>downloadBattle(kind));
  $('#assetFilter').addEventListener('change',renderAssets);
  $('#clipAsset').addEventListener('change',()=>{const a=allAssets.find(a=>a.id===$('#clipAsset').value);if(a&&!($('#clipTrack').value==='cutin'&&a.kind!=='audio'))$('#clipTrack').value=a.kind==='audio'?'sound':['background','item','character','effect'].includes(a.category)?a.category:'item';updateClipMovementVisibility();});
  $('#clipTrack').addEventListener('change',updateClipMovementVisibility);

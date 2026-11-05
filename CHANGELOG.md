@@ -4,6 +4,17 @@ VoiceDrama Studio の機能ごとの詳しい仕様と、版ごとの変更内�
 
 ここに書かれているボタン名は、その版のときの名前です。現在のボタン名は README の「[ボタン名の対応表](README.md#ボタン名の対応表以前の名前--今の名前)」で確認できます。
 
+## 画像・映像：APNG・透過WebM・Unity・GBAの書き出し
+
+戦闘シーケンスの書き出しに4形式を追加しました。`GET /api/sequences/{id}/download/{kind}` の `kind` に `apng`・`webm`・`unity`・`gba` を指定します。
+
+- **APNG**（`apng`、拡張子 .png）：全コマをRGBAで保存。幅×高さ×コマ数が6,000万画素を超える場合はエラーになります。
+- **WebM**（`webm`）：VP9（`libvpx-vp9`、`yuva420p`）で透過付き。効果音はOpus（なければVorbis、どちらもなければ無音）。FFmpegがVP9に対応していない場合はエラーになります。
+- **拡大倍率**：MP4とWebMに `scale`（1〜6、初期値1）。最近傍法で整数倍に拡大します。拡大後が3840×2160を超える場合はエラーになります。
+- **Unity用ZIP**（`unity`）：`PixelBattle/Sequences/<名前>/` に `frames/frame_0000.png`…、`spritesheet.png`（1辺8192ピクセル以内のときのみ）、`sounds/`（元ファイル。同じ素材は1つにまとめる）、`pixelbattle.json`。`PixelBattle/Scripts/` に `PixelBattleCuePlayer.cs`（ランタイム）と `Editor/PixelBattleImporter.cs`（コマ画像の取り込み設定、メニュー「Assets／Pixel Battle／Build Animation」で .anim・.controller・.prefab を作成、効果音はアニメーションイベント）。
+- **GBA用ZIP**（`gba`、`colors` は16または256）：幅240・高さ160のシーケンスのみ。全コマ共通パレット、0番は透明（マゼンタ 248,0,248）、色はRGB555にそろえる。色数を超える場合は、使用回数を弱めに考慮しつつ互いに離れた実在の色を選ぶ方式で減色します。`frames/`、`spritesheet.png`（1辺4096ピクセル以内のときのみ）、`palette.pal`・`palette.gpl`・`palette_bgr555.bin`、`sounds/`、`pixelbattle_gba.json`（`gba_vblanks_per_frame`、`bytes_per_frame`、効果音の `gba_vblank` など）。
+- 画面の「作品を書き出す」に、各ボタンと「MP4・WebMの拡大倍率」「GBA用の色数」を追加しました。
+
 ## 画像・映像：連続攻撃ビルダーと光弾・爆発
 
 - 演出効果に **光弾**（`bolt`）と **爆発**（`explosion`）を追加しました。光弾は `x/y` から `end_x/end_y` へ短い弾が飛び、最初のコマに発射光、最後のコマに着弾の火花を描きます（太さは `beam_width`）。爆発は `x/y` を中心に、`intensity` で大きさと破片の数が変わります。色の初期値は光弾が黄、爆発が橙です。

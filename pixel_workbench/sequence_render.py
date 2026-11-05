@@ -248,7 +248,7 @@ def _save_gif(seq: dict, assets: dict[str, dict], root: Path, destination: Path)
     frames[0].save(destination, save_all=True, append_images=frames[1:], duration=max(20, round(1000 / fps / 10) * 10), loop=0, disposal=2, optimize=False, transparency=255)
 
 
-def _save_mp4(seq: dict, assets: dict[str, dict], root: Path, destination: Path) -> None:
+def _save_mp4(seq: dict, assets: dict[str, dict], root: Path, destination: Path, scale: int = 1) -> None:
     _, _, fps, length = validate_stage(seq, for_export=True)
     binary = find_ffmpeg()
     if not binary:
@@ -278,7 +278,7 @@ def _save_mp4(seq: dict, assets: dict[str, dict], root: Path, destination: Path)
             volume = min(2.0, max(0.0, float(clip.get('volume', 1))))
             count += 1
             audio_filters.append(f'[{count}:a]atrim=0:{seconds:.4f},asetpts=PTS-STARTPTS,volume={volume:.3f},adelay={start_ms}:all=1[a{count}]')
-        args += ['-map', '0:v:0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2']
+        args += ['-map', '0:v:0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vf', f'scale=iw*{int(scale)}:ih*{int(scale)}:flags=neighbor,pad=ceil(iw/2)*2:ceil(ih/2)*2']
         if count:
             audio_filters.append(''.join(f'[a{i}]' for i in range(1, count + 1)) + f'amix=inputs={count}:duration=longest:dropout_transition=0[aout]')
             args += ['-filter_complex', ';'.join(audio_filters), '-map', '[aout]', '-c:a', 'aac', '-b:a', '160k']
@@ -293,12 +293,23 @@ def _save_mp4(seq: dict, assets: dict[str, dict], root: Path, destination: Path)
             raise RuntimeError('FFmpegでMP4を作成できませんでした。' + (proc.stderr or '')[-350:])
 
 
-def save_media(seq: dict, assets: dict[str, dict], root: Path, destination: Path, kind: str) -> None:
+def save_media(seq: dict, assets: dict[str, dict], root: Path, destination: Path, kind: str,
+               scale: int = 1, colors: int = 16) -> None:
+    """Write one export. kind: gif, mp4, apng, webm, unity (zip), gba (zip)."""
+    import sequence_export  # local import: sequence_export imports this module
     validate_stage(seq, for_export=True)
     if kind == 'gif':
         _save_gif(seq, assets, root, destination)
     elif kind == 'mp4':
-        _save_mp4(seq, assets, root, destination)
+        _save_mp4(seq, assets, root, destination, sequence_export.check_scale(seq, scale))
+    elif kind == 'apng':
+        sequence_export.save_apng(seq, assets, root, destination)
+    elif kind == 'webm':
+        sequence_export.save_webm(seq, assets, root, destination, scale)
+    elif kind == 'unity':
+        sequence_export.package_unity(seq, assets, root, destination)
+    elif kind == 'gba':
+        sequence_export.package_gba(seq, assets, root, destination, colors)
     else:
         raise ValueError('書き出し形式が不正です。')
 
