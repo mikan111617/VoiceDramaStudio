@@ -637,7 +637,7 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
     try:
         if demo:
             time.sleep(.15)
-            blobs = demo_vfx(size) if mode == 'vfx' else demo_images(mode, size, frames, width, height)
+            blobs = [reference] if mode == 'edit' and reference else demo_vfx(size) if mode == 'vfx' else demo_images(mode, size, frames, width, height)
             result: dict = {}
         elif provider == 'openai':
             dispatched = True
@@ -679,6 +679,17 @@ def execute_job(job_id: str, mode: str, prompt: str, size: int, transparent: boo
                     'image_size': {'width': width or size, 'height': height or size},
                     'reference_images': [guidance],
                     'no_background': transparent
+                }, timeout=200)
+            elif mode == 'edit':
+                assert reference is not None
+                img, (w, h) = image_payload(reference)
+                if not (32 <= w <= 512 and 32 <= h <= 512):
+                    raise ValueError('部分修正は幅と高さが32〜512pxの画像に対応しています。')
+                result = pixel_request('POST', '/edit-images-v2', {
+                    'method': 'edit_with_text',
+                    'edit_images': [{'image': img, 'width': w, 'height': h}],
+                    'image_size': {'width': w, 'height': h},
+                    'description': prompt,
                 }, timeout=200)
             elif mode == 'convert':
                 assert reference is not None
@@ -1074,7 +1085,7 @@ def set_settings(data: SettingsRequest):
 
 
 def validate_options(mode: str, size: int, frames: int, provider: str, model: str, quality: str, gpt_size: str, width: int | None = None, height: int | None = None) -> None:
-    if mode not in ('text','redraw','convert','animate','vfx') or size not in PIXEL_SIZES or frames not in (4,6,8,10,12,14,16):
+    if mode not in ('text','redraw','convert','animate','vfx','edit') or size not in PIXEL_SIZES or frames not in (4,6,8,10,12,14,16):
         raise ValueError('生成条件を確認してください。')
     if provider not in ('pixellab','openai'):
         raise ValueError('未対応のプロバイダーです。')
@@ -1085,6 +1096,8 @@ def validate_options(mode: str, size: int, frames: int, provider: str, model: st
             raise ValueError('幅・高さはそれぞれ16〜512pxで指定してください。')
     if mode == 'redraw' and (provider!='pixellab' or model!='pro'):
         raise ValueError('参照画像から描き直す機能はPixelLab Pro専用です。')
+    if mode == 'edit' and (provider!='pixellab' or model!='pro'):
+        raise ValueError('文章による部分修正にはPixelLab Proを使用します。')
     if provider == 'pixellab':
         if model not in ('standard','pro'):
             raise ValueError('PixelLabモデルの指定が不正です。')
@@ -1103,7 +1116,7 @@ def validate_options(mode: str, size: int, frames: int, provider: str, model: st
 def estimate(data: EstimateRequest):
     try: validate_options(data.mode,data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size,data.width,data.height)
     except ValueError as e: raise HTTPException(422,str(e))
-    price=None if data.mode=='redraw' or (data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES)) or (data.provider=='pixellab' and data.mode=='text' and data.model=='pro' and data.category=='ui') else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
+    price=None if data.mode in ('redraw','edit') or (data.width is not None and (data.width != data.height or data.width not in PIXEL_SIZES)) or (data.provider=='pixellab' and data.mode=='text' and data.model=='pro' and data.category=='ui') else estimate_usd(data.mode,data.width or data.size,data.frames,data.provider,data.model,data.quality,data.gpt_size)
     if not .01 <= data.reservation_usd <= 500:
         raise HTTPException(422,'予約額は0.01〜500ドルで指定してください。')
     reserve=round(price*1.5,6) if price is not None else round(data.reservation_usd,2)
@@ -1124,15 +1137,17 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         raise HTTPException(422,'予約額は0.01〜500ドルにしてください。')
     if mode == 'text' and max(width or size,height or size)>256 and transparent and provider=='pixellab' and model=='standard':
         raise HTTPException(422,'Pixenの512px生成では透過背景を指定できません。')
-    if mode in ('text','redraw','animate','vfx') and not prompt.strip():
+    if mode in ('text','redraw','animate','vfx','edit') and not prompt.strip():
         raise HTTPException(422,'文章を入力してください。')
     if len(prompt)>2000: raise HTTPException(422,'文章は2000字以下にしてください。')
     blob=None
-    if mode in ('redraw','convert','animate','vfx') and (mode!='vfx' or image is not None):
+    if mode in ('redraw','convert','animate','vfx','edit') and (mode!='vfx' or image is not None):
         if image is None: raise HTTPException(422,'参照画像を選んでください。')
         blob=await image.read(12*1024*1024+1)
         try:
-            image_payload(blob)
+            _, input_dims = image_payload(blob)
+            if mode == 'edit' and not all(32 <= d <= 512 for d in input_dims):
+                raise HTTPException(422,'部分修正は幅・高さが32〜512pxの画像に対応しています。')
             if mode == 'vfx':
                 dims=Image.open(io.BytesIO(blob)).size
                 if max(dims)>512:raise HTTPException(422,'VFX画像は最大512pxです。')
@@ -1148,7 +1163,7 @@ async def create_job(mode: str=Form(...), prompt: str=Form(''), size: int=Form(1
         raise HTTPException(422,'VFXはエフェクトカテゴリーへ保存してください。')
     if not demo and not (_token if provider=='pixellab' else _openai_token):
         raise HTTPException(401,'選択したサービスのAPIキーを登録するか、デモモードを選んでください。')
-    price=None if mode=='redraw' or (width is not None and (width != height or width not in PIXEL_SIZES)) or (provider=='pixellab' and mode=='text' and model=='pro' and category=='ui') else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
+    price=None if mode in ('redraw','edit') or (width is not None and (width != height or width not in PIXEL_SIZES)) or (provider=='pixellab' and mode=='text' and model=='pro' and category=='ui') else estimate_usd(mode,width or size,frames,provider,model,quality,gpt_size)
     reserve=round(price*1.5,6) if price is not None else round(reservation_usd,2)
     with _lock:
         stats=local_stats()
@@ -1530,3 +1545,4 @@ if __name__ == '__main__':
     print('終了するにはこのウィンドウで Ctrl+C\n')
     threading.Timer(1.0, lambda: webbrowser.open(f'http://127.0.0.1:{port}')).start()
     uvicorn.run(app, host='127.0.0.1', port=port, log_level='warning')
+
