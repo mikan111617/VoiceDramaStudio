@@ -100,7 +100,7 @@ class StageCompositorTests(unittest.TestCase):
         self.assertEqual(render_frame(seq, self.assets, self.root, 2).getpixel((0, 0))[3], 0)
 
     def test_drawn_effects_paint_pixels(self):
-        for kind in ("speedlines", "hlines", "beam"):
+        for kind in ("speedlines", "hlines", "beam", "bolt", "explosion"):
             clip = {"id": kind, "track": "fx", "fx_type": kind, "start": 0, "duration": 6,
                     "intensity": 60, "x": -8, "y": 0, "end_x": 8, "end_y": 0}
             frame = render_frame(self.seq([clip], 64, 48), self.assets, self.root, 3)
@@ -175,6 +175,36 @@ class StageApiTests(unittest.TestCase):
         r = self.client.put(f"/api/sequences/seq/clips/{clip['id']}", json=body)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["intensity"], 30)
+
+    def test_combo_chain_shots_slash_finish(self):
+        body = {"steps": [{"kind": "shoot", "count": 3}, {"kind": "slash"}, {"kind": "finish"}],
+                "unit_asset_id": "robot", "enemy_asset_id": "robot", "portrait_asset_id": "face", "text": "終わりだ！"}
+        r = self.post("/combo", body)
+        self.assertEqual(r.status_code, 200, r.text)
+        result = r.json()
+        # cut-in 14 + pose 4, shots 3*4+2, dash 8 + slash 6, finish 22 (12fps, start 0)
+        self.assertEqual(result["end_frame"], 68)
+        self.assertEqual(result["hit_frames"], [20, 24, 28, 40, 46])
+        fx = [c["fx_type"] for c in result["clips"] if c["track"] == "fx"]
+        self.assertEqual(fx.count("bolt"), 3)
+        self.assertEqual(fx.count("explosion"), 2)
+        enemy = next(c for c in result["clips"] if c["label"] == "敵機")
+        self.assertEqual(enemy["start"] + enemy["duration"], 56)
+        seq = self.state["sequences"][0]
+        assets = {a["id"]: a for a in self.state["assets"]}
+        for frame in (19, 40, 55, 67):
+            render_frame(seq, assets, self.workbench.ASSETS, frame)
+
+    def test_combo_scales_with_fps_and_validates(self):
+        self.state["sequences"][0]["fps"] = 24
+        r = self.post("/combo", {"steps": [{"kind": "beam"}], "unit_asset_id": "robot"})
+        self.assertEqual(r.status_code, 200, r.text)
+        # pose 4 + beam 14 + tail 4 = 22 frames at 12fps -> 44 at 24fps
+        self.assertEqual(r.json()["end_frame"], 44)
+        bad = {"steps": [{"kind": "finish"}, {"kind": "shoot", "count": 2}], "unit_asset_id": "robot"}
+        self.assertEqual(self.post("/combo", bad).status_code, 422)
+        many = {"steps": [{"kind": "shoot", "count": 8}] * 8, "unit_asset_id": "robot", "hit_sound_asset_id": None}
+        self.assertEqual(self.post("/combo", many).status_code, 422)
 
     def test_robot_template_builds_and_renders(self):
         for style in ("slash", "beam"):

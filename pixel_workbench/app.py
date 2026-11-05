@@ -807,7 +807,7 @@ class SequenceUpdateRequest(BaseModel):
 
 class StageClipFields(BaseModel):
     """Camera / cut-in / drawn-effect / background-scroll settings. Unused fields are ignored."""
-    fx_type: str = Field(default='', pattern='^(|flash|speedlines|hlines|beam|hitstop)$')
+    fx_type: str = Field(default='', pattern='^(|flash|speedlines|hlines|beam|bolt|explosion|hitstop)$')
     color: str = Field(default='', pattern='^(|#[0-9a-fA-F]{6})$')  # empty = lane default
     intensity: int = Field(default=50, ge=0, le=100)
     beam_width: int = Field(default=6, ge=1, le=64)
@@ -903,6 +903,38 @@ class SrwTemplateRequest(BaseModel):
     enemy_x: int = Field(default=70, ge=-9999, le=9999)
     y: int = Field(default=0, ge=-9999, le=9999)
     beam_color: str = Field(default='#6fe0ff', pattern='^#[0-9a-fA-F]{6}$')
+
+
+class ComboStep(BaseModel):
+    kind: str = Field(pattern='^(shoot|beam|slash|finish)$')
+    count: int = Field(default=1, ge=1, le=8)
+
+
+class ComboRequest(BaseModel):
+    """Chain of robot-anime attacks: rifle shots, beam, dash slash and a finishing blow."""
+    steps: list[ComboStep] = Field(min_length=1, max_length=8)
+    unit_asset_id: str = Field(min_length=1, max_length=120)
+    shoot_asset_id: str | None = None
+    attack_asset_id: str | None = None
+    enemy_asset_id: str | None = None
+    portrait_asset_id: str | None = None
+    hit_effect_asset_id: str | None = None
+    hit_sound_asset_id: str | None = None
+    text: str = Field(default='', max_length=300)
+    start: int = Field(default=0, ge=0, le=599)
+    unit_x: int = Field(default=-70, ge=-9999, le=9999)
+    enemy_x: int = Field(default=70, ge=-9999, le=9999)
+    y: int = Field(default=0, ge=-9999, le=9999)
+    bolt_color: str = Field(default='#ffd85a', pattern='^#[0-9a-fA-F]{6}$')
+    beam_color: str = Field(default='#6fe0ff', pattern='^#[0-9a-fA-F]{6}$')
+
+
+ComboRequest.model_rebuild()  # resolve list[ComboStep] even when loaded under another module name
+
+
+# Lengths in frames at 12fps, shared with the page's estimate.
+COMBO_FRAMES = {'intro_cutin': 14, 'pose': 4, 'shot': 4, 'shoot_tail': 2, 'beam': 14,
+                'dash': 8, 'slash': 6, 'finish': 22, 'return': 10, 'tail': 4}
 
 
 @app.middleware('http')
@@ -1571,6 +1603,154 @@ def create_srw_template(sequence_id: str, data: SrwTemplateRequest):
         seq['updated_at'] = now()
         save_state()
     return {'created': len(clips), 'clips': clips, 'hit_frame': hit_frame, 'end_frame': end_frame}
+
+
+def combo_clips(data: ComboRequest, fps: int, asset_lookup: dict) -> tuple[list[dict], list[int], int]:
+    """Lay out a chain of attacks. Timing is designed at 12fps and scaled to the sequence fps."""
+    k = fps / 12
+    F = COMBO_FRAMES
+
+    def f(n: int) -> int:
+        return data.start + round(n * k)
+
+    base = {'volume': 1.0, 'end_x': None, 'end_y': None, 'easing': 'linear', 'flip_x': False,
+            **StageClipFields().model_dump()}
+    clips: list[dict] = []
+
+    def add(track: str, a: int, b: int, label: str, asset_id: str | None = None, **extra) -> None:
+        asset = asset_lookup.get(asset_id) if asset_id else None
+        clip = {**base, 'id': str(uuid.uuid4()), 'track': track, 'start': f(a), 'duration': max(1, f(b) - f(a)),
+                'x': 0, 'y': 0, 'asset_id': asset_id or '', 'asset_name': asset.get('name') if asset else label,
+                'asset_category': asset.get('category') if asset else track, 'label': label, 'created_at': now()}
+        clip.update(extra)
+        clips.append(clip)
+
+    def impact(hit: int, label: str, strength: str) -> None:
+        if strength == 'light':
+            add('fx', hit, hit + 1, f'{label} 命中光', fx_type='flash', intensity=25)
+            add('camera', hit, hit + 2, f'{label} 揺れ', shake=2)
+        else:
+            add('fx', hit, hit + 3, f'{label} 命中フラッシュ', fx_type='flash', intensity=85)
+            add('fx', hit, hit + 3, f'{label} ヒットストップ', fx_type='hitstop')
+            add('camera', hit, hit + 10, f'{label} 画面揺れ', shake=5)
+            if data.hit_effect_asset_id:
+                add('effect', hit + 1, hit + 9, f'{label} 命中エフェクト', data.hit_effect_asset_id, x=ex, y=y)
+        if data.hit_sound_asset_id:
+            add('sound', hit, hit + 6, f'{label} 命中効果音', data.hit_sound_asset_id)
+
+    unit = data.unit_asset_id
+    shoot_pose = data.shoot_asset_id or unit
+    slash_pose = data.attack_asset_id or unit
+    ux, ex, y = data.unit_x, data.enemy_x, data.y
+    facing = 1 if ex >= ux else -1
+    near = ex - 30 * facing
+    hits: list[int] = []
+    t = 0
+    if data.text.strip() or data.portrait_asset_id:
+        add('cutin', 0, F['intro_cutin'], '開始 カットイン', data.portrait_asset_id, text=data.text.strip(), text_speed=2)
+        t = F['intro_cutin']
+    add('camera', t, t + F['pose'], '開始 構え（寄り）', zoom=1.0, end_zoom=1.8, end_x=ux, end_y=y, easing='ease_out')
+    t += F['pose']
+    add('character', 0, t, '自機（待機・構え）', unit, x=ux, y=y)
+    pos = ux
+    enemy_end = None
+    finished = False
+    for number, step in enumerate(data.steps, 1):
+        label = f'{number}.'
+        if step.kind == 'shoot':
+            length = step.count * F['shot'] + F['shoot_tail']
+            add('character', t, t + length, f'{label} 射撃姿勢', shoot_pose, x=pos, y=y)
+            for shot in range(step.count):
+                a = t + shot * F['shot']
+                add('fx', a, a + 3, f'{label} 光弾{shot + 1}', fx_type='bolt', x=pos + 16 * facing, y=y - 4,
+                    end_x=ex, end_y=y, beam_width=3, color=data.bolt_color)
+                hits.append(a + 2)
+                impact(a + 2, f'{label} {shot + 1}発目', 'light')
+            t += length
+        elif step.kind == 'beam':
+            add('character', t, t + F['beam'], f'{label} ビーム姿勢', shoot_pose, x=pos, y=y)
+            add('fx', t + 2, t + 12, f'{label} ビーム', fx_type='beam', x=pos + 16 * facing, y=y,
+                end_x=ex, end_y=y, beam_width=8, color=data.beam_color)
+            hits.append(t + 5)
+            impact(t + 5, label, 'heavy')
+            t += F['beam']
+        elif step.kind == 'slash':
+            d = F['dash']
+            if pos != near:
+                add('character', t, t + d, f'{label} 突進', unit, x=pos, y=y, end_x=near, end_y=y, easing='ease_in_out')
+                add('fx', t, t + d, f'{label} 集中線', fx_type='speedlines', intensity=60, layer='back')
+                add('fx', t, t + d, f'{label} スピード線', fx_type='hlines', intensity=40, color='#a8dcff', layer='front')
+                t += d
+                pos = near
+            add('character', t, t + F['slash'], f'{label} 斬撃', slash_pose, x=pos, y=y)
+            hits.append(t)
+            impact(t, label, 'heavy')
+            t += F['slash']
+        else:  # finish
+            pose = slash_pose if pos == near else shoot_pose
+            add('character', t, t + 6, f'{label} とどめ', pose, x=pos, y=y)
+            add('fx', t, t + 4, f'{label} ヒットストップ', fx_type='hitstop')
+            add('fx', t, t + 3, f'{label} フラッシュ', fx_type='flash', intensity=100)
+            add('camera', t + 4, t + F['finish'], f'{label} 爆発カメラ', zoom=1.4, end_zoom=1.0,
+                x=ex, y=y, end_x=0, end_y=0, easing='ease_out', shake=8)
+            add('fx', t + 4, t + 20, f'{label} 大爆発', fx_type='explosion', x=ex, y=y, intensity=90)
+            add('fx', t + 8, t + 20, f'{label} 誘爆', fx_type='explosion', x=ex + 10 * facing, y=y - 10, intensity=40)
+            if data.hit_sound_asset_id:
+                add('sound', t + 4, t + 12, f'{label} 爆発音', data.hit_sound_asset_id)
+            hits.append(t)
+            enemy_end = t + 10
+            if pos != ux:
+                add('character', t + 6, t + 16, f'{label} 帰還', unit, x=pos, y=y, end_x=ux, end_y=y,
+                    easing='ease_in_out', flip_x=True)
+                add('character', t + 16, t + F['finish'], '自機（待機）', unit, x=ux, y=y)
+            else:
+                add('character', t + 6, t + F['finish'], '自機（待機）', unit, x=ux, y=y)
+            pos = ux
+            t += F['finish']
+            finished = True
+    if not finished:
+        if pos != ux:
+            add('character', t, t + F['return'], '帰還', unit, x=pos, y=y, end_x=ux, end_y=y,
+                easing='ease_in_out', flip_x=True)
+            t += F['return']
+        add('character', t, t + F['tail'], '自機（待機）', unit, x=ux, y=y)
+        t += F['tail']
+    if data.enemy_asset_id:
+        add('character', 0, enemy_end if enemy_end is not None else t, '敵機', data.enemy_asset_id, x=ex, y=y)
+    return clips, [f(h) for h in hits], f(t)
+
+
+@app.post('/api/sequences/{sequence_id}/combo')
+def create_combo(sequence_id: str, data: ComboRequest):
+    """Insert a chain of attacks (shots, beam, slash, finish) as one atomic edit."""
+    kinds = [step.kind for step in data.steps]
+    if 'finish' in kinds and (kinds.count('finish') > 1 or kinds[-1] != 'finish'):
+        raise HTTPException(422, 'フィニッシュは最後に1回だけ置いてください。')
+    with _lock:
+        seq = next((s for s in _state.get('sequences', []) if s.get('id') == sequence_id), None)
+        if seq is None:
+            raise HTTPException(404, 'シーケンスが見つかりません。')
+        asset_lookup = {a.get('id'): a for a in _state.get('assets', [])}
+        for asset_id, label, expected in (
+                (data.unit_asset_id, '自機', 'image'), (data.shoot_asset_id, '射撃ポーズ', 'image'),
+                (data.attack_asset_id, '斬撃ポーズ', 'image'), (data.enemy_asset_id, '敵機', 'image'),
+                (data.portrait_asset_id, 'パイロットの顔', 'image'), (data.hit_effect_asset_id, '命中エフェクト', 'image'),
+                (data.hit_sound_asset_id, '命中効果音', 'audio')):
+            if not asset_id:
+                continue
+            asset = asset_lookup.get(asset_id)
+            if not asset or (asset.get('kind') == 'audio') != (expected == 'audio'):
+                raise HTTPException(422, f'{label}の素材を確認してください。')
+        clips, hit_frames, end_frame = combo_clips(data, int(seq.get('fps', 12)), asset_lookup)
+        if end_frame > 600:
+            raise HTTPException(422, f'連続攻撃が{end_frame}フレームになり、600フレームを超えます。手順か射撃数を減らすか、FPSを下げてください。')
+        if len(seq.get('clips', [])) + len(clips) > 100:
+            raise HTTPException(422, f'クリップが{len(seq.get("clips", [])) + len(clips)}個になり、100個を超えます。手順か射撃数を減らすか、新しいシーケンスに追加してください。')
+        seq.setdefault('clips', []).extend(clips)
+        seq['clips'].sort(key=lambda c: (c.get('track', ''), c.get('start', 0)))
+        seq['updated_at'] = now()
+        save_state()
+    return {'created': len(clips), 'clips': clips, 'hit_frames': hit_frames, 'end_frame': end_frame}
 
 
 @app.delete('/api/sequences/{sequence_id}/clips/{clip_id}')

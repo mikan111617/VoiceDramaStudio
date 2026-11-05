@@ -6,7 +6,7 @@ non-antialiased so the output stays pixel-art friendly.
 Clip fields used by this module (all optional; old clips keep working):
   camera : zoom, end_zoom, x/y -> end_x/end_y (view-centre pan), easing, shake
   cutin  : asset_id (portrait, optional), text, side, text_speed, color
-  fx     : fx_type (flash|speedlines|hlines|beam|hitstop), color, intensity,
+  fx     : fx_type (flash|speedlines|hlines|beam|bolt|explosion|hitstop), color, intensity,
            beam_width, layer (auto|back|front), x/y -> end_x/end_y, flip_x
   background : scroll_x, scroll_y (pixels per frame, the image tiles)
 """
@@ -20,10 +20,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-FX_TYPES = ('flash', 'speedlines', 'hlines', 'beam', 'hitstop')
+FX_TYPES = ('flash', 'speedlines', 'hlines', 'beam', 'bolt', 'explosion', 'hitstop')
 FX_LABELS = {
     'flash': '画面フラッシュ', 'speedlines': '集中線', 'hlines': 'スピード線',
-    'beam': 'ビーム', 'hitstop': 'ヒットストップ',
+    'beam': 'ビーム', 'bolt': '光弾', 'explosion': '爆発', 'hitstop': 'ヒットストップ',
 }
 BACK_BY_DEFAULT = ('speedlines', 'hlines')
 FONT_DIR = Path(__file__).resolve().parent / 'fonts'
@@ -137,6 +137,10 @@ def draw_fx(canvas: Image.Image, clip: dict, frame: int) -> Image.Image:
         return _hlines(canvas, clip, frame)
     if kind == 'beam':
         return _beam(canvas, clip, frame)
+    if kind == 'bolt':
+        return _bolt(canvas, clip, frame)
+    if kind == 'explosion':
+        return _explosion(canvas, clip, frame)
     if kind == 'flash':
         return _flash(canvas, clip, frame)
     return canvas
@@ -215,6 +219,81 @@ def _beam(canvas: Image.Image, clip: dict, frame: int) -> Image.Image:
     draw.ellipse([tx - r, ty - r, tx + r, ty + r], fill=color + (255,))
     draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=color + (255,))
     draw.line([(sx, sy), (tx, ty)], fill=(255, 255, 255, 255), width=core)
+    return Image.alpha_composite(canvas, overlay)
+
+
+def _endpoints(clip: dict, w: int, h: int) -> tuple[float, float, float, float]:
+    x0, y0 = int(clip.get('x', 0)), int(clip.get('y', 0))
+    x1 = x0 + w // 2 if clip.get('end_x') is None else int(clip['end_x'])
+    y1 = y0 if clip.get('end_y') is None else int(clip['end_y'])
+    return w / 2 + x0, h / 2 + y0, w / 2 + x1, h / 2 + y1
+
+
+def _bolt(canvas: Image.Image, clip: dict, frame: int) -> Image.Image:
+    """A short energy shot travelling from the muzzle (x, y) to the target (end_x, end_y)."""
+    w, h = canvas.size
+    sx, sy, ex, ey = _endpoints(clip, w, h)
+    t = _progress(clip, frame)
+    width = max(1, int(clip.get('beam_width', 4) or 4))
+    color = hex_rgb(clip.get('color'), (110, 220, 255))
+    dist = math.hypot(ex - sx, ey - sy) or 1.0
+    ux, uy = (ex - sx) / dist, (ey - sy) / dist
+    head = dist * t
+    tail = max(0.0, head - max(10.0, w * 0.09))
+    hx, hy = sx + ux * head, sy + uy * head
+    tx, ty = sx + ux * tail, sy + uy * tail
+    overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    if frame == int(clip.get('start', 0)):  # muzzle flash
+        r = width * 1.6
+        draw.ellipse([sx - r, sy - r, sx + r, sy + r], fill=color + (255,))
+        draw.ellipse([sx - r / 2, sy - r / 2, sx + r / 2, sy + r / 2], fill=(255, 255, 255, 255))
+    if t >= 1.0:  # impact spark
+        r = width * 2.2
+        for dx, dy in ((1, 0), (0, 1), (0.7, 0.7), (0.7, -0.7)):
+            draw.line([(ex - dx * r, ey - dy * r), (ex + dx * r, ey + dy * r)], fill=color + (255,), width=max(1, width // 2))
+        draw.ellipse([ex - width, ey - width, ex + width, ey + width], fill=(255, 255, 255, 255))
+    else:
+        draw.line([(tx, ty), (hx, hy)], fill=color + (255,), width=width)
+        draw.line([(tx, ty), (hx, hy)], fill=(255, 255, 255, 255), width=max(1, width // 3))
+    return Image.alpha_composite(canvas, overlay)
+
+
+def _explosion(canvas: Image.Image, clip: dict, frame: int) -> Image.Image:
+    """A drawn explosion centred on (x, y): fireball, white core, puffs and debris."""
+    w, h = canvas.size
+    cx, cy = w / 2 + int(clip.get('x', 0)), h / 2 + int(clip.get('y', 0))
+    t = _progress(clip, frame)
+    big = min(w, h) * 0.16 * (0.5 + int(clip.get('intensity', 50)) / 100)
+    color = hex_rgb(clip.get('color'), (255, 160, 48))
+    dark = tuple(max(0, c // 2) for c in color)
+    alpha = 255 if t < 0.6 else round(255 * (1 - t) / 0.4)
+    if alpha <= 0:
+        return canvas
+    rnd = _Rand('explosion', clip.get('id'))
+    overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    grow = ease(min(1.0, t * 1.8), 'ease_out')
+    # secondary puffs appear around the centre
+    for i in range(3 + int(clip.get('intensity', 50)) // 25):
+        angle, reach = rnd.range(0, math.tau), rnd.range(0.4, 0.9)
+        delay = rnd.range(0.05, 0.35)
+        if t < delay:
+            continue
+        pr = big * 0.55 * ease(min(1.0, (t - delay) * 2.2), 'ease_out')
+        px, py = cx + math.cos(angle) * big * reach, cy + math.sin(angle) * big * reach
+        draw.ellipse([px - pr, py - pr, px + pr, py + pr], fill=dark + (alpha,))
+    r = big * grow
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color + (alpha,))
+    core = r * 0.6 * max(0.0, 1 - t * 1.3)
+    if core >= 1:
+        draw.ellipse([cx - core, cy - core, cx + core, cy + core], fill=(255, 250, 220, alpha))
+    for _ in range(8 + int(clip.get('intensity', 50)) // 8):
+        angle, speed = rnd.range(0, math.tau), rnd.range(0.8, 1.6)
+        d = big * speed * ease(t, 'ease_out') * 1.3
+        dx, dy = cx + math.cos(angle) * d, cy + math.sin(angle) * d
+        size = 2 if rnd.next() < 0.6 else 3
+        draw.rectangle([round(dx), round(dy), round(dx) + size - 1, round(dy) + size - 1], fill=color + (alpha,))
     return Image.alpha_composite(canvas, overlay)
 
 

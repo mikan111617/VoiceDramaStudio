@@ -16,6 +16,8 @@ const STAGE_HELP={
  hlines:'横に流れる線です。左右反転をオンにすると右へ流れます。重ね順「自動」ではキャラの後ろに描きます。',
  flash:'画面全体を指定の色で光らせ、クリップの長さで消えていきます。カットインより前面に描きます。',
  beam:'開始X・Yが発射位置、終了X・Yが着弾位置です。最初の3割で伸び、最後の2割で細くなります。',
+ bolt:'開始X・Yが発射位置、終了X・Yが着弾位置です。短い弾がクリップの長さで飛び、最後のコマで着弾の火花が出ます。3コマ前後が目安です。',
+ explosion:'開始X・Yが爆発の中心です。強さで大きさと破片の数が変わります。後半の4割で消えていきます。',
  hitstop:'この長さの間、キャラ・背景・エフェクトが止まります。カメラの揺れ・カットイン・効果音は止まりません。'
 };
 let clipColorTouched=false;
@@ -976,12 +978,12 @@ function updateClipStageVisibility(){
  show($('#clipFxFields'),track==='fx');
  show($('#clipCutinFields'),track==='cutin');
  show($('#clipColorField'),track==='cutin'||(track==='fx'&&fx!=='hitstop'));
- show($('#clipBeamWidth').closest('.field'),fx==='beam');
- show($('#clipIntensity').closest('.field'),!['beam','hitstop'].includes(fx));
+ show($('#clipBeamWidth').closest('.field'),['beam','bolt'].includes(fx));
+ show($('#clipIntensity').closest('.field'),!['beam','bolt','hitstop'].includes(fx));
  show($('#clipLayer').closest('.field'),!['flash','hitstop'].includes(fx));
  show($('#clipVolume').closest('.field'),!stage);
- if(track==='fx'&&fx==='beam')$('#clipMoveEnabled').checked=true;
- if(!clipColorTouched)$('#clipColor').value=track==='cutin'?'#101828':(track==='fx'&&fx==='beam'?'#6fe0ff':'#ffffff');
+ if(track==='fx'&&['beam','bolt'].includes(fx))$('#clipMoveEnabled').checked=true;
+ if(!clipColorTouched)$('#clipColor').value=track==='cutin'?'#101828':track!=='fx'?'#ffffff':({beam:'#6fe0ff',bolt:'#ffd85a',explosion:'#ffa030'}[fx]||'#ffffff');
  $('#clipStageHelp').textContent=STAGE_HELP[track==='fx'?fx:track]||'';
 }
 function clipStagePayload(){
@@ -1004,7 +1006,7 @@ function fillClipStageFields(clip){
  clipColorTouched=true;
 }
 function renderSrwTemplateOptions(){
- const names=[['srwUnitAsset','image',true],['srwAttackAsset','image'],['srwEnemyAsset','image'],['srwPortraitAsset','image'],['srwHitEffectAsset','image'],['srwHitSoundAsset','audio']];
+ const names=[['srwUnitAsset','image',true],['srwShootAsset','image'],['srwAttackAsset','image'],['srwEnemyAsset','image'],['srwPortraitAsset','image'],['srwHitEffectAsset','image'],['srwHitSoundAsset','audio']];
  for(const [id,kind,required] of names){
   const sel=$('#'+id);if(!sel)continue;
   const previous=sel.value;sel.replaceChildren();
@@ -1016,32 +1018,78 @@ function renderSrwTemplateOptions(){
   if([...sel.options].some(o=>o.value===previous))sel.value=previous;
  }
 }
+const SRW_STEP_NAMES={shoot:'射撃（光弾）',beam:'ビーム',slash:'突進して斬る',finish:'フィニッシュ（大爆発）'};
+// Frame lengths at 12fps; must match COMBO_FRAMES in app.py.
+const SRW_FRAMES={intro_cutin:14,pose:4,shot:4,shoot_tail:2,beam:14,dash:8,slash:6,finish:22,return:10,tail:4};
+function srwSteps(){return [...document.querySelectorAll('#srwSteps .srw-step')].map(row=>({kind:row.querySelector('select').value,count:Math.max(1,Math.min(8,Number(row.querySelector('input').value)||1))}));}
+function renderSrwSteps(steps){
+ const box=$('#srwSteps');if(!box)return;box.replaceChildren();
+ steps.forEach((step,i)=>{
+  const row=document.createElement('div');row.className='srw-step';
+  const no=document.createElement('span');no.className='srw-step-no';no.textContent=(i+1)+'.';
+  const sel=document.createElement('select');sel.setAttribute('aria-label',`手順${i+1}の攻撃`);
+  for(const [value,label] of Object.entries(SRW_STEP_NAMES)){const o=document.createElement('option');o.value=value;o.textContent=label;sel.append(o);}
+  sel.value=step.kind;
+  const count=document.createElement('input');count.type='number';count.min='1';count.max='8';count.value=step.count||1;count.setAttribute('aria-label',`手順${i+1}の発射数`);
+  const unit=document.createElement('span');unit.textContent='発';
+  const up=document.createElement('button');up.type='button';up.className='quiet-btn';up.textContent='↑';up.setAttribute('aria-label','上へ');
+  const del=document.createElement('button');del.type='button';del.className='quiet-btn';del.textContent='削除';
+  const sync=()=>{const shoot=sel.value==='shoot';count.classList.toggle('hidden',!shoot);unit.classList.toggle('hidden',!shoot);};
+  sel.addEventListener('change',()=>{sync();refreshSrwSummary();});count.addEventListener('input',refreshSrwSummary);
+  up.addEventListener('click',()=>{const list=srwSteps();if(i>0){[list[i-1],list[i]]=[list[i],list[i-1]];renderSrwSteps(list);}});
+  del.addEventListener('click',()=>{const list=srwSteps();list.splice(i,1);renderSrwSteps(list.length?list:[{kind:'shoot',count:3}]);});
+  sync();row.append(no,sel,count,unit,up,del);box.append(row);
+ });
+ refreshSrwSummary();
+}
+function srwFrameEstimate(steps){
+ const F=SRW_FRAMES,intro=Boolean($('#srwText').value.trim()||$('#srwPortraitAsset').value);
+ let t=(intro?F.intro_cutin:0)+F.pose,near=false,finished=false;
+ for(const step of steps){
+  if(step.kind==='shoot')t+=step.count*F.shot+F.shoot_tail;
+  else if(step.kind==='beam')t+=F.beam;
+  else if(step.kind==='slash'){if(!near){t+=F.dash;near=true;}t+=F.slash;}
+  else{t+=F.finish;finished=true;near=false;}
+ }
+ if(!finished)t+=(near?F.return:0)+F.tail;
+ return t;
+}
+function srwStepProblem(steps){
+ const finishes=steps.filter(s=>s.kind==='finish').length;
+ if(finishes>1||(finishes===1&&steps[steps.length-1].kind!=='finish'))return 'フィニッシュは最後に1回だけ置いてください。';
+ return '';
+}
 function refreshSrwSummary(){
- const fps=Number($('#sequenceFps').value)||12,start=Number($('#srwStart').value)||0,k=fps/12;
- const hit=start+Math.round(($('#srwStyle').value==='beam'?28:26)*k),end=start+Math.round(42*k);
- $('#srwSummary').textContent=`${fps}fpsで${end-start}コマ（約${((end-start)/fps).toFixed(1)}秒）。命中はシーケンスの${hit}コマ目、終わりは${end}コマ目。`;
- $('#srwSummary').classList.toggle('limit-warning',end>600);
+ const box=$('#srwSummary');if(!box)return;
+ const steps=srwSteps(),fps=Number($('#sequenceFps').value)||12,start=Number($('#srwStart').value)||0;
+ const frames=Math.round(srwFrameEstimate(steps)*fps/12),end=start+frames,problem=srwStepProblem(steps);
+ const flow=steps.map(s=>s.kind==='shoot'?`射撃×${s.count}`:SRW_STEP_NAMES[s.kind].replace(/（.*）/,'')).join(' → ');
+ box.textContent=problem||`${flow}：${fps}fpsで約${frames}コマ（約${(frames/fps).toFixed(1)}秒）、${start}〜${end}コマ目。`+(end>600?' 600コマを超えるため追加できません。':'');
+ box.classList.toggle('limit-warning',Boolean(problem)||end>600);
 }
 async function createSrwTemplate(){
  if(!currentSequenceId)return toast('先に戦闘シーケンスを作成してください',true);
  const unit=$('#srwUnitAsset').value;if(!unit)return toast('自機の素材を選択してください',true);
+ const steps=srwSteps(),problem=srwStepProblem(steps);if(problem)return toast(problem,true);
  const opt=id=>$('#'+id).value||null,num=id=>Number($('#'+id).value)||0;
  try{
-  const r=await postJSON('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/srw-template',{
-   style:$('#srwStyle').value,unit_asset_id:unit,attack_asset_id:opt('srwAttackAsset'),enemy_asset_id:opt('srwEnemyAsset'),
+  const r=await postJSON('/pixel/api/sequences/'+encodeURIComponent(currentSequenceId)+'/combo',{
+   steps,unit_asset_id:unit,shoot_asset_id:opt('srwShootAsset'),attack_asset_id:opt('srwAttackAsset'),enemy_asset_id:opt('srwEnemyAsset'),
    portrait_asset_id:opt('srwPortraitAsset'),hit_effect_asset_id:opt('srwHitEffectAsset'),hit_sound_asset_id:opt('srwHitSoundAsset'),
    text:$('#srwText').value.trim(),start:num('srwStart'),unit_x:num('srwUnitX'),enemy_x:num('srwEnemyX'),y:num('srwY'),
-   beam_color:$('#srwBeamColor').value||'#6fe0ff'});
-  await loadSequences();await openSequence(currentSequenceId);seekBattle(r.hit_frame);
-  toast(`${r.created}個のクリップを追加しました（命中 ${r.hit_frame}コマ目）`);
+   bolt_color:$('#srwBoltColor').value||'#ffd85a',beam_color:$('#srwBeamColor').value||'#6fe0ff'});
+  await loadSequences();await openSequence(currentSequenceId);seekBattle(r.hit_frames[0]??0);
+  toast(`${r.created}個のクリップを追加しました（${r.end_frame}コマ目まで）`);
  }catch(e){toast(e.message,true)}
 }
 (function attachStageEvents(){
  if(!$('#clipStagePanel'))return;
  $('#clipFxType').addEventListener('change',updateClipMovementVisibility);
  $('#clipColor').addEventListener('input',()=>{clipColorTouched=true;});
- for(const id of ['srwStyle','srwStart','sequenceFps'])$('#'+id)?.addEventListener('change',refreshSrwSummary);
+ for(const id of ['srwStart','sequenceFps','srwText','srwPortraitAsset'])$('#'+id)?.addEventListener('input',refreshSrwSummary);
+ $('#srwPortraitAsset')?.addEventListener('change',refreshSrwSummary);
+ $('#srwAddStep')?.addEventListener('click',()=>{const list=srwSteps();if(list.length>=8)return toast('手順は8個までです',true);list.push({kind:'shoot',count:1});renderSrwSteps(list);});
  $('#createSrwTemplate')?.addEventListener('click',createSrwTemplate);
  updateClipMovementVisibility();
- refreshSrwSummary();
+ renderSrwSteps([{kind:'shoot',count:3},{kind:'slash',count:1},{kind:'finish',count:1}]);
 })();

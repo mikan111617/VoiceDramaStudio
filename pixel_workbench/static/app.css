@@ -234,3 +234,11 @@
 .battle-placement-toolbar #cancelBattlePlacement{font-size:11px}
 [data-place-target].placement-active{background:#22584b;color:#f3f6e6;border-color:#8fe2c7}
 .battle-clip-position-actions{margin:12px 0;flex-wrap:wrap}
+
+.srw-steps{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.srw-step{display:flex;align-items:center;gap:8px;font-size:12px}
+.srw-step-no{flex:0 0 20px;text-align:right;color:#9cb9bc}
+.srw-steps .srw-step select{flex:1 1 0;width:auto;min-width:0}
+.srw-steps .srw-step input[type=number]{flex:0 0 64px;width:64px;min-width:0}
+.srw-step button{white-space:nowrap;padding:8px 10px}
+.combo-builder input[type=color],#clipStagePanel input[type=color]{width:100%;height:38px;padding:2px;background:#0f1722;border:1px solid #3b4a5a;border-radius:8px}
