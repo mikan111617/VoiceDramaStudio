@@ -60,3 +60,30 @@ def test_edit_provider_request_and_poll(client,monkeypatch):
     job=client.get('/api/jobs/'+r.json()['id']).json();assert job['status']=='completed',job
     post=calls[0];assert post[1]=='/edit-images-v2';assert post[2]['description']=='王冠を大きく';assert post[2]['image_size']=={'width':64,'height':64};assert post[2]['edit_images'][0]['width']==64
     assert calls[1][1]=='/background-jobs/job123';assert job['usd_charged']==0.12
+
+
+def test_inpaint_keeps_outside_pixels(client,monkeypatch):
+    monkeypatch.setattr(pixel,'_token','test-token');monkeypatch.setattr(pixel,'balance_data',lambda:{})
+    calls=[]; buf=io.BytesIO();Image.new('RGBA',(64,64),(0,0,255,255)).save(buf,'PNG'); changed=buf.getvalue()
+    def fake_request(method,route,payload=None,timeout=75):
+        calls.append((method,route,payload))
+        if method=='POST': return {'background_job_id':'job123'}
+        return {'status':'completed','last_response':{'images':[{'base64':base64.b64encode(changed).decode()}]}}
+    monkeypatch.setattr(pixel,'pixel_request',fake_request)
+    r=client.post('/api/jobs',data=args(mode='inpaint',demo='false',selection_rect='[10,12,8,6]'),files={'image':('src.png',png(),'image/png')})
+    assert r.status_code==200,r.text
+    job=client.get('/api/jobs/'+r.json()['id']).json();assert job['status']=='completed',job
+    assert job['selection_rect']==[10,12,8,6]
+    post=calls[0];assert post[1]=='/inpaint-v3';mask=post[2]['mask_image']; assert mask['size']=={'width':64,'height':64}
+    im=Image.open(io.BytesIO(base64.b64decode(mask['image']['base64'])));assert im.getpixel((10,12))[0]==255;assert im.getpixel((9,12))[0]==0
+    out=Image.open(io.BytesIO(client.get('/api/jobs/'+job['id']+'/files/image_00.png').content));assert out.getpixel((10,12))==(0,0,255,255);assert out.getpixel((9,12))==(255,0,0,255);assert out.getpixel((18,18))==(255,0,0,255)
+
+
+def test_inpaint_invalid_rectangles(client):
+    for rect in ('','[0,0,0,10]','[-1,0,5,5]','[63,0,2,5]','[true,0,4,5]','{"x":1}'):
+        r=client.post('/api/jobs',data=args(mode='inpaint',selection_rect=rect),files={'image':('src.png',png(),'image/png')});assert r.status_code==422,(rect,r.text)
+
+
+def test_inpaint_demo_keeps_source(client):
+    r=client.post('/api/jobs',data=args(mode='inpaint',selection_rect='[1,2,4,5]'),files={'image':('src.png',png(),'image/png')});assert r.status_code==200,r.text
+    job=client.get('/api/jobs/'+r.json()['id']).json();assert job['status']=='completed';assert job['selection_rect']==[1,2,4,5]
