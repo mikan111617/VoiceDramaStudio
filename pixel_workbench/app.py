@@ -28,6 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, UnidentifiedImageError
 from sequence_render import render_png, validate_stage, save_media, package_project, project_manifest, media_file, sequence_length, ALL_TRACKS, TRACK_ORDER
 from stage_fx import FX_LABELS
+import pixelize
+from starlette.concurrency import run_in_threadpool
 from credential_store import read_credentials, write_credentials, supported as credential_storage_supported
 from pydantic import BaseModel, Field
 
@@ -1340,6 +1342,101 @@ async def import_asset(file: UploadFile = File(...), category: str = Form('other
         _state.setdefault('assets', []).append(asset)
         save_state()
     return asset_summary(asset)
+
+
+PIXELIZE_MAX_FILES = 12
+PIXELIZE_MAX_BYTES = 40 * 1024 * 1024
+
+
+def pixelize_settings(raw: str) -> tuple[pixelize.PixelizeSettings, bool]:
+    """Validate the settings JSON sent by the page. Returns (settings, shared_palette)."""
+    try:
+        data = json.loads(raw or '{}')
+    except ValueError:
+        raise HTTPException(422, 'ドット化の設定を読み取れません。')
+    if not isinstance(data, dict):
+        raise HTTPException(422, 'ドット化の設定を読み取れません。')
+
+    def number(key: str, default: int, low: int, high: int, label: str) -> int:
+        try:
+            value = int(data.get(key, default))
+        except (TypeError, ValueError):
+            raise HTTPException(422, f'{label}は数値で指定してください。')
+        if not low <= value <= high:
+            raise HTTPException(422, f'{label}は{low}〜{high}で指定してください。')
+        return value
+
+    outline = str(data.get('outline', 'none'))
+    if outline not in ('none', 'auto') and not (len(outline) == 7 and outline.startswith('#')
+                                                and all(c in '0123456789abcdefABCDEF' for c in outline[1:])):
+        raise HTTPException(422, '輪郭線は「なし」「自動」または色を指定してください。')
+    background = str(data.get('background', 'auto'))
+    method = str(data.get('method', 'crisp'))
+    if background not in ('auto', 'keep') or method not in ('crisp', 'smooth'):
+        raise HTTPException(422, '背景または縮小方式の指定が不正です。')
+    settings = pixelize.PixelizeSettings(
+        height=number('height', 48, 4, 512, '高さ'), colors=number('colors', 16, 2, 64, '色数'),
+        background=background, tolerance=number('tolerance', 48, 0, 300, '背景の許容差'), method=method,
+        cleanup=bool(data.get('cleanup', True)), outline=outline.lower(), rgb555=bool(data.get('rgb555', False)),
+        trim=bool(data.get('trim', True)))
+    return settings, bool(data.get('shared_palette', True))
+
+
+def png_data_url(image: Image.Image) -> str:
+    buf = io.BytesIO()
+    image.save(buf, format='PNG')
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+
+
+@app.post('/api/pixelize')
+async def pixelize_images(files: list[UploadFile] = File(...), settings: str = Form('{}'), save: bool = Form(False),
+                          category: str = Form('character'), names: str = Form('[]')):
+    """Convert images made elsewhere into pixel-art sprites on this PC. With save=true they become assets."""
+    if not files or len(files) > PIXELIZE_MAX_FILES:
+        raise HTTPException(422, f'画像は1〜{PIXELIZE_MAX_FILES}枚で指定してください。')
+    options, shared = pixelize_settings(settings)
+    category = normalize_category(category)
+    if category == 'sound':
+        raise HTTPException(422, '効果音には保存できません。画像の分類を選んでください。')
+    try:
+        labels = json.loads(names or '[]')
+    except ValueError:
+        labels = []
+    blobs, images = [], []
+    for upload in files:
+        blob = await upload.read(PIXELIZE_MAX_BYTES + 1)
+        if len(blob) > PIXELIZE_MAX_BYTES:
+            raise HTTPException(422, '画像は1枚40MB以下にしてください。')
+        try:
+            with Image.open(io.BytesIO(blob)) as opened:
+                opened.load()
+                images.append(opened.copy())
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+            raise HTTPException(422, f'{upload.filename or "画像"} を画像として読み込めません。')
+        blobs.append((upload.filename or 'image.png', blob))
+    results, palettes = await run_in_threadpool(pixelize.pixelize_many, images, options, shared)
+    response = {'shared_palette': shared, 'palettes': [pixelize.palette_hex(p) for p in (palettes[:1] if shared else palettes)],
+                'results': [], 'saved': []}
+    for number, (result, (filename, blob)) in enumerate(zip(results, blobs)):
+        label = str(labels[number]).strip()[:80] if number < len(labels) and str(labels[number]).strip() else Path(filename).stem
+        response['results'].append({'name': label, 'width': result.width, 'height': result.height,
+                                    'colors': pixelize.used_colors(result), 'image': png_data_url(result)})
+        if not save:
+            continue
+        asset_id = str(uuid.uuid4())
+        target = asset_dir(category, asset_id)
+        result.save(target / 'sprite.png')
+        ext = Path(filename).suffix.lower() if Path(filename).suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp') else '.png'
+        (target / f'original{ext}').write_bytes(blob)
+        with _lock:
+            asset = {'id': asset_id, 'name': unique_asset_name(label, category), 'category': category, 'kind': 'image',
+                     'created_at': now(), 'updated_at': now(), 'source': 'pixelized', 'track_hint': category,
+                     'files': ['sprite.png', f'original{ext}'], 'primary_file': 'sprite.png',
+                     'pixelize': {**{k: v for k, v in vars(options).items() if k != 'extra'}, 'shared_palette': shared}}
+            _state.setdefault('assets', []).append(asset)
+            save_state()
+        response['saved'].append(asset_summary(asset))
+    return response
 
 
 @app.get('/api/assets/{asset_id}/files/{name}')

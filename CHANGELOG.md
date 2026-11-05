@@ -4,6 +4,17 @@ VoiceDrama Studio の機能ごとの詳しい仕様と、版ごとの変更内�
 
 ここに書かれているボタン名は、その版のときの名前です。現在のボタン名は README の「[ボタン名の対応表](README.md#ボタン名の対応表以前の名前--今の名前)」で確認できます。
 
+## 画像・映像：取り込んだ画像のドット化（パソコン内）
+
+別のツールで作った画像を、外部サービスを使わずにドット絵の素材へ変換する「取り込んでドット化」を追加しました。`POST /api/pixelize`（multipart：`files` 最大12枚・各40MB、`settings` JSON、`save`、`category`、`names` JSON）。
+
+- 処理順：作業用に長辺512pxまで縮小 → 背景の透過 → 余白の切り詰め → 色数の削減 → 指定の高さへ縮小 → ノイズ除去 → 輪郭線。
+- `settings`：`height`（4〜512）、`colors`（2〜64、輪郭線の色は別）、`background`（auto／keep）、`tolerance`（0〜300、RGB差の合計）、`method`（crisp：ブロック内で最多の色／smooth：平均後にパレットへ）、`cleanup`、`outline`（none／auto／#rrggbb）、`rgb555`、`trim`、`shared_palette`。
+- 背景の透過：外周の画素のうち最も多い色に近いものから塗りつぶしで背景を判定します。元の画像に透過がある場合（不透明度128未満が1%超）は行いません。
+- 色数の削減：メディアンカットの各色を、その色に割り当てられた画素で最も多い実在の色に置き換えます（混ざった濁り色を避ける）。残り（色数の約4分の1）は、使用量がわずかでも既存の色から離れた色（目・ライトなど）に割り当てます。
+- 輪郭線ありの場合、輪郭線を含めて指定の高さになるよう本体を2px小さく縮小します。
+- `save=true` で分類ごとにアセットとして保存します（`sprite.png` が主ファイル、元画像は `original.<拡張子>`、`source` は `pixelized`、変換設定を `pixelize` に記録）。`save=false` は変換結果（PNGのdata URL）だけを返します。
+
 ## 画像・映像：APNG・透過WebM・Unity・GBAの書き出し
 
 戦闘シーケンスの書き出しに4形式を追加しました。`GET /api/sequences/{id}/download/{kind}` の `kind` に `apng`・`webm`・`unity`・`gba` を指定します。

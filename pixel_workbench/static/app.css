@@ -242,3 +242,16 @@
 .srw-steps .srw-step input[type=number]{flex:0 0 64px;width:64px;min-width:0}
 .srw-step button{white-space:nowrap;padding:8px 10px}
 .combo-builder input[type=color],#clipStagePanel input[type=color]{width:100%;height:38px;padding:2px;background:#0f1722;border:1px solid #3b4a5a;border-radius:8px}
+.pixelize-list{display:grid;gap:12px;margin-top:14px}
+.pixelize-item{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;border:1px solid #293a49;background:#101a26;border-radius:10px;padding:12px}
+.pixelize-item figure{margin:0;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;min-height:120px;background-color:#172432;background-image:linear-gradient(45deg,#1d2c39 25%,transparent 25%),linear-gradient(-45deg,#1d2c39 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#1d2c39 75%),linear-gradient(-45deg,transparent 75%,#1d2c39 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;border-radius:8px;padding:8px;overflow:auto}
+.pixelize-item figure img{image-rendering:pixelated;max-width:100%}
+.pixelize-item .pixelize-original img{max-height:220px;object-fit:contain}
+.pixelize-item figcaption{font-size:10px;color:#9cb3be}
+.pixelize-item .pixelize-name{grid-column:1/-1;display:flex;gap:8px;align-items:center;font-size:11px;color:#c6d5dd}
+.pixelize-item .pixelize-name input{flex:1;background:#0f1722;color:#e9f0f4;border:1px solid #3b4a5a;border-radius:8px;padding:8px 10px;min-width:0}
+.pixelize-palette{display:flex;flex-wrap:wrap;gap:4px;margin-top:12px}
+.pixelize-palette span{width:18px;height:18px;border-radius:3px;border:1px solid #ffffff33}
+.pixelize-zoom{font-size:11px;color:#a8bfcc;display:flex;gap:6px;align-items:center}
+#pixelize .field input[type=number]{width:100%;background:#0f1722;color:#e9f0f4;border:1px solid #3b4a5a;border-radius:8px;padding:10px 11px;min-width:0}
+#pixelize input[type=color]{width:100%;height:38px;padding:2px;background:#0f1722;border:1px solid #3b4a5a;border-radius:8px}

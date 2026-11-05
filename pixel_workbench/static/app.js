@@ -1099,3 +1099,90 @@ async function createSrwTemplate(){
  updateClipMovementVisibility();
  renderSrwSteps([{kind:'shoot',count:3},{kind:'slash',count:1},{kind:'finish',count:1}]);
 })();
+
+// v0.9: convert images made elsewhere into pixel-art sprites on this PC (no external service).
+let pixelizeFiles=[],pixelizeUrls=[],pixelizeResults=[];
+function pixelizeSettingsPayload(){
+ const outline=$('#pixelizeOutline').value;
+ return {height:Number($('#pixelizeHeight').value),colors:Number($('#pixelizeColors').value),
+  background:$('#pixelizeBackground').value,tolerance:Number($('#pixelizeTolerance').value),method:$('#pixelizeMethod').value,
+  outline:outline==='custom'?$('#pixelizeOutlineColor').value:outline,cleanup:$('#pixelizeCleanup').checked,
+  trim:$('#pixelizeTrim').checked,rgb555:$('#pixelizeRgb555').checked,shared_palette:$('#pixelizeShared').checked};
+}
+function pixelizeNames(){return [...document.querySelectorAll('#pixelizeList [data-pix-name]')].map(i=>i.value.trim());}
+function renderPixelizeList(){
+ const box=$('#pixelizeList'),names=pixelizeNames(),zoom=Number($('#pixelizeZoom').value)||4;
+ $('#pixelizeCount').textContent=pixelizeFiles.length+' FILES';
+ box.replaceChildren();
+ if(!pixelizeFiles.length){box.innerHTML='<p class="history-empty">画像を選ぶと、ここに元の絵が並びます。「変換して確認」でドット化後が隣に出ます。</p>';return;}
+ pixelizeFiles.forEach((file,i)=>{
+  const item=document.createElement('div');item.className='pixelize-item';
+  const original=document.createElement('figure');original.className='pixelize-original';
+  const img=document.createElement('img');img.src=pixelizeUrls[i];img.alt='元の絵 '+file.name;
+  const cap=document.createElement('figcaption');cap.textContent='元の絵：'+file.name;original.append(img,cap);
+  const converted=document.createElement('figure');const result=pixelizeResults[i];
+  if(result){
+   const out=document.createElement('img');out.src=result.image;out.alt='ドット化後 '+result.name;
+   out.width=result.width*zoom;out.height=result.height*zoom;
+   const c2=document.createElement('figcaption');c2.textContent=`ドット化後：${result.width}×${result.height}px・${result.colors}色`;converted.append(out,c2);
+  }else{const c2=document.createElement('figcaption');c2.textContent='未変換';converted.append(c2);}
+  const name=document.createElement('label');name.className='pixelize-name';name.textContent='アセット名';
+  const input=document.createElement('input');input.type='text';input.maxLength=80;input.dataset.pixName='';
+  input.value=names[i]??file.name.replace(/\.[^.]+$/,'');name.append(input);
+  item.append(original,converted,name);box.append(item);
+ });
+}
+function setPixelizeFiles(list){
+ const images=[...list].filter(f=>/^image\/(png|jpeg|webp)$/.test(f.type));
+ if(images.length<[...list].length)toast('PNG・JPEG・WebP以外のファイルは除外しました。',true);
+ if(images.length>12)toast('一度に変換できるのは12枚までです。先頭の12枚を使います。',true);
+ for(const url of pixelizeUrls)URL.revokeObjectURL(url);
+ pixelizeFiles=images.slice(0,12);pixelizeUrls=pixelizeFiles.map(f=>URL.createObjectURL(f));pixelizeResults=[];
+ $('#pixelizePalette').replaceChildren();
+ $('#pixelizeList').replaceChildren();renderPixelizeList();
+ $('#pixelizeStatus').textContent=pixelizeFiles.length?`${pixelizeFiles.length}枚を選びました。「変換して確認」で結果を表示します。`:'画像を選んでください。';
+}
+function renderPixelizePalette(palettes){
+ const box=$('#pixelizePalette');box.replaceChildren();
+ const list=palettes.length===1?palettes[0]:[];
+ for(const color of list){const chip=document.createElement('span');chip.style.background=color;chip.title=color;box.append(chip);}
+}
+async function runPixelize(save){
+ if(!pixelizeFiles.length)return toast('先に画像を選んでください。',true);
+ const buttons=[$('#pixelizePreviewBtn'),$('#pixelizeSaveBtn')];buttons.forEach(b=>b.disabled=true);
+ $('#pixelizeStatus').textContent=save?'変換してアセット管理に保存しています…':'変換しています…';
+ try{
+  const form=new FormData();
+  for(const file of pixelizeFiles)form.append('files',file,file.name);
+  form.append('settings',JSON.stringify(pixelizeSettingsPayload()));form.append('save',save?'true':'false');
+  form.append('category',$('#pixelizeCategory').value);form.append('names',JSON.stringify(pixelizeNames()));
+  const data=await api('/pixel/api/pixelize',{method:'POST',body:form});
+  pixelizeResults=data.results||[];renderPixelizeList();renderPixelizePalette(data.palettes||[]);
+  if(save){
+   await loadAssets();
+   $('#pixelizeStatus').textContent=`${(data.saved||[]).length}件をアセット管理に保存しました（分類：${categoryLabels[$('#pixelizeCategory').value]}）。戦闘シーケンスと連続攻撃ビルダーで選べます。`;
+   toast('アセット管理に保存しました。');
+  }else{
+   $('#pixelizeStatus').textContent=`${pixelizeResults.length}枚を変換しました。`+(data.shared_palette?`共通の色：${(data.palettes?.[0]||[]).length}色。`:'')+'問題なければ「アセット管理に保存」を押してください。';
+  }
+ }catch(e){$('#pixelizeStatus').textContent=e.message;toast(e.message,true)}
+ finally{buttons.forEach(b=>b.disabled=false)}
+}
+(function attachPixelizeEvents(){
+ if(!$('#pixelize'))return;
+ $('#pixelizeFiles').addEventListener('change',e=>setPixelizeFiles(e.target.files));
+ const drop=$('#pixelizeDrop');
+ drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragging');});
+ drop.addEventListener('dragleave',()=>drop.classList.remove('dragging'));
+ drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragging');setPixelizeFiles(e.dataTransfer.files);});
+ $('#pixelizePreviewBtn').addEventListener('click',()=>runPixelize(false));
+ $('#pixelizeSaveBtn').addEventListener('click',()=>runPixelize(true));
+ $('#pixelizeClearBtn').addEventListener('click',()=>{$('#pixelizeFiles').value='';setPixelizeFiles([]);});
+ $('#pixelizeZoom').addEventListener('change',renderPixelizeList);
+ const syncOutline=()=>$('#pixelizeOutlineColorField').classList.toggle('hidden',$('#pixelizeOutline').value!=='custom');
+ $('#pixelizeOutline').addEventListener('change',syncOutline);syncOutline();
+ document.querySelectorAll('[data-pix-height]').forEach(b=>b.addEventListener('click',()=>{
+  $('#pixelizeHeight').value=b.dataset.pixHeight;
+  if(b.dataset.pixHeight==='160'){$('#pixelizeCategory').value='background';$('#pixelizeBackground').value='keep';$('#pixelizeTrim').checked=false;}
+ }));
+})();
