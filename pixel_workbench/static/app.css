@@ -87,6 +87,9 @@
 .timeline-effect{background:#d1a4ff}
 .timeline-sound{background:#ffcf8f}
 .timeline-item{background:#9ce1b0}
+.timeline-camera{background:#b3bcff}
+.timeline-cutin{background:#ffb8cb}
+.timeline-fx{background:#fff08f}
 .timeline-background{background:#9ea8ff}
 #clipList .history-pricing{display:flex;align-items:center}
 /* v0.7: playable composite preview and timing editor */

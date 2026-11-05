@@ -19,7 +19,11 @@ from typing import Any
 
 from PIL import Image, ImageSequence, UnidentifiedImageError
 
+import stage_fx
+
 TRACK_ORDER = ('background', 'item', 'character', 'effect', 'sound')
+STAGE_TRACKS = ('camera', 'cutin', 'fx')
+ALL_TRACKS = TRACK_ORDER + STAGE_TRACKS
 MAX_FRAMES = 600
 MAX_PIXELS = 960 * 540
 MAX_PREVIEW_FRAME = 10000
@@ -141,34 +145,70 @@ def clip_position(clip: dict, frame: int) -> tuple[int, int]:
     return round(x + (dx - x) * t), round(y + (dy - y) * t)
 
 
+def _visible(clip: dict, frame: int) -> bool:
+    start = int(clip.get('start', 0))
+    return start <= frame < start + int(clip.get('duration', 0))
+
+
+def _paste_sprite(canvas: Image.Image, clip: dict, image: Image.Image, frame: int) -> Image.Image:
+    w, h = canvas.size
+    x, y = clip_position(clip, frame)
+    if clip.get('flip_x'):
+        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    overlay.paste(image, ((w - image.width) // 2 + x, (h - image.height) // 2 + y))
+    return Image.alpha_composite(canvas, overlay)
+
+
 def render_frame(seq: dict, assets: dict[str, dict], root: Path, frame: int) -> Image.Image:
+    """Compose one frame.
+
+    Order: background -> fx(back) -> item -> character -> effect -> fx(front)
+    -> camera (zoom/pan/shake) -> cut-in -> screen flash. During a hit-stop the
+    world layers freeze on the hit-stop's first frame; camera shake, cut-ins and
+    sound keep running on the timeline frame.
+    """
     w, h, fps, length = validate_stage(seq)
     if frame < 0 or frame > min(MAX_PREVIEW_FRAME, length):
         raise ValueError('フレーム番号が範囲外です。')
-    canvas = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-    clips = [c for c in seq.get('clips', []) if c.get('track') != 'sound' and int(c.get('start', 0)) <= frame < int(c.get('start', 0)) + int(c.get('duration', 0))]
-    clips.sort(key=lambda c: (TRACK_ORDER.index(c.get('track')) if c.get('track') in TRACK_ORDER else 2, int(c.get('start', 0))))
-    for clip in clips:
-        asset = assets.get(clip.get('asset_id'))
-        if not asset:
-            continue
-        image = _open_for_frame(asset, root, frame - int(clip.get('start', 0)), fps)
-        if image is None:
-            continue
-        if image.width * image.height > 4096 * 4096:
-            continue
-        x, y = clip_position(clip, frame)
-        if clip.get('flip_x') and clip.get('track') != 'background':
-            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-        if clip.get('track') == 'background':
-            # Make backgrounds cover the stage; a separate crop is needed for larger compositions.
-            image = image.resize((w, h), Image.Resampling.NEAREST)
-            pos = (x, y)
-        else:
-            pos = ((w - image.width) // 2 + x, (h - image.height) // 2 + y)
-        overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        overlay.paste(image, pos)
-        canvas = Image.alpha_composite(canvas, overlay)
+    wf = stage_fx.world_frame(seq, frame)
+    clips = seq.get('clips', [])
+    world = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+
+    def layer_key(c: dict) -> int:
+        return int(c.get('start', 0))
+
+    def world_fx(layer: str) -> None:
+        nonlocal world
+        for clip in sorted((c for c in clips if c.get('track') == 'fx' and _visible(c, wf)
+                            and c.get('fx_type') not in ('flash', 'hitstop')
+                            and stage_fx.fx_layer(c) == layer), key=layer_key):
+            world = stage_fx.draw_fx(world, clip, wf)
+
+    for track in ('background', 'item', 'character', 'effect'):
+        for clip in sorted((c for c in clips if c.get('track') == track and _visible(c, wf)), key=layer_key):
+            asset = assets.get(clip.get('asset_id'))
+            if not asset:
+                continue
+            local = wf - int(clip.get('start', 0))
+            image = _open_for_frame(asset, root, local, fps)
+            if image is None or image.width * image.height > 4096 * 4096:
+                continue
+            if track == 'background':
+                world = Image.alpha_composite(world, stage_fx.scrolled_background(image, w, h, clip, local))
+            else:
+                world = _paste_sprite(world, clip, image, wf)
+        if track == 'background':
+            world_fx('back')
+    world_fx('front')
+
+    canvas = stage_fx.apply_camera(world, stage_fx.camera_state(seq, frame))
+    for clip in sorted((c for c in clips if c.get('track') == 'cutin' and _visible(c, frame)), key=layer_key):
+        asset = assets.get(clip.get('asset_id')) if clip.get('asset_id') else None
+        portrait = _open_for_frame(asset, root, frame - int(clip.get('start', 0)), fps) if asset else None
+        canvas = stage_fx.draw_cutin(canvas, clip, frame, portrait)
+    for clip in sorted((c for c in clips if c.get('track') == 'fx' and c.get('fx_type') == 'flash' and _visible(c, frame)), key=layer_key):
+        canvas = stage_fx.draw_fx(canvas, clip, frame)
     return canvas
 
 
@@ -270,8 +310,10 @@ def project_manifest(seq: dict, assets: dict[str, dict]) -> dict[str, Any]:
         a = assets.get(asset_id)
         if a:
             included.append({**a, 'relative_folder': f"assets/{a['category']}/{a['id']}"})
-    return {'format': 'PixelLabBattleSequence', 'format_version': 1,
-            'time_unit': 'frames', 'coordinates': 'center offsets for sprites; top-left for backgrounds',
+    return {'format': 'PixelLabBattleSequence', 'format_version': 2,
+            'time_unit': 'frames', 'coordinates': 'center offsets for sprites, camera pan, beams and focus lines; top-left for backgrounds',
+            'stage_tracks': {'camera': 'zoom/end_zoom, pan x/y->end_x/end_y, shake', 'cutin': 'portrait asset, text, side, text_speed',
+                             'fx': 'fx_type flash|speedlines|hlines|beam|hitstop; hitstop freezes world layers'},
             'timeline': seq, 'assets': included,
             'notes': 'GIF has no audio. MP4 mixes audio clips. Images are nearest-neighbor at their original size.'}
 

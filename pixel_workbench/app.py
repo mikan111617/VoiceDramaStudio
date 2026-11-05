@@ -26,7 +26,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, UnidentifiedImageError
-from sequence_render import render_png, validate_stage, save_media, package_project, project_manifest, media_file, sequence_length
+from sequence_render import render_png, validate_stage, save_media, package_project, project_manifest, media_file, sequence_length, ALL_TRACKS, TRACK_ORDER
+from stage_fx import FX_LABELS
 from credential_store import read_credentials, write_credentials, supported as credential_storage_supported
 from pydantic import BaseModel, Field
 
@@ -804,8 +805,40 @@ class SequenceUpdateRequest(BaseModel):
     height: int = Field(default=160, ge=16, le=4096)
 
 
-class ClipCreateRequest(BaseModel):
-    asset_id: str = Field(min_length=1, max_length=120)
+class StageClipFields(BaseModel):
+    """Camera / cut-in / drawn-effect / background-scroll settings. Unused fields are ignored."""
+    fx_type: str = Field(default='', pattern='^(|flash|speedlines|hlines|beam|hitstop)$')
+    color: str = Field(default='', pattern='^(|#[0-9a-fA-F]{6})$')  # empty = lane default
+    intensity: int = Field(default=50, ge=0, le=100)
+    beam_width: int = Field(default=6, ge=1, le=64)
+    layer: str = Field(default='auto', pattern='^(auto|back|front)$')
+    zoom: float = Field(default=1.0, ge=0.25, le=8.0)
+    end_zoom: float | None = Field(default=None, ge=0.25, le=8.0)
+    shake: int = Field(default=0, ge=0, le=16)
+    text: str = Field(default='', max_length=300)
+    side: str = Field(default='left', pattern='^(left|right)$')
+    text_speed: int = Field(default=2, ge=0, le=20)
+    scroll_x: int = Field(default=0, ge=-64, le=64)
+    scroll_y: int = Field(default=0, ge=-64, le=64)
+
+
+STAGE_FIELD_NAMES = tuple(StageClipFields.model_fields)
+ASSET_TRACKS = TRACK_ORDER
+STAGE_TRACK_LABELS = {'camera': 'カメラ', 'cutin': 'カットイン'}
+
+
+def stage_clip_label(track: str, data: StageClipFields, label: str) -> str:
+    if label:
+        return label[:120]
+    if track == 'fx':
+        return FX_LABELS.get(data.fx_type, '演出効果')
+    if track == 'cutin' and data.text:
+        return data.text[:24]
+    return STAGE_TRACK_LABELS.get(track, track)
+
+
+class ClipCreateRequest(StageClipFields):
+    asset_id: str = Field(default='', max_length=120)
     track: str = Field(default='character', min_length=1, max_length=40)
     start: int = Field(default=0, ge=0, le=999999)
     duration: int = Field(default=6, ge=1, le=999999)
@@ -819,7 +852,7 @@ class ClipCreateRequest(BaseModel):
     label: str = Field(default='', max_length=120)
 
 
-class ClipUpdateRequest(BaseModel):
+class ClipUpdateRequest(StageClipFields):
     start: int = Field(ge=0, le=999999)
     duration: int = Field(ge=1, le=999999)
     volume: float = Field(ge=0.0, le=2.0)
@@ -853,6 +886,23 @@ class AttackComboRequest(BaseModel):
     enemy_y: int = Field(default=0, ge=-9999, le=9999)
     easing: str = Field(default='ease_in_out', pattern='^(linear|ease_in_out|ease_out)$')
     return_flip_x: bool = True
+
+
+class SrwTemplateRequest(BaseModel):
+    """Robot-anime style attack: cut-in, zoom, dash or beam, hit with flash/hit-stop/shake, return."""
+    style: str = Field(default='slash', pattern='^(slash|beam)$')
+    unit_asset_id: str = Field(min_length=1, max_length=120)
+    attack_asset_id: str | None = None
+    enemy_asset_id: str | None = None
+    portrait_asset_id: str | None = None
+    hit_effect_asset_id: str | None = None
+    hit_sound_asset_id: str | None = None
+    text: str = Field(default='', max_length=300)
+    start: int = Field(default=0, ge=0, le=599)
+    unit_x: int = Field(default=-70, ge=-9999, le=9999)
+    enemy_x: int = Field(default=70, ge=-9999, le=9999)
+    y: int = Field(default=0, ge=-9999, le=9999)
+    beam_color: str = Field(default='#6fe0ff', pattern='^#[0-9a-fA-F]{6}$')
 
 
 @app.middleware('http')
@@ -1318,20 +1368,41 @@ def delete_sequence(sequence_id: str):
     return {'deleted': True}
 
 
+def check_stage_clip(track: str, data: StageClipFields, asset: dict | None, asset_id: str) -> None:
+    """Validate which lanes need an asset. Raises HTTPException(422/404)."""
+    if track in ASSET_TRACKS:
+        if not asset:
+            raise HTTPException(404, 'アセットが見つかりません。')
+        if (track == 'sound') != (asset.get('kind') == 'audio'):
+            raise HTTPException(422, '音声は効果音レーン、画像は画像レーンを選択してください。')
+        return
+    if track == 'cutin':
+        if asset_id and not asset:
+            raise HTTPException(404, '顔画像のアセットが見つかりません。')
+        if asset and asset.get('kind') == 'audio':
+            raise HTTPException(422, 'カットインの顔には画像を選択してください。')
+        if not data.text.strip() and not asset:
+            raise HTTPException(422, 'カットインには台詞か顔画像のどちらかが必要です。')
+        return
+    if track == 'fx' and not data.fx_type:
+        raise HTTPException(422, '演出効果の種類を選択してください。')
+
+
 @app.post('/api/sequences/{sequence_id}/clips')
 def add_clip(sequence_id: str, data: ClipCreateRequest):
     with _lock:
         seq = next((s for s in _state.get('sequences', []) if s.get('id') == sequence_id), None)
-        asset = next((a for a in _state.get('assets', []) if a.get('id') == data.asset_id), None)
+        asset = next((a for a in _state.get('assets', []) if a.get('id') == data.asset_id), None) if data.asset_id else None
         if not seq:
             raise HTTPException(404, 'シーケンスが見つかりません。')
-        if not asset:
-            raise HTTPException(404, 'アセットが見つかりません。')
-        if data.track not in ('background','item','character','effect','sound'):
+        if data.track not in ALL_TRACKS:
             raise HTTPException(422, '未対応のレーンです。')
-        if (data.track == 'sound') != (asset.get('kind') == 'audio'):
-            raise HTTPException(422, '音声は効果音レーン、画像は画像レーンを選択してください。')
-        clip = {'id': str(uuid.uuid4()), 'asset_id': data.asset_id, 'asset_name': asset.get('name'), 'asset_category': asset.get('category'), 'track': data.track, 'start': data.start, 'duration': data.duration, 'volume': data.volume, 'x': data.x, 'y': data.y, 'end_x': data.end_x, 'end_y': data.end_y, 'easing': data.easing, 'flip_x': data.flip_x, 'label': data.label[:120], 'created_at': now()}
+        if len(seq.get('clips', [])) >= 100:
+            raise HTTPException(422, 'シーケンスのクリップ数は100個以内にしてください。')
+        check_stage_clip(data.track, data, asset, data.asset_id)
+        label = stage_clip_label(data.track, data, data.label.strip()) if data.track not in ASSET_TRACKS else data.label[:120]
+        clip = {'id': str(uuid.uuid4()), 'asset_id': asset.get('id') if asset else '', 'asset_name': asset.get('name') if asset else label, 'asset_category': asset.get('category') if asset else data.track, 'track': data.track, 'start': data.start, 'duration': data.duration, 'volume': data.volume, 'x': data.x, 'y': data.y, 'end_x': data.end_x, 'end_y': data.end_y, 'easing': data.easing, 'flip_x': data.flip_x, 'label': label, 'created_at': now()}
+        clip.update({name: getattr(data, name) for name in STAGE_FIELD_NAMES})
         seq.setdefault('clips', []).append(clip)
         seq['clips'].sort(key=lambda c: (c.get('track',''), c.get('start',0), c.get('asset_name','')))
         seq['updated_at'] = now()
@@ -1418,6 +1489,90 @@ def create_attack_combo(sequence_id: str, data: AttackComboRequest):
     return {'created': len(added), 'clips': added, 'hit_frame': hit_frame, 'end_frame': finish}
 
 
+def srw_template_clips(data: SrwTemplateRequest, fps: int, asset_lookup: dict) -> tuple[list[dict], int, int]:
+    """Build the clips of a robot-anime attack. Timing is designed at 12fps and scaled to the sequence fps."""
+    k = fps / 12
+
+    def f(n: int) -> int:
+        return data.start + round(n * k)
+
+    def length(a: int, b: int) -> int:
+        return max(1, f(b) - f(a))
+
+    base = {'volume': 1.0, 'end_x': None, 'end_y': None, 'easing': 'linear', 'flip_x': False,
+            **StageClipFields().model_dump()}
+    clips: list[dict] = []
+
+    def add(track: str, a: int, b: int, label: str, asset_id: str | None = None, **extra) -> None:
+        asset = asset_lookup.get(asset_id) if asset_id else None
+        clip = {**base, 'id': str(uuid.uuid4()), 'track': track, 'start': f(a), 'duration': length(a, b),
+                'x': 0, 'y': 0, 'asset_id': asset_id or '', 'asset_name': asset.get('name') if asset else label,
+                'asset_category': asset.get('category') if asset else track, 'label': label, 'created_at': now()}
+        clip.update(extra)
+        clips.append(clip)
+
+    unit, attack = data.unit_asset_id, data.attack_asset_id or data.unit_asset_id
+    ux, ex, y = data.unit_x, data.enemy_x, data.y
+    end = 42
+    if data.text.strip() or data.portrait_asset_id:
+        add('cutin', 0, 14, '① カットイン', data.portrait_asset_id, text=data.text.strip(), text_speed=2)
+    if data.enemy_asset_id:
+        add('character', 0, end, '敵機', data.enemy_asset_id, x=ex, y=y)
+    add('camera', 14, 18, '② 構え（寄り）', zoom=1.0, end_zoom=1.8, end_x=ux, end_y=y, easing='ease_out')
+    if data.style == 'slash':
+        near = ex - 30
+        hit = 26
+        add('character', 0, 18, '自機（待機・構え）', unit, x=ux, y=y)
+        add('character', 18, 26, '③ 突進', unit, x=ux, y=y, end_x=near, end_y=y, easing='ease_in_out')
+        add('fx', 18, 26, '③ 集中線', fx_type='speedlines', intensity=60, layer='back')
+        add('fx', 18, 26, '③ スピード線', fx_type='hlines', intensity=40, color='#a8dcff', layer='front')
+        add('character', 26, 32, '④ 斬撃', attack, x=near, y=y)
+        add('character', 32, end, '⑦ 帰還', unit, x=near, y=y, end_x=ux, end_y=y, easing='ease_in_out', flip_x=True)
+    else:
+        hit = 28
+        add('character', 0, 18, '自機（待機・構え）', unit, x=ux, y=y)
+        add('character', 18, 36, '③ 射撃姿勢', attack, x=ux, y=y)
+        add('fx', 24, 34, '④ ビーム', fx_type='beam', x=ux + 16, y=y, end_x=ex, end_y=y, beam_width=8, color=data.beam_color)
+        add('character', 36, end, '⑦ 待機', unit, x=ux, y=y)
+    add('fx', hit, hit + 3, '⑤ 命中フラッシュ', fx_type='flash', intensity=85)
+    add('fx', hit, hit + 3, '⑤ ヒットストップ', fx_type='hitstop')
+    add('camera', hit, hit + 10, '⑥ 画面揺れ', shake=5)
+    if data.hit_effect_asset_id:
+        add('effect', hit + 1, hit + 9, '⑥ 命中エフェクト', data.hit_effect_asset_id, x=ex, y=y)
+    if data.hit_sound_asset_id:
+        add('sound', hit, hit + 6, '⑤ 命中効果音', data.hit_sound_asset_id)
+    return clips, f(hit), f(end)
+
+
+@app.post('/api/sequences/{sequence_id}/srw-template')
+def create_srw_template(sequence_id: str, data: SrwTemplateRequest):
+    """Insert a robot-anime style attack (cut-in to return) as one atomic edit."""
+    with _lock:
+        seq = next((s for s in _state.get('sequences', []) if s.get('id') == sequence_id), None)
+        if seq is None:
+            raise HTTPException(404, 'シーケンスが見つかりません。')
+        asset_lookup = {a.get('id'): a for a in _state.get('assets', [])}
+        for asset_id, label, expected in (
+                (data.unit_asset_id, '自機', 'image'), (data.attack_asset_id, '攻撃ポーズ', 'image'),
+                (data.enemy_asset_id, '敵機', 'image'), (data.portrait_asset_id, 'パイロットの顔', 'image'),
+                (data.hit_effect_asset_id, '命中エフェクト', 'image'), (data.hit_sound_asset_id, '命中効果音', 'audio')):
+            if not asset_id:
+                continue
+            asset = asset_lookup.get(asset_id)
+            if not asset or (asset.get('kind') == 'audio') != (expected == 'audio'):
+                raise HTTPException(422, f'{label}の素材を確認してください。')
+        clips, hit_frame, end_frame = srw_template_clips(data, int(seq.get('fps', 12)), asset_lookup)
+        if end_frame > 600:
+            raise HTTPException(422, 'テンプレートが600フレームを超えます。開始フレームかFPSを下げてください。')
+        if len(seq.get('clips', [])) + len(clips) > 100:
+            raise HTTPException(422, 'シーケンスのクリップ数は100個以内にしてください。')
+        seq.setdefault('clips', []).extend(clips)
+        seq['clips'].sort(key=lambda c: (c.get('track', ''), c.get('start', 0)))
+        seq['updated_at'] = now()
+        save_state()
+    return {'created': len(clips), 'clips': clips, 'hit_frame': hit_frame, 'end_frame': end_frame}
+
+
 @app.delete('/api/sequences/{sequence_id}/clips/{clip_id}')
 def remove_clip(sequence_id: str, clip_id: str):
     with _lock:
@@ -1435,7 +1590,7 @@ def remove_clip(sequence_id: str, clip_id: str):
 
 @app.put('/api/sequences/{sequence_id}/clips/{clip_id}')
 def edit_clip(sequence_id: str, clip_id: str, data: ClipUpdateRequest):
-    if data.track not in ('background','item','character','effect','sound'):
+    if data.track not in ALL_TRACKS:
         raise HTTPException(422, 'レーンが不正です。')
     with _lock:
         seq = next((s for s in _state.get('sequences', []) if s['id'] == sequence_id), None)
@@ -1444,12 +1599,21 @@ def edit_clip(sequence_id: str, clip_id: str, data: ClipUpdateRequest):
         clip = next((c for c in seq.get('clips', []) if c['id'] == clip_id), None)
         if clip is None:
             raise HTTPException(404, 'クリップが見つかりません。')
-        asset = next((a for a in _state.get('assets', []) if a.get('id') == clip['asset_id']), None)
-        if not asset:
+        old_track = clip.get('track')
+        if (old_track in ASSET_TRACKS) != (data.track in ASSET_TRACKS) or (old_track not in ASSET_TRACKS and old_track != data.track):
+            raise HTTPException(422, 'カメラ・カットイン・演出効果のクリップはレーンを変更できません。新しく追加してください。')
+        asset = next((a for a in _state.get('assets', []) if a.get('id') == clip.get('asset_id')), None) if clip.get('asset_id') else None
+        if data.track in ASSET_TRACKS and not asset:
             raise HTTPException(404, 'アセットが見つかりません。')
-        if (data.track == 'sound') != (asset.get('kind') == 'audio'):
+        if data.track in ASSET_TRACKS and (data.track == 'sound') != (asset.get('kind') == 'audio'):
             raise HTTPException(422, '音声と画像のレーンを確認してください。')
-        clip.update(data.model_dump())
+        check_stage_clip(data.track, data, asset, clip.get('asset_id') or '')
+        update = data.model_dump()
+        if data.track not in ASSET_TRACKS:
+            update['label'] = stage_clip_label(data.track, data, data.label.strip())
+            if not clip.get('asset_id'):
+                update['asset_name'] = update['label']
+        clip.update(update)
         seq['clips'].sort(key=lambda c: (c.get('track', ''), c.get('start', 0)))
         seq['updated_at'] = now()
         save_state()
